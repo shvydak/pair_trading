@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+websockets
+python-binance
+ccxt
+pandas
+numpy
+statsmodels
+scipy
+aiohttp
+python-dotenv

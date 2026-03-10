@@ -1,0 +1,2037 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pair Trading Dashboard</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: '#0f1117',
+            panel:   '#161b22',
+            card:    '#1c2333',
+            border:  '#30363d',
+            accent:  '#58a6ff',
+            green:   '#3fb950',
+            red:     '#f85149',
+            yellow:  '#d29922',
+            muted:   '#8b949e',
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- Chart.js + annotation plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #0f1117; color: #c9d1d9; font-family: 'Inter', system-ui, sans-serif; margin: 0; }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #161b22; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+    /* custom select */
+    select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; appearance: none; -webkit-appearance: none; }
+
+    /* tooltip */
+    .tooltip-container { position: relative; display: inline-block; }
+    .tooltip-box {
+      visibility: hidden; opacity: 0;
+      position: fixed;
+      background: #1c2333; border: 1px solid #30363d; border-radius: 6px;
+      padding: 8px 12px; font-size: 11px; line-height: 1.5; color: #c9d1d9;
+      width: 240px; z-index: 9999; pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+    .tooltip-box.visible { visibility: visible; opacity: 1; }
+    .tooltip-box::after {
+      content: ''; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+      border: 5px solid transparent; border-top-color: #30363d;
+    }
+
+    /* tab active */
+    .tab-btn.active { border-bottom: 2px solid #58a6ff; color: #58a6ff; }
+
+    /* spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid transparent; border-top-color: currentColor; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
+
+    /* pulse dot */
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .pulse { animation: pulse 1.5s ease-in-out infinite; }
+
+    /* number color helpers */
+    .pos { color: #3fb950; }
+    .neg { color: #f85149; }
+    .neu { color: #d29922; }
+
+    /* chart container */
+    .chart-wrap { position: relative; height: 320px; }
+
+    /* table */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead tr { background: #1c2333; }
+    thead th { padding: 10px 12px; text-align: left; color: #8b949e; font-weight: 500; border-bottom: 1px solid #30363d; }
+    tbody tr { border-bottom: 1px solid #1c2333; transition: background 0.1s; }
+    tbody tr:hover { background: #1c2333; }
+    tbody td { padding: 9px 12px; }
+
+    /* lang toggle */
+    .lang-btn { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid #30363d; background: transparent; color: #8b949e; cursor: pointer; transition: all 0.15s; }
+    .lang-btn.active { background: #58a6ff22; border-color: #58a6ff; color: #58a6ff; }
+    .lang-btn:hover:not(.active) { border-color: #8b949e; color: #c9d1d9; }
+
+    /* guide drawer */
+    .guide-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 200; opacity: 0; pointer-events: none; transition: opacity 0.25s; }
+    .guide-backdrop.open { opacity: 1; pointer-events: auto; }
+    .guide-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 640px; max-width: 96vw; background: #161b22; border-left: 1px solid #30363d; z-index: 201; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.28s cubic-bezier(.4,0,.2,1); box-shadow: -12px 0 40px rgba(0,0,0,0.5); }
+    .guide-drawer.open { transform: translateX(0); }
+    .guide-body { display: flex; flex: 1; overflow: hidden; }
+    .guide-nav { width: 188px; flex-shrink: 0; border-right: 1px solid #30363d; overflow-y: auto; padding: 10px 8px; display: flex; flex-direction: column; gap: 1px; background: #0f1117; }
+    .guide-nav-item { padding: 9px 12px; border-radius: 6px; font-size: 12px; line-height: 1.45; color: #6e7681; cursor: pointer; transition: background 0.12s, color 0.12s; word-break: break-word; }
+    .guide-nav-item:hover { background: #1c2333; color: #c9d1d9; }
+    .guide-nav-item.active { background: #1c2333; color: #58a6ff; font-weight: 600; position: relative; }
+    .guide-nav-item.active::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: #58a6ff; border-radius: 0 2px 2px 0; }
+    .guide-content { flex: 1; overflow-y: auto; padding: 28px 26px; font-size: 13px; line-height: 1.7; color: #c9d1d9; }
+    .guide-content h2 { font-size: 17px; font-weight: 700; color: #fff; margin: 0 0 12px; }
+    .guide-content h3 { font-size: 13px; font-weight: 600; color: #58a6ff; margin: 20px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+    .guide-content p { margin: 0 0 10px; }
+    .guide-content ul { margin: 0 0 10px; padding-left: 18px; }
+    .guide-content li { margin-bottom: 4px; }
+    .guide-content .formula { background: #0f1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 12px; color: #e3b341; margin: 10px 0; }
+    .guide-content .callout { background: #1c2333; border-left: 3px solid #58a6ff; border-radius: 0 6px 6px 0; padding: 10px 14px; margin: 12px 0; }
+    .guide-content .callout.green { border-left-color: #3fb950; }
+    .guide-content .callout.yellow { border-left-color: #d29922; }
+    .guide-content .callout.red { border-left-color: #f85149; }
+    .guide-content table { font-size: 12px; margin: 10px 0; }
+    .guide-content thead th { font-size: 11px; }
+    .guide-try-btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; padding: 7px 14px; background: #58a6ff22; border: 1px solid #58a6ff55; border-radius: 6px; color: #58a6ff; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .guide-try-btn:hover { background: #58a6ff33; border-color: #58a6ff; }
+  </style>
+
+  <!-- i18n -->
+  <script>
+  const I18N = {
+    en: {
+      title: 'Pair Trading Dashboard',
+      badge: 'Statistical Arbitrage',
+      ws_live: 'Live',
+      ws_disconnected: 'Disconnected',
+      updated: 'Updated:',
+
+      // left panel
+      pair_config: 'Pair Configuration',
+      symbol1: 'Symbol 1',
+      symbol2: 'Symbol 2',
+      timeframe: 'Timeframe',
+      lookback: 'Lookback (candles)',
+      zscore_window: 'Z-score Window',
+      analyze_btn: 'Analyze Pair',
+      analyzing: 'Analyzing…',
+
+      strategy_params: 'Strategy Parameters',
+      entry_z: 'Entry Z-score',
+      exit_z: 'Exit Z-score',
+      pos_size: 'Position Size (USD)',
+      backtest_btn: 'Run Backtest',
+      running: 'Running…',
+
+      trading: 'Trading',
+      trade_hint: 'Run Analyze first to enable trading.',
+      long_spread: 'Long Spread',
+      long_spread_sub: '(Buy S1 / Sell S2)',
+      short_spread: 'Short Spread',
+      short_spread_sub: '(Sell S1 / Buy S2)',
+      close_all: 'Close All Positions',
+
+      api_keys: 'API Keys',
+      api_key_label: 'API Key',
+      secret_label: 'Secret',
+      save_keys: 'Save to LocalStorage',
+      keys_saved: 'Saved to localStorage',
+
+      // tabs
+      tab_spread: 'Spread Analysis',
+      tab_price: 'Price Chart',
+      tab_backtest: 'Backtest',
+      tab_positions: 'Positions',
+
+      // stat cards
+      stat_zscore: 'Z-score',
+      stat_zscore_sub: 'Current',
+      stat_hedge: 'Hedge Ratio',
+      stat_hedge_sub: 'OLS β',
+      stat_halflife: 'Half-Life',
+      stat_halflife_sub: 'Bars to revert',
+      stat_hurst: 'Hurst Exp',
+      stat_corr: 'Correlation',
+      stat_corr_sub: 'Log returns ρ',
+      stat_coint: 'Cointegrated',
+
+      // hurst labels
+      mean_reverting: 'Mean reverting',
+      random_walk: 'Random walk',
+      trending: 'Trending',
+
+      // coint
+      yes: 'Yes',
+      no: 'No',
+
+      // chart labels
+      spread_chart_title: 'Spread & Z-Score',
+      legend_spread: 'Spread',
+      legend_zscore: 'Z-Score',
+      legend_threshold: '±2σ threshold',
+      price_chart_title: 'Normalised Price (indexed to 100)',
+      indexed_label: 'Indexed (base=100)',
+
+      // backtest
+      total_pnl: 'Total PnL',
+      sharpe: 'Sharpe Ratio',
+      max_dd: 'Max Drawdown',
+      win_rate: 'Win Rate',
+      num_trades: '# Trades',
+      equity_curve: 'Equity Curve',
+      trades_title: 'Trades',
+      th_entry_time: 'Entry Time',
+      th_exit_time: 'Exit Time',
+      th_side: 'Side',
+      th_entry_z: 'Entry Z',
+      th_exit_z: 'Exit Z',
+      th_pnl: 'PnL (USD)',
+      no_trades_hint: 'Run a backtest to see trades.',
+      no_trades: 'No trades in backtest period.',
+      trade_long: '▲ Long',
+      trade_short: '▼ Short',
+
+      // positions
+      usdt_balance: 'USDT Balance',
+      total_prefix: 'Total:',
+      refresh: 'Refresh',
+      open_positions: 'Open Positions',
+      th_symbol: 'Symbol',
+      th_side2: 'Side',
+      th_size: 'Size',
+      th_entry_price: 'Entry Price',
+      th_mark_price: 'Mark Price',
+      th_notional: 'Notional',
+      th_upnl: 'Unrealised PnL',
+      th_leverage: 'Leverage',
+      th_liq: 'Liq. Price',
+      no_positions: 'No open positions.',
+      positions_not_loaded: 'No positions loaded.',
+
+      // toasts / js
+      toast_symbols_fail: 'Failed to load symbols: ',
+      toast_enter_symbols: 'Enter both symbols',
+      toast_analyze_done: 'Analysis complete',
+      toast_error: 'Error: ',
+      toast_backtest_done: 'Backtest complete',
+      toast_backtest_error: 'Backtest error: ',
+      toast_positions_fail: 'Failed to load positions: ',
+      toast_trade_done: 'Trade executed: ',
+      toast_trade_error: 'Trade error: ',
+      toast_run_analyze: 'Run Analyze first',
+      trade_ready: 'Ready: ',
+
+      confirm_close: 'Close all positions?',
+      confirm_long: 'LONG spread: {s1}/{s2} for ${size}?',
+      confirm_short: 'SHORT spread: {s1}/{s2} for ${size}?',
+
+      guide_btn: 'Guide',
+
+      // tooltips
+      tip_zscore: '<strong>Z-Score</strong><br/>Standard deviations the spread is away from its rolling mean. |Z| &gt; 2 signals a trading opportunity. Positive Z → overvalued S1 vs S2 → short spread. Negative Z → undervalued S1 → long spread.',
+      tip_hedge: '<strong>Hedge Ratio (β)</strong><br/>OLS regression coefficient: log(P1) = β·log(P2) + α. For every 1 unit of Asset 2, hold β units of Asset 1 to construct a stationary spread. Also the number of contracts ratio between the two legs.',
+      tip_halflife: '<strong>Half-Life</strong><br/>Expected time (in bars) for the spread to revert halfway to its mean. Derived from AR(1) model: half_life = −log(2)/log(φ). Shorter half-life = faster mean reversion. Ideal range: 5–50 bars.',
+      tip_hurst: '<strong>Hurst Exponent (H)</strong><br/>Measures the long-term memory of the spread.<br/>H &lt; 0.5 → Mean reverting ✓<br/>H ≈ 0.5 → Random walk<br/>H &gt; 0.5 → Trending<br/>Calculated via R/S analysis.',
+      tip_corr: '<strong>Pearson Correlation</strong><br/>Correlation of log returns between the two assets. Higher correlation (≥ 0.7) is preferred. Does not guarantee cointegration.',
+      tip_coint: '<strong>Cointegration (Engle-Granger)</strong><br/>Tests whether a linear combination of two non-stationary price series is stationary. p-value &lt; 0.05 means cointegrated at 95% confidence — the spread has a long-run equilibrium and will revert.',
+    },
+    ru: {
+      title: 'Дашборд Парного Трейдинга',
+      badge: 'Статистический Арбитраж',
+      ws_live: 'В эфире',
+      ws_disconnected: 'Отключён',
+      updated: 'Обновлено:',
+
+      pair_config: 'Настройка пары',
+      symbol1: 'Символ 1',
+      symbol2: 'Символ 2',
+      timeframe: 'Таймфрейм',
+      lookback: 'История (свечей)',
+      zscore_window: 'Окно Z-score',
+      analyze_btn: 'Анализировать пару',
+      analyzing: 'Анализ…',
+
+      strategy_params: 'Параметры стратегии',
+      entry_z: 'Z-score входа',
+      exit_z: 'Z-score выхода',
+      pos_size: 'Размер позиции (USD)',
+      backtest_btn: 'Запустить бэктест',
+      running: 'Выполняется…',
+
+      trading: 'Торговля',
+      trade_hint: 'Сначала выполните анализ.',
+      long_spread: 'Лонг Спред',
+      long_spread_sub: '(Купить S1 / Продать S2)',
+      short_spread: 'Шорт Спред',
+      short_spread_sub: '(Продать S1 / Купить S2)',
+      close_all: 'Закрыть все позиции',
+
+      api_keys: 'API Ключи',
+      api_key_label: 'API Ключ',
+      secret_label: 'Секрет',
+      save_keys: 'Сохранить',
+      keys_saved: 'Сохранено',
+
+      tab_spread: 'Анализ спреда',
+      tab_price: 'График цен',
+      tab_backtest: 'Бэктест',
+      tab_positions: 'Позиции',
+
+      stat_zscore: 'Z-счёт',
+      stat_zscore_sub: 'Текущий',
+      stat_hedge: 'Коэф. хеджа',
+      stat_hedge_sub: 'OLS β',
+      stat_halflife: 'Полураспад',
+      stat_halflife_sub: 'Баров до возврата',
+      stat_hurst: 'Показ. Хёрста',
+      stat_corr: 'Корреляция',
+      stat_corr_sub: 'Лог-доходности ρ',
+      stat_coint: 'Коинтегрированы',
+
+      mean_reverting: 'Возврат к среднему',
+      random_walk: 'Случайное блуждание',
+      trending: 'Тренд',
+
+      yes: 'Да',
+      no: 'Нет',
+
+      spread_chart_title: 'Спред и Z-счёт',
+      legend_spread: 'Спред',
+      legend_zscore: 'Z-счёт',
+      legend_threshold: '±2σ порог',
+      price_chart_title: 'Нормализованные цены (база=100)',
+      indexed_label: 'Индекс (база=100)',
+
+      total_pnl: 'Общий PnL',
+      sharpe: 'Коэф. Шарпа',
+      max_dd: 'Макс. просадка',
+      win_rate: '% прибыльных',
+      num_trades: 'Кол-во сделок',
+      equity_curve: 'Кривая капитала',
+      trades_title: 'Сделки',
+      th_entry_time: 'Вход',
+      th_exit_time: 'Выход',
+      th_side: 'Направление',
+      th_entry_z: 'Z входа',
+      th_exit_z: 'Z выхода',
+      th_pnl: 'PnL (USD)',
+      no_trades_hint: 'Запустите бэктест для просмотра сделок.',
+      no_trades: 'Нет сделок за указанный период.',
+      trade_long: '▲ Лонг',
+      trade_short: '▼ Шорт',
+
+      usdt_balance: 'Баланс USDT',
+      total_prefix: 'Итого:',
+      refresh: 'Обновить',
+      open_positions: 'Открытые позиции',
+      th_symbol: 'Символ',
+      th_side2: 'Сторона',
+      th_size: 'Объём',
+      th_entry_price: 'Цена входа',
+      th_mark_price: 'Марк. цена',
+      th_notional: 'Номинал',
+      th_upnl: 'Нереализ. PnL',
+      th_leverage: 'Плечо',
+      th_liq: 'Цена ликв.',
+      no_positions: 'Нет открытых позиций.',
+      positions_not_loaded: 'Позиции не загружены.',
+
+      toast_symbols_fail: 'Ошибка загрузки символов: ',
+      toast_enter_symbols: 'Введите оба символа',
+      toast_analyze_done: 'Анализ завершён',
+      toast_error: 'Ошибка: ',
+      toast_backtest_done: 'Бэктест завершён',
+      toast_backtest_error: 'Ошибка бэктеста: ',
+      toast_positions_fail: 'Ошибка загрузки позиций: ',
+      toast_trade_done: 'Ордер исполнен: ',
+      toast_trade_error: 'Ошибка торговли: ',
+      toast_run_analyze: 'Сначала запустите анализ',
+      trade_ready: 'Готово: ',
+
+      confirm_close: 'Закрыть все позиции?',
+      confirm_long: 'ЛОНГ спред: {s1}/{s2} на ${size}?',
+      confirm_short: 'ШОРТ спред: {s1}/{s2} на ${size}?',
+
+      guide_btn: 'Руководство',
+
+      tip_zscore: '<strong>Z-счёт</strong><br/>Количество стандартных отклонений спреда от скользящего среднего. |Z| &gt; 2 — сигнал для входа. Положительный Z → S1 дорог → шорт спред. Отрицательный Z → S1 дёшев → лонг спред.',
+      tip_hedge: '<strong>Коэффициент хеджирования (β)</strong><br/>Коэффициент OLS-регрессии: log(P1) = β·log(P2) + α. На каждую 1 единицу актива 2 держим β единиц актива 1 для построения стационарного спреда. Также это соотношение контрактов между двумя ногами.',
+      tip_halflife: '<strong>Период полураспада</strong><br/>Ожидаемое время (в барах) для возврата спреда на половину пути к среднему. Рассчитывается через AR(1): half_life = −log(2)/log(φ). Чем короче — тем лучше для парного трейдинга. Идеально: 5–50 баров.',
+      tip_hurst: '<strong>Показатель Хёрста (H)</strong><br/>Измеряет долгосрочную память временного ряда спреда.<br/>H &lt; 0.5 → Возврат к среднему ✓<br/>H ≈ 0.5 → Случайное блуждание<br/>H &gt; 0.5 → Тренд<br/>Рассчитывается методом R/S-анализа.',
+      tip_corr: '<strong>Корреляция Пирсона</strong><br/>Корреляция лог-доходностей двух активов. Предпочтительно ≥ 0.7 — цены движутся вместе и спред стабилен. Не гарантирует коинтеграцию.',
+      tip_coint: '<strong>Коинтеграция (Энгл-Грэнджер)</strong><br/>Проверяет, является ли линейная комбинация двух нестационарных рядов стационарной. p-value &lt; 0.05 означает коинтеграцию на уровне 95% — спред имеет долгосрочное равновесие и будет возвращаться к нему.',
+    }
+  };
+
+  let currentLang = localStorage.getItem('pt_lang') || 'ru';
+
+  function t(key) {
+    return (I18N[currentLang] || I18N.ru)[key] || (I18N.en[key] || key);
+  }
+
+  function applyLocale() {
+    document.documentElement.lang = currentLang;
+    // text nodes via data-i18n
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.dataset.i18n;
+      el.textContent = t(key);
+    });
+    // html content via data-i18n-html
+    document.querySelectorAll('[data-i18n-html]').forEach(el => {
+      const key = el.dataset.i18nHtml;
+      el.innerHTML = t(key);
+    });
+    // placeholders via data-i18n-placeholder
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      const key = el.dataset.i18nPlaceholder;
+      el.placeholder = t(key);
+    });
+    // lang buttons
+    document.querySelectorAll('.lang-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.lang === currentLang);
+    });
+    // update ws label if needed
+    const lbl = document.getElementById('ws-label');
+    if (lbl) {
+      const connected = document.getElementById('ws-dot').classList.contains('bg-green-500');
+      lbl.textContent = connected ? t('ws_live') : t('ws_disconnected');
+    }
+  }
+
+  function setLang(lang) {
+    currentLang = lang;
+    localStorage.setItem('pt_lang', lang);
+    applyLocale();
+  }
+  </script>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ========== TOP BAR ========== -->
+<header class="flex items-center justify-between px-6 py-3 border-b border-border bg-panel sticky top-0 z-50">
+  <div class="flex items-center gap-3">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+    </svg>
+    <span class="text-lg font-semibold tracking-tight text-white" data-i18n="title">Pair Trading Dashboard</span>
+    <span class="text-xs text-muted bg-card px-2 py-0.5 rounded" data-i18n="badge">Statistical Arbitrage</span>
+  </div>
+  <div class="flex items-center gap-4">
+    <!-- Guide button -->
+    <button onclick="openGuide()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:border-accent hover:text-accent transition">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      <span data-i18n="guide_btn">Руководство</span>
+    </button>
+    <!-- Lang toggle -->
+    <div class="flex gap-1">
+      <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
+      <button class="lang-btn active" data-lang="ru" onclick="setLang('ru')">RU</button>
+    </div>
+    <div class="text-xs text-muted" id="last-update">–</div>
+    <div class="flex items-center gap-2 text-sm">
+      <span id="ws-dot" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+      <span id="ws-label" class="text-muted text-xs" data-i18n="ws_disconnected">Disconnected</span>
+    </div>
+  </div>
+</header>
+
+<!-- ========== MAIN LAYOUT ========== -->
+<div class="flex flex-1 overflow-hidden" style="height: calc(100vh - 52px);">
+
+  <!-- ===== LEFT PANEL ===== -->
+  <aside class="w-80 flex-shrink-0 border-r border-border bg-panel overflow-y-auto p-4 flex flex-col gap-4">
+
+    <!-- Pair Configuration -->
+    <section class="bg-card rounded-lg p-4 border border-border">
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="pair_config">Pair Configuration</h3>
+
+      <div class="flex flex-col gap-3">
+        <div>
+          <label class="text-xs text-muted mb-1 block" data-i18n="symbol1">Symbol 1</label>
+          <input id="sym1-input" list="sym1-list" placeholder="BTCUSDT" value="BTCUSDT"
+            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+          <datalist id="sym1-list"></datalist>
+        </div>
+        <div>
+          <label class="text-xs text-muted mb-1 block" data-i18n="symbol2">Symbol 2</label>
+          <input id="sym2-input" list="sym2-list" placeholder="ETHUSDT" value="ETHUSDT"
+            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+          <datalist id="sym2-list"></datalist>
+        </div>
+
+        <div>
+          <label class="text-xs text-muted mb-1 block" data-i18n="timeframe">Timeframe</label>
+          <div class="flex gap-1" id="tf-btns">
+            <button onclick="setTimeframe('1h')" class="tf-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">1h</button>
+            <button onclick="setTimeframe('4h')" class="tf-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">4h</button>
+            <button onclick="setTimeframe('1d')" class="tf-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">1d</button>
+          </div>
+        </div>
+
+        <div class="flex gap-2">
+          <div class="flex-1">
+            <label class="text-xs text-muted mb-1 block" data-i18n="lookback">Lookback (candles)</label>
+            <input id="limit-input" type="number" value="500" min="50" max="1500"
+              class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+          </div>
+          <div class="flex-1">
+            <label class="text-xs text-muted mb-1 block" data-i18n="zscore_window">Z-score Window</label>
+            <input id="zwindow-input" type="number" value="20" min="5" max="200"
+              class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+          </div>
+        </div>
+
+        <button id="analyze-btn" onclick="runAnalyze()"
+          class="w-full py-2 rounded-md text-sm font-semibold bg-accent text-surface hover:bg-blue-400 transition flex items-center justify-center gap-1">
+          <span data-i18n="analyze_btn">Analyze Pair</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Strategy Parameters -->
+    <section class="bg-card rounded-lg p-4 border border-border">
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="strategy_params">Strategy Parameters</h3>
+
+      <div class="flex flex-col gap-3">
+        <div class="flex gap-2">
+          <div class="flex-1">
+            <label class="text-xs text-muted mb-1 block" data-i18n="entry_z">Entry Z-score</label>
+            <input id="entry-z-input" type="number" value="2.0" step="0.1" min="0.5" max="5"
+              class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+          </div>
+          <div class="flex-1">
+            <label class="text-xs text-muted mb-1 block" data-i18n="exit_z">Exit Z-score</label>
+            <input id="exit-z-input" type="number" value="0.5" step="0.1" min="0" max="3"
+              class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-muted mb-1 block" data-i18n="pos_size">Position Size (USD)</label>
+          <input id="pos-size-input" type="number" value="1000" step="100" min="100"
+            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+        </div>
+        <button id="backtest-btn" onclick="runBacktest()"
+          class="w-full py-2 rounded-md text-sm font-semibold bg-surface border border-border text-muted hover:border-accent hover:text-accent transition flex items-center justify-center gap-1">
+          <span data-i18n="backtest_btn">Run Backtest</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Trading -->
+    <section class="bg-card rounded-lg p-4 border border-border">
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="trading">Trading</h3>
+      <div id="trade-info" class="text-xs text-muted mb-3" data-i18n="trade_hint">Run Analyze first to enable trading.</div>
+      <div class="flex flex-col gap-2">
+        <button id="long-btn" onclick="executeTrade('open','long_spread')" disabled
+          class="w-full py-2 rounded-md text-sm font-semibold border border-green text-green hover:bg-green hover:text-surface transition flex items-center justify-center gap-1 opacity-40">
+          <span data-i18n="long_spread">Long Spread</span>
+          <span class="text-xs text-muted font-normal ml-1" data-i18n="long_spread_sub">(Buy S1 / Sell S2)</span>
+        </button>
+        <button id="short-btn" onclick="executeTrade('open','short_spread')" disabled
+          class="w-full py-2 rounded-md text-sm font-semibold border border-red text-red hover:bg-red hover:text-surface transition flex items-center justify-center gap-1 opacity-40">
+          <span data-i18n="short_spread">Short Spread</span>
+          <span class="text-xs text-muted font-normal ml-1" data-i18n="short_spread_sub">(Sell S1 / Buy S2)</span>
+        </button>
+        <button id="close-btn" onclick="executeTrade('close','long_spread')" disabled
+          class="w-full py-2 rounded-md text-sm font-semibold border border-border text-muted hover:border-accent hover:text-accent transition opacity-40">
+          <span data-i18n="close_all">Close All Positions</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- API Keys -->
+    <section class="bg-card rounded-lg p-4 border border-border">
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="api_keys">API Keys</h3>
+      <div class="flex flex-col gap-2">
+        <div>
+          <label class="text-xs text-muted mb-1 block" data-i18n="api_key_label">API Key</label>
+          <input id="api-key-input" type="password" placeholder="Binance API Key"
+            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+        </div>
+        <div>
+          <label class="text-xs text-muted mb-1 block" data-i18n="secret_label">Secret</label>
+          <input id="api-secret-input" type="password" placeholder="Binance Secret"
+            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+        </div>
+        <button onclick="saveApiKeys()"
+          class="w-full py-2 rounded-md text-sm font-semibold bg-surface border border-border text-muted hover:border-yellow hover:text-yellow transition">
+          <span data-i18n="save_keys">Save to LocalStorage</span>
+        </button>
+        <div id="api-save-msg" class="text-xs text-center text-muted"></div>
+      </div>
+    </section>
+
+  </aside>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="flex-1 overflow-y-auto flex flex-col">
+
+    <!-- Tab Bar -->
+    <div class="flex gap-0 border-b border-border bg-panel px-6 sticky top-0 z-10">
+      <button onclick="switchTab('spread')" id="tab-spread" class="tab-btn active px-5 py-3 text-sm font-medium text-white border-b-2 border-accent transition" data-i18n="tab_spread">Spread Analysis</button>
+      <button onclick="switchTab('price')"  id="tab-price"  class="tab-btn px-5 py-3 text-sm font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_price">Price Chart</button>
+      <button onclick="switchTab('backtest')" id="tab-backtest" class="tab-btn px-5 py-3 text-sm font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_backtest">Backtest</button>
+      <button onclick="switchTab('positions')" id="tab-positions" class="tab-btn px-5 py-3 text-sm font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_positions">Positions</button>
+    </div>
+
+    <!-- ======== TAB: SPREAD ANALYSIS ======== -->
+    <div id="pane-spread" class="tab-pane flex-1 p-6 flex flex-col gap-5">
+
+      <!-- Stats Cards -->
+      <div class="grid grid-cols-3 lg:grid-cols-6 gap-3" id="stats-cards">
+        <!-- Z-score -->
+        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
+          <div class="text-xs text-muted flex items-center gap-1">
+            <span data-i18n="stat_zscore">Z-score</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </div>
+          <div id="stat-zscore" class="text-2xl font-bold text-white">–</div>
+          <div class="text-xs text-muted" data-i18n="stat_zscore_sub">Current</div>
+          <div class="tooltip-box" data-i18n-html="tip_zscore"></div>
+        </div>
+
+        <!-- Hedge Ratio -->
+        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
+          <div class="text-xs text-muted flex items-center gap-1">
+            <span data-i18n="stat_hedge">Hedge Ratio</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </div>
+          <div id="stat-hedge" class="text-2xl font-bold text-white">–</div>
+          <div class="text-xs text-muted" data-i18n="stat_hedge_sub">OLS β</div>
+          <div class="tooltip-box" data-i18n-html="tip_hedge"></div>
+        </div>
+
+        <!-- Half-life -->
+        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
+          <div class="text-xs text-muted flex items-center gap-1">
+            <span data-i18n="stat_halflife">Half-Life</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </div>
+          <div id="stat-halflife" class="text-2xl font-bold text-white">–</div>
+          <div class="text-xs text-muted" data-i18n="stat_halflife_sub">Bars to revert</div>
+          <div class="tooltip-box" data-i18n-html="tip_halflife"></div>
+        </div>
+
+        <!-- Hurst -->
+        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
+          <div class="text-xs text-muted flex items-center gap-1">
+            <span data-i18n="stat_hurst">Hurst Exp</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </div>
+          <div id="stat-hurst" class="text-2xl font-bold text-white">–</div>
+          <div id="stat-hurst-label" class="text-xs text-muted">–</div>
+          <div class="tooltip-box" data-i18n-html="tip_hurst"></div>
+        </div>
+
+        <!-- Correlation -->
+        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
+          <div class="text-xs text-muted flex items-center gap-1">
+            <span data-i18n="stat_corr">Correlation</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </div>
+          <div id="stat-corr" class="text-2xl font-bold text-white">–</div>
+          <div class="text-xs text-muted" data-i18n="stat_corr_sub">Log returns ρ</div>
+          <div class="tooltip-box" data-i18n-html="tip_corr"></div>
+        </div>
+
+        <!-- Cointegrated -->
+        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
+          <div class="text-xs text-muted flex items-center gap-1">
+            <span data-i18n="stat_coint">Cointegrated</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </div>
+          <div id="stat-coint" class="text-2xl font-bold text-white">–</div>
+          <div id="stat-coint-pval" class="text-xs text-muted">–</div>
+          <div class="tooltip-box" data-i18n-html="tip_coint"></div>
+        </div>
+      </div>
+
+      <!-- Spread / Z-score Chart -->
+      <div class="bg-card rounded-lg border border-border p-4 flex flex-col gap-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-white" data-i18n="spread_chart_title">Spread &amp; Z-Score</h3>
+          <div class="flex items-center gap-4 text-xs text-muted">
+            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span> <span data-i18n="legend_spread">Spread</span></span>
+            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-yellow-400 inline-block"></span> <span data-i18n="legend_zscore">Z-Score</span></span>
+            <span class="flex items-center gap-1"><span class="w-3 h-px border-t border-dashed border-red-400 inline-block"></span> <span data-i18n="legend_threshold">±2σ threshold</span></span>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="spread-chart"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ======== TAB: PRICE CHART ======== -->
+    <div id="pane-price" class="tab-pane hidden p-6 flex-col gap-5">
+      <div class="bg-card rounded-lg border border-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-white" data-i18n="price_chart_title">Normalised Price (indexed to 100)</h3>
+          <div class="flex items-center gap-4 text-xs text-muted">
+            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span> <span id="price-label1">Symbol 1</span></span>
+            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-orange-400 inline-block"></span> <span id="price-label2">Symbol 2</span></span>
+          </div>
+        </div>
+        <div class="chart-wrap" style="height:360px">
+          <canvas id="price-chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======== TAB: BACKTEST ======== -->
+    <div id="pane-backtest" class="tab-pane hidden p-6 flex-col gap-5">
+
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="bt-cards">
+        <div class="bg-card rounded-lg p-3 border border-border">
+          <div class="text-xs text-muted mb-1" data-i18n="total_pnl">Total PnL</div>
+          <div id="bt-pnl" class="text-xl font-bold text-white">–</div>
+        </div>
+        <div class="bg-card rounded-lg p-3 border border-border">
+          <div class="text-xs text-muted mb-1" data-i18n="sharpe">Sharpe Ratio</div>
+          <div id="bt-sharpe" class="text-xl font-bold text-white">–</div>
+        </div>
+        <div class="bg-card rounded-lg p-3 border border-border">
+          <div class="text-xs text-muted mb-1" data-i18n="max_dd">Max Drawdown</div>
+          <div id="bt-dd" class="text-xl font-bold text-white">–</div>
+        </div>
+        <div class="bg-card rounded-lg p-3 border border-border">
+          <div class="text-xs text-muted mb-1" data-i18n="win_rate">Win Rate</div>
+          <div id="bt-wr" class="text-xl font-bold text-white">–</div>
+        </div>
+        <div class="bg-card rounded-lg p-3 border border-border">
+          <div class="text-xs text-muted mb-1" data-i18n="num_trades"># Trades</div>
+          <div id="bt-trades" class="text-xl font-bold text-white">–</div>
+        </div>
+      </div>
+
+      <div class="bg-card rounded-lg border border-border p-4">
+        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="equity_curve">Equity Curve</h3>
+        <div class="chart-wrap" style="height:260px">
+          <canvas id="equity-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="bg-card rounded-lg border border-border p-4">
+        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="trades_title">Trades</h3>
+        <div class="overflow-x-auto">
+          <table id="trades-table">
+            <thead>
+              <tr>
+                <th data-i18n="th_entry_time">Entry Time</th>
+                <th data-i18n="th_exit_time">Exit Time</th>
+                <th data-i18n="th_side">Side</th>
+                <th data-i18n="th_entry_z">Entry Z</th>
+                <th data-i18n="th_exit_z">Exit Z</th>
+                <th data-i18n="th_pnl">PnL (USD)</th>
+              </tr>
+            </thead>
+            <tbody id="trades-body">
+              <tr><td colspan="6" class="text-center text-muted py-8" data-i18n="no_trades_hint">Run a backtest to see trades.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ======== TAB: POSITIONS ======== -->
+    <div id="pane-positions" class="tab-pane hidden p-6 flex-col gap-5">
+
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-4">
+          <div class="bg-card rounded-lg px-4 py-3 border border-border">
+            <div class="text-xs text-muted mb-1" data-i18n="usdt_balance">USDT Balance</div>
+            <div id="balance-free" class="text-xl font-bold text-white">–</div>
+            <div id="balance-total" class="text-xs text-muted">–</div>
+          </div>
+        </div>
+        <button onclick="refreshPositions()"
+          class="flex items-center gap-2 px-4 py-2 rounded-md text-sm border border-border text-muted hover:border-accent hover:text-accent transition">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span data-i18n="refresh">Refresh</span>
+        </button>
+      </div>
+
+      <div class="bg-card rounded-lg border border-border p-4">
+        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="open_positions">Open Positions</h3>
+        <div class="overflow-x-auto">
+          <table id="positions-table">
+            <thead>
+              <tr>
+                <th data-i18n="th_symbol">Symbol</th>
+                <th data-i18n="th_side2">Side</th>
+                <th data-i18n="th_size">Size</th>
+                <th data-i18n="th_entry_price">Entry Price</th>
+                <th data-i18n="th_mark_price">Mark Price</th>
+                <th data-i18n="th_notional">Notional</th>
+                <th data-i18n="th_upnl">Unrealised PnL</th>
+                <th data-i18n="th_leverage">Leverage</th>
+                <th data-i18n="th_liq">Liq. Price</th>
+              </tr>
+            </thead>
+            <tbody id="positions-body">
+              <tr><td colspan="9" class="text-center text-muted py-8" data-i18n="positions_not_loaded">No positions loaded.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+</div>
+
+<!-- ================================================================== -->
+<!--  Guide Drawer                                                      -->
+<!-- ================================================================== -->
+<div class="guide-backdrop" id="guide-backdrop" onclick="closeGuide()"></div>
+<div class="guide-drawer" id="guide-drawer">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
+    <div class="flex items-center gap-2">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      <span class="text-sm font-semibold text-white" id="guide-title-label">Руководство</span>
+    </div>
+    <button onclick="closeGuide()" class="text-muted hover:text-white transition p-1 rounded hover:bg-card">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <!-- Body: sidebar nav + scrollable content -->
+  <div class="guide-body">
+    <div class="guide-nav" id="guide-nav"></div>
+    <div class="guide-content" id="guide-content"></div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
+  <div class="bg-card border border-border rounded-lg px-4 py-3 shadow-xl text-sm flex items-center gap-2 min-w-48">
+    <span id="toast-icon"></span>
+    <span id="toast-msg"></span>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!--  JavaScript                                                         -->
+<!-- ================================================================== -->
+<script>
+const API = 'http://localhost:8000';
+let state = {
+  timeframe: '1h',
+  symbols: [],
+  historyData: null,
+  hedgeRatio: null,
+  ws: null,
+  spreadChart: null,
+  priceChart: null,
+  equityChart: null,
+};
+
+// ------------------------------------------------------------------ //
+//  Init
+// ------------------------------------------------------------------ //
+window.addEventListener('DOMContentLoaded', () => {
+  loadApiKeys();
+  fetchSymbols();
+  setTimeframe('1h');
+  applyLocale();
+});
+
+// ------------------------------------------------------------------ //
+//  Symbol loading
+// ------------------------------------------------------------------ //
+async function fetchSymbols() {
+  try {
+    const res = await fetch(`${API}/api/symbols`);
+    const data = await res.json();
+    state.symbols = data.symbols || [];
+    populateDatalist('sym1-list', state.symbols);
+    populateDatalist('sym2-list', state.symbols);
+  } catch(e) {
+    showToast(t('toast_symbols_fail') + e.message, 'error');
+  }
+}
+
+function populateDatalist(id, symbols) {
+  const dl = document.getElementById(id);
+  dl.innerHTML = '';
+  symbols.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    dl.appendChild(opt);
+  });
+}
+
+// ------------------------------------------------------------------ //
+//  Timeframe selector
+// ------------------------------------------------------------------ //
+function setTimeframe(tf) {
+  state.timeframe = tf;
+  document.querySelectorAll('.tf-btn').forEach(btn => {
+    const active = btn.textContent.trim() === tf;
+    btn.classList.toggle('border-accent', active);
+    btn.classList.toggle('text-accent', active);
+    btn.classList.toggle('bg-surface', !active);
+    btn.classList.toggle('text-muted', !active);
+  });
+}
+
+// ------------------------------------------------------------------ //
+//  Tab switching
+// ------------------------------------------------------------------ //
+function switchTab(name) {
+  ['spread','price','backtest','positions'].forEach(t => {
+    document.getElementById('pane-' + t).classList.add('hidden');
+    document.getElementById('pane-' + t).classList.remove('flex');
+    const btn = document.getElementById('tab-' + t);
+    btn.classList.remove('active', 'text-white', 'border-accent');
+    btn.classList.add('text-muted', 'border-transparent');
+  });
+  const pane = document.getElementById('pane-' + name);
+  pane.classList.remove('hidden');
+  pane.classList.add('flex');
+  const btn = document.getElementById('tab-' + name);
+  btn.classList.add('active', 'text-white');
+  btn.classList.remove('text-muted', 'border-transparent');
+
+  if (name === 'positions') refreshPositions();
+}
+
+// ------------------------------------------------------------------ //
+//  Analyze
+// ------------------------------------------------------------------ //
+async function runAnalyze() {
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const limit = document.getElementById('limit-input').value;
+  const zwindow = document.getElementById('zwindow-input').value;
+
+  if (!sym1 || !sym2) { showToast(t('toast_enter_symbols'), 'warn'); return; }
+
+  const btn = document.getElementById('analyze-btn');
+  setLoading(btn, true, t('analyzing'));
+
+  try {
+    const url = `${API}/api/history?symbol1=${sym1}&symbol2=${sym2}&timeframe=${state.timeframe}&limit=${limit}&zscore_window=${zwindow}`;
+    const res = await fetch(url);
+    if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
+    const data = await res.json();
+    state.historyData = data;
+    state.hedgeRatio = data.hedge_ratio;
+
+    renderStats(data);
+    renderSpreadChart(data);
+    renderPriceChart(data, sym1, sym2);
+    enableTrading(true, sym1, sym2);
+    connectWebSocket(sym1, sym2, zwindow);
+    updateLastUpdate();
+    showToast(t('toast_analyze_done'), 'success');
+    switchTab('spread');
+  } catch(e) {
+    showToast(t('toast_error') + e.message, 'error');
+  } finally {
+    setLoading(btn, false, t('analyze_btn'));
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  Render Stats Cards
+// ------------------------------------------------------------------ //
+function renderStats(data) {
+  const s = data.stats;
+
+  // Z-score (colored)
+  const z = s.current_zscore;
+  const zEl = document.getElementById('stat-zscore');
+  zEl.textContent = fmt(z, 3);
+  zEl.className = 'text-2xl font-bold';
+  if (z !== null && z !== undefined) {
+    if (z <= -2)      zEl.classList.add('text-green-400');
+    else if (z >= 2)  zEl.classList.add('text-red-400');
+    else              zEl.classList.add('text-yellow-400');
+  } else { zEl.classList.add('text-white'); }
+
+  document.getElementById('stat-hedge').textContent = fmt(data.hedge_ratio, 4);
+
+  const hl = s.half_life;
+  document.getElementById('stat-halflife').textContent = hl !== null ? fmt(hl, 1) : 'N/A';
+
+  const h = s.hurst_exponent;
+  const hurstEl = document.getElementById('stat-hurst');
+  const hurstLbl = document.getElementById('stat-hurst-label');
+  hurstEl.textContent = h !== null ? fmt(h, 3) : 'N/A';
+  if (h !== null) {
+    if (h < 0.4)      { hurstEl.classList.add('text-green-400'); hurstLbl.textContent = t('mean_reverting'); }
+    else if (h < 0.6) { hurstEl.classList.add('text-yellow-400'); hurstLbl.textContent = t('random_walk'); }
+    else              { hurstEl.classList.add('text-red-400');   hurstLbl.textContent = t('trending'); }
+  }
+
+  document.getElementById('stat-corr').textContent = fmt(s.correlation, 3);
+
+  const ci = s.cointegration;
+  const coEl = document.getElementById('stat-coint');
+  const coPEl = document.getElementById('stat-coint-pval');
+  coEl.textContent = ci.cointegrated ? t('yes') : t('no');
+  coEl.className = 'text-2xl font-bold ' + (ci.cointegrated ? 'text-green-400' : 'text-red-400');
+  coPEl.textContent = 'p=' + fmt(ci.pvalue, 4);
+}
+
+// ------------------------------------------------------------------ //
+//  Spread Chart
+// ------------------------------------------------------------------ //
+function renderSpreadChart(data) {
+  const ctx = document.getElementById('spread-chart').getContext('2d');
+  if (state.spreadChart) { state.spreadChart.destroy(); }
+
+  const labels = data.timestamps.map(ts => ts.substring(0, 16));
+  const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 2.0;
+  const exitZ  = parseFloat(document.getElementById('exit-z-input').value)  || 0.5;
+
+  state.spreadChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: t('legend_spread'),
+          data: data.spread,
+          borderColor: '#58a6ff',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          yAxisID: 'ySpread',
+          tension: 0.1,
+        },
+        {
+          label: t('legend_zscore'),
+          data: data.zscore,
+          borderColor: '#e3b341',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          yAxisID: 'yZ',
+          tension: 0.1,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        annotation: {
+          annotations: {
+            entryHigh: { type: 'line', yScaleID: 'yZ', yMin: entryZ,  yMax: entryZ,  borderColor: 'rgba(248,81,73,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `+${entryZ}σ`, enabled: true, position: 'end', color: '#f85149', font: { size: 10 } } },
+            entryLow:  { type: 'line', yScaleID: 'yZ', yMin: -entryZ, yMax: -entryZ, borderColor: 'rgba(63,185,80,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `-${entryZ}σ`, enabled: true, position: 'end', color: '#3fb950', font: { size: 10 } } },
+            exitHigh:  { type: 'line', yScaleID: 'yZ', yMin: exitZ,   yMax: exitZ,   borderColor: 'rgba(248,81,73,0.35)', borderWidth: 1, borderDash: [2,4] },
+            exitLow:   { type: 'line', yScaleID: 'yZ', yMin: -exitZ,  yMax: -exitZ,  borderColor: 'rgba(63,185,80,0.35)', borderWidth: 1, borderDash: [2,4] },
+            zero:      { type: 'line', yScaleID: 'yZ', yMin: 0,       yMax: 0,       borderColor: 'rgba(139,148,158,0.3)', borderWidth: 1 },
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8b949e', maxTicksLimit: 10, maxRotation: 0, font: { size: 11 } },
+          grid:  { color: 'rgba(48,54,61,0.5)' },
+        },
+        ySpread: {
+          position: 'left',
+          ticks: { color: '#58a6ff', font: { size: 11 } },
+          grid:  { color: 'rgba(48,54,61,0.5)' },
+          title: { display: true, text: t('legend_spread'), color: '#58a6ff', font: { size: 11 } },
+        },
+        yZ: {
+          position: 'right',
+          ticks: { color: '#e3b341', font: { size: 11 } },
+          grid:  { drawOnChartArea: false },
+          title: { display: true, text: t('legend_zscore'), color: '#e3b341', font: { size: 11 } },
+        },
+      }
+    }
+  });
+}
+
+// ------------------------------------------------------------------ //
+//  Price Chart
+// ------------------------------------------------------------------ //
+function renderPriceChart(data, sym1, sym2) {
+  const ctx = document.getElementById('price-chart').getContext('2d');
+  if (state.priceChart) { state.priceChart.destroy(); }
+
+  document.getElementById('price-label1').textContent = sym1;
+  document.getElementById('price-label2').textContent = sym2;
+
+  const labels = data.timestamps.map(ts => ts.substring(0, 16));
+  const base1 = data.price1[0];
+  const base2 = data.price2[0];
+  const norm1 = data.price1.map(p => (p / base1) * 100);
+  const norm2 = data.price2.map(p => (p / base2) * 100);
+
+  state.priceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: sym1, data: norm1, borderColor: '#58a6ff', borderWidth: 1.5, pointRadius: 0, tension: 0.1, fill: false },
+        { label: sym2, data: norm2, borderColor: '#fb923c', borderWidth: 1.5, pointRadius: 0, tension: 0.1, fill: false },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 10, maxRotation: 0, font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' } },
+        y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' }, title: { display: true, text: t('indexed_label'), color: '#8b949e', font: { size: 11 } } },
+      }
+    }
+  });
+}
+
+// ------------------------------------------------------------------ //
+//  Backtest
+// ------------------------------------------------------------------ //
+async function runBacktest() {
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const limit   = document.getElementById('limit-input').value;
+  const zwindow = document.getElementById('zwindow-input').value;
+  const entryZ  = document.getElementById('entry-z-input').value;
+  const exitZ   = document.getElementById('exit-z-input').value;
+  const posSize = document.getElementById('pos-size-input').value;
+
+  if (!sym1 || !sym2) { showToast(t('toast_enter_symbols'), 'warn'); return; }
+
+  const btn = document.getElementById('backtest-btn');
+  setLoading(btn, true, t('running'));
+
+  try {
+    const url = `${API}/api/backtest?symbol1=${sym1}&symbol2=${sym2}&timeframe=${state.timeframe}&limit=${limit}&entry_threshold=${entryZ}&exit_threshold=${exitZ}&position_size_usd=${posSize}&zscore_window=${zwindow}`;
+    const res = await fetch(url);
+    if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
+    const data = await res.json();
+    renderBacktest(data);
+    switchTab('backtest');
+    showToast(t('toast_backtest_done'), 'success');
+  } catch(e) {
+    showToast(t('toast_backtest_error') + e.message, 'error');
+  } finally {
+    setLoading(btn, false, t('backtest_btn'));
+  }
+}
+
+function renderBacktest(data) {
+  const pnlEl = document.getElementById('bt-pnl');
+  pnlEl.textContent = '$' + fmt(data.total_pnl, 2);
+  pnlEl.className = 'text-xl font-bold ' + (data.total_pnl >= 0 ? 'text-green-400' : 'text-red-400');
+
+  const sharpeEl = document.getElementById('bt-sharpe');
+  sharpeEl.textContent = fmt(data.sharpe, 3);
+  sharpeEl.className = 'text-xl font-bold ' + (data.sharpe >= 1 ? 'text-green-400' : data.sharpe >= 0 ? 'text-yellow-400' : 'text-red-400');
+
+  document.getElementById('bt-dd').textContent = (data.max_drawdown * 100).toFixed(2) + '%';
+  document.getElementById('bt-wr').textContent = (data.win_rate * 100).toFixed(1) + '%';
+  document.getElementById('bt-trades').textContent = data.num_trades;
+
+  // Equity chart
+  const ctx = document.getElementById('equity-chart').getContext('2d');
+  if (state.equityChart) { state.equityChart.destroy(); }
+  const labels = data.equity_curve.map(e => e.timestamp.substring(0, 16));
+  const values = data.equity_curve.map(e => e.equity);
+
+  state.equityChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Equity (USD)',
+        data: values,
+        borderColor: '#3fb950',
+        backgroundColor: 'rgba(63,185,80,0.08)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 8, maxRotation: 0, font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' } },
+        y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' } },
+      }
+    }
+  });
+
+  // Trades table
+  const tbody = document.getElementById('trades-body');
+  if (!data.trades || data.trades.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-8">${t('no_trades')}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = data.trades.map(tr => {
+    const pnlClass  = tr.pnl >= 0 ? 'text-green-400' : 'text-red-400';
+    const sideClass = tr.side === 'long_spread' ? 'text-blue-400' : 'text-orange-400';
+    const sideLabel = tr.side === 'long_spread' ? t('trade_long') : t('trade_short');
+    return `<tr>
+      <td class="text-muted">${fmtTime(tr.entry_time)}</td>
+      <td class="text-muted">${fmtTime(tr.exit_time)}</td>
+      <td class="${sideClass} font-medium">${sideLabel}</td>
+      <td>${fmt(tr.entry_zscore, 3)}</td>
+      <td>${fmt(tr.exit_zscore, 3)}</td>
+      <td class="${pnlClass} font-medium">$${fmt(tr.pnl, 2)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ------------------------------------------------------------------ //
+//  Positions
+// ------------------------------------------------------------------ //
+async function refreshPositions() {
+  try {
+    const [posRes, balRes] = await Promise.all([
+      fetch(`${API}/api/positions`),
+      fetch(`${API}/api/balance`),
+    ]);
+    const posData = await posRes.json();
+    const balData = await balRes.json();
+
+    document.getElementById('balance-free').textContent = '$' + fmt(balData.free, 2);
+    document.getElementById('balance-total').textContent = t('total_prefix') + ' $' + fmt(balData.total, 2);
+
+    const tbody = document.getElementById('positions-body');
+    const positions = posData.positions || [];
+    if (positions.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-8">${t('no_positions')}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = positions.map(p => {
+      const pnlClass  = (p.unrealized_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400';
+      const sideClass = p.side === 'long' ? 'text-green-400' : 'text-red-400';
+      return `<tr>
+        <td class="font-medium text-white">${p.symbol}</td>
+        <td class="${sideClass} font-semibold">${p.side?.toUpperCase()}</td>
+        <td>${fmt(p.size, 4)}</td>
+        <td>${fmt(p.entry_price, 4)}</td>
+        <td>${fmt(p.mark_price, 4)}</td>
+        <td>$${fmt(p.notional, 2)}</td>
+        <td class="${pnlClass}">$${fmt(p.unrealized_pnl, 4)}</td>
+        <td>${p.leverage}x</td>
+        <td class="text-muted">${p.liquidation_price ? fmt(p.liquidation_price, 4) : '–'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    showToast(t('toast_positions_fail') + e.message, 'error');
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  Trading
+// ------------------------------------------------------------------ //
+function enableTrading(yes, sym1, sym2) {
+  ['long-btn','short-btn','close-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    btn.disabled = !yes;
+    btn.classList.toggle('opacity-40', !yes);
+    btn.classList.toggle('cursor-not-allowed', !yes);
+  });
+  if (yes) {
+    document.getElementById('trade-info').innerHTML =
+      `<span class="text-xs text-green-400">${t('trade_ready')}${sym1} / ${sym2}</span>`;
+  }
+}
+
+async function executeTrade(action, side) {
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+
+  if (!state.hedgeRatio) { showToast(t('toast_run_analyze'), 'warn'); return; }
+
+  let confirmMsg;
+  if (action === 'close') {
+    confirmMsg = t('confirm_close');
+  } else {
+    const tpl = side === 'long_spread' ? t('confirm_long') : t('confirm_short');
+    confirmMsg = tpl.replace('{s1}', sym1).replace('{s2}', sym2).replace('{size}', size);
+  }
+  if (!window.confirm(confirmMsg)) return;
+
+  try {
+    const res = await fetch(`${API}/api/trade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol1: sym1, symbol2: sym2, action, side, size_usd: size, hedge_ratio: state.hedgeRatio })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Trade failed');
+    showToast(t('toast_trade_done') + (data.status || 'ok'), 'success');
+  } catch(e) {
+    showToast(t('toast_trade_error') + e.message, 'error');
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  WebSocket
+// ------------------------------------------------------------------ //
+function connectWebSocket(sym1, sym2, zwindow) {
+  if (state.ws) { state.ws.close(); }
+
+  const wsUrl = API.replace('http', 'ws') + '/ws/stream';
+  state.ws = new WebSocket(wsUrl);
+
+  state.ws.onopen = () => {
+    state.ws.send(JSON.stringify({ symbol1: sym1, symbol2: sym2, timeframe: state.timeframe, zscore_window: zwindow }));
+    setWsStatus(true);
+  };
+
+  state.ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.error) { console.warn('WS error:', msg.error); return; }
+      updateLiveData(msg);
+    } catch {}
+  };
+
+  state.ws.onclose = () => { setWsStatus(false); };
+  state.ws.onerror = () => { setWsStatus(false); };
+}
+
+function updateLiveData(msg) {
+  if (msg.zscore !== undefined && msg.zscore !== null) {
+    const z = msg.zscore;
+    const zEl = document.getElementById('stat-zscore');
+    zEl.textContent = fmt(z, 3);
+    zEl.className = 'text-2xl font-bold';
+    if (z <= -2)      zEl.classList.add('text-green-400');
+    else if (z >= 2)  zEl.classList.add('text-red-400');
+    else              zEl.classList.add('text-yellow-400');
+  }
+  updateLastUpdate();
+}
+
+function setWsStatus(connected) {
+  const dot = document.getElementById('ws-dot');
+  const lbl = document.getElementById('ws-label');
+  dot.className = 'w-2 h-2 rounded-full inline-block ' + (connected ? 'bg-green-500 pulse' : 'bg-red-500');
+  lbl.textContent = connected ? t('ws_live') : t('ws_disconnected');
+}
+
+// ------------------------------------------------------------------ //
+//  API Keys
+// ------------------------------------------------------------------ //
+function loadApiKeys() {
+  const key = localStorage.getItem('binance_api_key');
+  const sec = localStorage.getItem('binance_secret');
+  if (key) document.getElementById('api-key-input').value = key;
+  if (sec) document.getElementById('api-secret-input').value = sec;
+}
+
+function saveApiKeys() {
+  const key = document.getElementById('api-key-input').value.trim();
+  const sec = document.getElementById('api-secret-input').value.trim();
+  localStorage.setItem('binance_api_key', key);
+  localStorage.setItem('binance_secret', sec);
+  const msg = document.getElementById('api-save-msg');
+  msg.textContent = t('keys_saved');
+  msg.className = 'text-xs text-center text-green-400';
+  setTimeout(() => { msg.textContent = ''; }, 3000);
+}
+
+// ------------------------------------------------------------------ //
+//  Utilities
+// ------------------------------------------------------------------ //
+function fmt(v, decimals = 2) {
+  if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return '–';
+  return Number(v).toFixed(decimals);
+}
+
+function fmtTime(ts) {
+  if (!ts) return '–';
+  return String(ts).substring(0, 16).replace('T', ' ');
+}
+
+function updateLastUpdate() {
+  document.getElementById('last-update').textContent = t('updated') + ' ' + new Date().toLocaleTimeString();
+}
+
+function setLoading(btn, loading, text) {
+  if (loading) {
+    btn.innerHTML = `<span class="spinner"></span>${text}`;
+    btn.disabled = true;
+  } else {
+    btn.innerHTML = text;
+    btn.disabled = false;
+  }
+}
+
+let _toastTimer;
+function showToast(msg, type = 'info') {
+  const toast = document.getElementById('toast');
+  const icon  = document.getElementById('toast-icon');
+  const msgEl = document.getElementById('toast-msg');
+
+  const icons = {
+    success: '<svg width="16" height="16" fill="none" stroke="#3fb950" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>',
+    error:   '<svg width="16" height="16" fill="none" stroke="#f85149" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+    warn:    '<svg width="16" height="16" fill="none" stroke="#d29922" stroke-width="2" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    info:    '<svg width="16" height="16" fill="none" stroke="#58a6ff" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+  };
+
+  icon.innerHTML = icons[type] || icons.info;
+  msgEl.textContent = msg;
+  toast.classList.remove('hidden');
+
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => toast.classList.add('hidden'), 4000);
+}
+
+// ------------------------------------------------------------------ //
+//  Guide Drawer
+// ------------------------------------------------------------------ //
+const GUIDE = {
+  ru: [
+    {
+      id: 'intro',
+      title: '1. Что такое парный трейдинг',
+      content: `
+<h2>Что такое парный трейдинг</h2>
+<p>Парный трейдинг (статистический арбитраж) — стратегия, основанная на <strong>возврате к среднему</strong>. Два исторически связанных актива временно расходятся — мы открываем позиции в расчёте на то, что они сойдутся обратно.</p>
+<div class="callout green">Стратегия <strong>рыночно-нейтральная</strong>: мы одновременно в лонге по одному активу и в шорте по другому. Направление рынка не имеет значения — важна только динамика спреда между ними.</div>
+<h3>Как это работает</h3>
+<ul>
+  <li>Находим два коррелированных актива (напр. BTC и ETH)</li>
+  <li>Строим <em>спред</em> — разницу их цен с учётом коэффициента хеджирования</li>
+  <li>Ждём, когда спред значительно отклонится от среднего</li>
+  <li>Открываем сделку на схождение: покупаем «дешёвый», продаём «дорогой»</li>
+  <li>Закрываем, когда спред возвращается к норме</li>
+</ul>
+<h3>Пример</h3>
+<p>BTC обычно стоит ~15× дороже ETH. Если соотношение временно выросло до 18× — ETH относительно дёшев. Покупаем ETH, продаём BTC. Когда соотношение вернётся к 15× — закрываем с прибылью.</p>
+<div class="callout yellow">Стратегия работает только при наличии <strong>коинтеграции</strong> между активами. Без неё возврат к среднему не гарантирован.</div>`
+    },
+    {
+      id: 'pair-selection',
+      title: '2. Выбор хорошей пары',
+      content: `
+<h2>Выбор хорошей пары</h2>
+<p>Не каждая пара активов подходит для парного трейдинга. Вот чеклист для оценки.</p>
+<h3>Чеклист хорошей пары</h3>
+<table>
+  <thead><tr><th>Показатель</th><th>Хорошо</th><th>Плохо</th></tr></thead>
+  <tbody>
+    <tr><td>Коинтеграция</td><td class="pos">p-value &lt; 0.05</td><td class="neg">p-value &gt; 0.10</td></tr>
+    <tr><td>Корреляция</td><td class="pos">≥ 0.75</td><td class="neg">&lt; 0.50</td></tr>
+    <tr><td>Показ. Хёрста</td><td class="pos">&lt; 0.45</td><td class="neg">&gt; 0.55</td></tr>
+    <tr><td>Полураспад</td><td class="pos">10–50 баров</td><td class="neg">&lt; 3 или &gt; 200</td></tr>
+  </tbody>
+</table>
+<h3>Рекомендуемые пары для старта</h3>
+<ul>
+  <li><strong>BTC / ETH</strong> — самая классическая пара в крипте</li>
+  <li><strong>BNB / ETH</strong> — оба Ethereum-экосистема</li>
+  <li><strong>SOL / AVAX</strong> — конкурирующие L1</li>
+  <li><strong>LINK / UNI</strong> — DeFi токены</li>
+  <li><strong>LTC / BCH</strong> — Bitcoin-форки</li>
+</ul>
+<div class="callout">Попробуйте разные таймфреймы: на 1h пара может не коинтегрироваться, но на 4h — коинтегрироваться хорошо.</div>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 500, zwindow: 20 }
+    },
+    {
+      id: 'analysis',
+      title: '3. Анализ пары',
+      content: `
+<h2>Как запустить анализ</h2>
+<ol style="padding-left:18px;margin-bottom:12px;">
+  <li style="margin-bottom:6px;">Введите два символа в поля <strong>Символ 1</strong> и <strong>Символ 2</strong><br/><span style="color:#8b949e;font-size:12px;">Формат: <code style="background:#0f1117;padding:1px 4px;border-radius:3px;">BTC/USDT:USDT</code> или просто <code style="background:#0f1117;padding:1px 4px;border-radius:3px;">BTCUSDT</code></span></li>
+  <li style="margin-bottom:6px;">Выберите таймфрейм — рекомендуем начать с <strong>4h</strong></li>
+  <li style="margin-bottom:6px;">Укажите глубину истории: <strong>500–1000 свечей</strong> для надёжной статистики</li>
+  <li style="margin-bottom:6px;">Окно Z-score: <strong>20</strong> — стандартное значение</li>
+  <li>Нажмите <strong>Анализировать пару</strong></li>
+</ol>
+<h3>Что смотреть в результатах</h3>
+<div class="callout green">Пара коинтегрирована (p &lt; 0.05), H &lt; 0.5, корреляция &gt; 0.7 → <strong>хорошая пара для торговли</strong></div>
+<div class="callout red" style="margin-top:8px;">p &gt; 0.10 или H &gt; 0.6 → пара не подходит, выберите другую</div>
+<h3>Реальтайм обновление</h3>
+<p>После анализа включается WebSocket — Z-score в карточке обновляется каждые 5 секунд. Зелёная точка в шапке = соединение активно.</p>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 500, zwindow: 20 }
+    },
+    {
+      id: 'zscore',
+      title: '4. Спред и Z-score',
+      content: `
+<h2>Как читать график спреда</h2>
+<p>На вкладке «Анализ спреда» — <strong>два графика на одном холсте</strong> с двумя осями Y:</p>
+
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin:12px 0;">
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#58a6ff" stroke-width="2.5"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#58a6ff;">Синяя линия</strong> — Спред (левая ось)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#e3b341" stroke-width="2.5"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#e3b341;">Жёлтая линия</strong> — Z-score (правая ось)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#f85149;">Красный пунктир</strong> — уровень входа (±2σ)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#3fb950;">Зелёный пунктир</strong> — уровень выхода (±0.5σ)</span>
+    </div>
+  </div>
+
+  <!-- SVG chart illustration -->
+  <svg viewBox="0 0 420 180" width="100%" style="display:block;border-radius:6px;overflow:visible;">
+    <!-- background -->
+    <rect width="420" height="180" fill="#0d1117" rx="4"/>
+
+    <!-- grid lines -->
+    <line x1="40" y1="20" x2="400" y2="20" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="55" x2="400" y2="55" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="90" x2="400" y2="90" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="125" x2="400" y2="125" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="160" x2="400" y2="160" stroke="#21262d" stroke-width="1"/>
+
+    <!-- Z=0 center line -->
+    <line x1="40" y1="90" x2="400" y2="90" stroke="#30363d" stroke-width="1.5"/>
+
+    <!-- entry threshold +2 (red dashed) -->
+    <line x1="40" y1="37" x2="400" y2="37" stroke="#f85149" stroke-width="1" stroke-dasharray="5,4" opacity="0.8"/>
+    <text x="403" y="41" fill="#f85149" font-size="9" font-family="monospace">+2σ</text>
+
+    <!-- entry threshold -2 (red dashed) -->
+    <line x1="40" y1="143" x2="400" y2="143" stroke="#3fb950" stroke-width="1" stroke-dasharray="5,4" opacity="0.8"/>
+    <text x="403" y="147" fill="#3fb950" font-size="9" font-family="monospace">−2σ</text>
+
+    <!-- exit threshold +0.5 -->
+    <line x1="40" y1="77" x2="400" y2="77" stroke="#f85149" stroke-width="1" stroke-dasharray="2,4" opacity="0.4"/>
+    <!-- exit threshold -0.5 -->
+    <line x1="40" y1="103" x2="400" y2="103" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,4" opacity="0.4"/>
+
+    <!-- Spread line (blue) - smoother wave, scaled differently -->
+    <polyline points="40,92 65,85 90,78 115,72 140,68 165,74 190,85 215,91 240,96 265,105 290,116 315,124 340,118 365,108 390,97 400,92"
+      fill="none" stroke="#58a6ff" stroke-width="1.8" stroke-linejoin="round" opacity="0.85"/>
+
+    <!-- Z-score line (yellow) - same shape but hits thresholds -->
+    <polyline points="40,91 65,78 90,55 115,38 140,32 165,44 190,72 215,89 240,95 265,110 290,133 315,144 340,134 365,112 390,94 400,90"
+      fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+
+    <!-- ANNOTATIONS -->
+    <!-- Short entry point at ~x=140 (Z>+2) -->
+    <circle cx="140" cy="32" r="5" fill="#f85149" opacity="0.9"/>
+    <line x1="140" y1="22" x2="140" y2="30" stroke="#f85149" stroke-width="1" stroke-dasharray="2,2"/>
+    <rect x="100" y="6" width="80" height="16" rx="3" fill="#f8514922"/>
+    <text x="140" y="17" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ШОРТ СПРЕД ↓</text>
+
+    <!-- Long entry point at ~x=315 (Z&lt;-2) -->
+    <circle cx="315" cy="144" r="5" fill="#3fb950" opacity="0.9"/>
+    <line x1="315" y1="150" x2="315" y2="158" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,2"/>
+    <rect x="275" y="160" width="80" height="16" rx="3" fill="#3fb95022"/>
+    <text x="315" y="171" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ЛОНГ СПРЕД ↑</text>
+
+    <!-- Exit point ~x=215 -->
+    <circle cx="215" cy="89" r="4" fill="#8b949e" opacity="0.9"/>
+    <text x="218" y="82" fill="#8b949e" font-size="8.5" font-family="sans-serif">выход</text>
+
+    <!-- Y axis labels left (spread) -->
+    <text x="36" y="92" fill="#58a6ff" font-size="9" font-family="monospace" text-anchor="end">avg</text>
+
+    <!-- Y axis labels right (z-score) -->
+    <text x="403" y="93" fill="#e3b341" font-size="9" font-family="monospace">  0</text>
+    <text x="403" y="41" font-size="9" fill="#e3b341" font-family="monospace" opacity="0.5">+2</text>
+    <text x="403" y="147" font-size="9" fill="#e3b341" font-family="monospace" opacity="0.5">−2</text>
+  </svg>
+</div>
+
+<h3>Почему две линии, а не одна?</h3>
+<p>Спред — это «сырое» число (например, 4.587). Само по себе непонятно, много это или мало. Z-score переводит его в <strong>единицы стандартного отклонения</strong>: Z=2 значит «спред сейчас на 2 сигмы выше нормы».</p>
+<p>Обе линии движутся <strong>синхронно</strong> — это одно и то же явление, просто в разных масштабах. Для торговых решений используйте <strong>жёлтую линию (Z-score)</strong>, синяя — для понимания абсолютного уровня.</p>
+
+<h3>Как читать пунктирные линии</h3>
+<p>Правая ось (Z-score) имеет 4 горизонтальных уровня:</p>
+<table>
+  <thead><tr><th>Уровень</th><th>Цвет</th><th>Значение</th></tr></thead>
+  <tbody>
+    <tr><td><strong>+2.0 / −2.0</strong></td><td><span class="neg">красный</span></td><td>Порог входа — жёлтая линия пересекает → сигнал</td></tr>
+    <tr><td><strong>+0.5 / −0.5</strong></td><td><span class="pos">зелёный</span></td><td>Порог выхода — спред вернулся к норме</td></tr>
+    <tr><td><strong>0</strong></td><td style="color:#8b949e">серый</td><td>Среднее значение спреда (равновесие)</td></tr>
+  </tbody>
+</table>
+
+<h3>Сценарий сделки на примере</h3>
+<div class="callout">
+  <strong>1.</strong> Жёлтая линия поднимается выше красного пунктира (+2) → BTC стал дорогим относительно ETH<br/>
+  → Нажимаем <strong>Шорт Спред</strong> (продать BTC, купить ETH)<br/><br/>
+  <strong>2.</strong> Ждём, Z-score начинает падать обратно к нулю<br/><br/>
+  <strong>3.</strong> Жёлтая линия опускается ниже зелёного пунктира (+0.5) → спред нормализовался<br/>
+  → Нажимаем <strong>Закрыть все</strong>, фиксируем прибыль
+</div>
+<div class="callout yellow" style="margin-top:8px;">
+  Менять пороги входа (+2) и выхода (+0.5) можно в разделе <strong>Параметры стратегии</strong>. После изменения нажмите <strong>Анализировать пару</strong> — пунктиры на графике обновятся.
+</div>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '1h', limit: 300, zwindow: 20 }
+    },
+    {
+      id: 'stats',
+      title: '5. Интерпретация статистик',
+      content: `
+<h2>Что означает каждый показатель</h2>
+<h3>Коэффициент хеджирования (β)</h3>
+<p>Рассчитывается OLS-регрессией: <code style="background:#0f1117;padding:1px 4px;border-radius:3px;">log(P1) = β × log(P2) + α</code></p>
+<p>Показывает соотношение объёмов позиций. Если β = 0.8, то на $1000 в S1 нужно $800 в S2.</p>
+<h3>Период полураспада</h3>
+<div class="formula">half_life = −log(2) / log(φ)  ,  где φ — коэф. AR(1)</div>
+<p>Ожидаемое количество баров до возврата спреда на половину пути к среднему.</p>
+<table>
+  <thead><tr><th>Полураспад</th><th>Оценка</th></tr></thead>
+  <tbody>
+    <tr><td>&lt; 5 баров</td><td class="neg">Слишком быстро — сложно успеть войти</td></tr>
+    <tr><td>5–50 баров</td><td class="pos">Оптимально ✓</td></tr>
+    <tr><td>&gt; 100 баров</td><td class="neg">Слишком медленно — капитал заморожен</td></tr>
+  </tbody>
+</table>
+<h3>Показатель Хёрста (H)</h3>
+<table>
+  <thead><tr><th>Значение H</th><th>Тип процесса</th></tr></thead>
+  <tbody>
+    <tr><td class="pos">&lt; 0.5</td><td>Возврат к среднему ✓ (идеально)</td></tr>
+    <tr><td class="neu">≈ 0.5</td><td>Случайное блуждание</td></tr>
+    <tr><td class="neg">&gt; 0.5</td><td>Тренд (не подходит для пар)</td></tr>
+  </tbody>
+</table>
+<h3>Коинтеграция (тест Энгла-Грэнджера)</h3>
+<p>Основной критерий отбора пар. p-value &lt; 0.05 означает, что спред статистически стационарен — он будет возвращаться к среднему.</p>
+<div class="callout green">Все показатели хорошие — это не гарантия прибыли. Рынок может изменить структуру. Периодически пересчитывайте статистику (раз в 1–2 недели).</div>`
+    },
+    {
+      id: 'backtest',
+      title: '6. Бэктест',
+      content: `
+<h2>Как запустить и читать бэктест</h2>
+<h3>Параметры</h3>
+<ul>
+  <li><strong>Z-score входа</strong> (по умолч. 2.0) — чем выше, тем реже сделки, но точнее сигнал</li>
+  <li><strong>Z-score выхода</strong> (по умолч. 0.5) — выход при возврате к среднему</li>
+  <li><strong>Размер позиции</strong> — сумма в USD на каждую ногу</li>
+</ul>
+<h3>Метрики результатов</h3>
+<table>
+  <thead><tr><th>Метрика</th><th>Хорошо</th><th>Плохо</th></tr></thead>
+  <tbody>
+    <tr><td>Total PnL</td><td class="pos">&gt; 0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Sharpe Ratio</td><td class="pos">&gt; 1.0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Max Drawdown</td><td class="pos">&lt; 15%</td><td class="neg">&gt; 30%</td></tr>
+    <tr><td>Win Rate</td><td class="pos">&gt; 55%</td><td class="neg">&lt; 40%</td></tr>
+    <tr><td># Trades</td><td class="pos">&gt; 20</td><td class="neg">&lt; 5 (мало данных)</td></tr>
+  </tbody>
+</table>
+<div class="callout yellow"><strong>Осторожно:</strong> хороший бэктест не гарантирует хорошую торговлю. Всегда проверяйте на актуальных данных (последние 1–3 месяца).</div>
+<h3>Подбор параметров</h3>
+<p>Рекомендуемый процесс: запустите бэктест на 500 свечах, затем проверьте на последних 100 (out-of-sample). Если обе части прибыльны — стратегия устойчива.</p>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 600, zwindow: 20, entryZ: 2.0, exitZ: 0.5 }
+    },
+    {
+      id: 'trading',
+      title: '7. Открытие сделок',
+      content: `
+<h2>Как открывать и закрывать сделки</h2>
+<div class="callout red"><strong>Требуются API ключи Binance</strong> с правами Futures Trading. Введите ключи в раздел «API Ключи» в левой панели.</div>
+<h3>Алгоритм действий</h3>
+<ol style="padding-left:18px;">
+  <li style="margin-bottom:8px;">Запустите <strong>анализ пары</strong> — убедитесь, что статистика хорошая</li>
+  <li style="margin-bottom:8px;">Проверьте текущий <strong>Z-score</strong>:<br/>
+    <span style="color:#3fb950">Z &lt; −2</span> → нажмите <strong>Лонг Спред</strong> (купить S1, продать S2)<br/>
+    <span style="color:#f85149">Z &gt; +2</span> → нажмите <strong>Шорт Спред</strong> (продать S1, купить S2)
+  </li>
+  <li style="margin-bottom:8px;">Дождитесь, когда <strong>|Z-score| &lt; 0.5</strong> — нажмите <strong>Закрыть все</strong></li>
+</ol>
+<h3>Как рассчитывается объём</h3>
+<div class="formula">Объём S1 = size_usd / Цена_S1
+Объём S2 = (size_usd × β) / Цена_S2</div>
+<p>Где β — коэффициент хеджирования из анализа.</p>
+<h3>Вкладка «Позиции»</h3>
+<p>После открытия сделки перейдите на вкладку <strong>Позиции</strong> — там отображаются все открытые позиции с нереализованным P&L и ценой ликвидации.</p>`
+    },
+    {
+      id: 'risk',
+      title: '8. Управление рисками',
+      content: `
+<h2>Управление рисками</h2>
+<div class="callout red"><strong>Парный трейдинг несёт риски.</strong> Коинтеграция может нарушиться. Всегда используйте ограничение размера позиции.</div>
+<h3>Основные правила</h3>
+<ul>
+  <li>Не вкладывайте в одну пару более <strong>10–20% депозита</strong></li>
+  <li>Стоп-лосс: закрывайте позицию если |Z-score| > <strong>3.5–4.0</strong> — спред уходит слишком далеко</li>
+  <li>Проверяйте статистику раз в <strong>1–2 недели</strong> — коинтеграция может пропасть</li>
+  <li>Избегайте входа <strong>перед крупными новостями</strong> (листинги, хардфорки, регуляторные решения)</li>
+  <li>Торгуйте на <strong>минимальном плече</strong> — идеально без плеча или 2–3×</li>
+</ul>
+<h3>Когда отказаться от пары</h3>
+<ul>
+  <li>p-value коинтеграции стал > 0.15 на свежих данных</li>
+  <li>Полураспад вырос > 100 баров</li>
+  <li>Позиция в минусе более <strong>2–3 полураспадов</strong> без возврата</li>
+  <li>Один из активов делистингуется или меняет токеномику</li>
+</ul>
+<h3>Размер позиции по Kelly</h3>
+<div class="formula">f = (Win Rate × Avg Win − Loss Rate × Avg Loss) / Avg Win</div>
+<p>Используйте <strong>1/4 Kelly</strong> для консервативного управления капиталом.</p>
+<div class="callout green">Начинайте с минимальных позиций ($100–200) пока не убедитесь в стабильности стратегии на реальном рынке.</div>`
+    }
+  ],
+  en: [
+    {
+      id: 'intro',
+      title: '1. What is Pair Trading',
+      content: `
+<h2>What is Pair Trading</h2>
+<p>Pair trading (statistical arbitrage) is a <strong>mean-reversion</strong> strategy. Two historically linked assets temporarily diverge — we open positions expecting them to converge again.</p>
+<div class="callout green">The strategy is <strong>market-neutral</strong>: we are long one asset and short the other simultaneously. Market direction doesn't matter — only the spread dynamics between them.</div>
+<h3>How it works</h3>
+<ul>
+  <li>Find two correlated assets (e.g. BTC and ETH)</li>
+  <li>Build a <em>spread</em> — the difference between their prices adjusted by the hedge ratio</li>
+  <li>Wait for the spread to deviate significantly from its mean</li>
+  <li>Enter: buy the "cheap" asset, sell the "expensive" one</li>
+  <li>Close when the spread reverts to its mean</li>
+</ul>
+<div class="callout yellow">The strategy only works when there is <strong>cointegration</strong> between the assets. Without it, mean reversion is not guaranteed.</div>`
+    },
+    {
+      id: 'pair-selection',
+      title: '2. Selecting a Good Pair',
+      content: `
+<h2>Selecting a Good Pair</h2>
+<p>Not every pair of assets is suitable for pair trading. Use this checklist.</p>
+<h3>Good Pair Checklist</h3>
+<table>
+  <thead><tr><th>Metric</th><th>Good</th><th>Bad</th></tr></thead>
+  <tbody>
+    <tr><td>Cointegration</td><td class="pos">p-value &lt; 0.05</td><td class="neg">p-value &gt; 0.10</td></tr>
+    <tr><td>Correlation</td><td class="pos">≥ 0.75</td><td class="neg">&lt; 0.50</td></tr>
+    <tr><td>Hurst Exponent</td><td class="pos">&lt; 0.45</td><td class="neg">&gt; 0.55</td></tr>
+    <tr><td>Half-Life</td><td class="pos">10–50 bars</td><td class="neg">&lt; 3 or &gt; 200</td></tr>
+  </tbody>
+</table>
+<h3>Recommended Starter Pairs</h3>
+<ul>
+  <li><strong>BTC / ETH</strong> — the most classic crypto pair</li>
+  <li><strong>BNB / ETH</strong> — both Ethereum ecosystem</li>
+  <li><strong>SOL / AVAX</strong> — competing L1s</li>
+  <li><strong>LINK / UNI</strong> — DeFi tokens</li>
+</ul>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 500, zwindow: 20 }
+    },
+    {
+      id: 'analysis',
+      title: '3. Running Analysis',
+      content: `
+<h2>How to Run Analysis</h2>
+<ol style="padding-left:18px;margin-bottom:12px;">
+  <li style="margin-bottom:6px;">Enter two symbols in <strong>Symbol 1</strong> and <strong>Symbol 2</strong></li>
+  <li style="margin-bottom:6px;">Choose a timeframe — start with <strong>4h</strong></li>
+  <li style="margin-bottom:6px;">Set lookback to <strong>500–1000 candles</strong> for reliable statistics</li>
+  <li style="margin-bottom:6px;">Z-score window: <strong>20</strong> is standard</li>
+  <li>Click <strong>Analyze Pair</strong></li>
+</ol>
+<div class="callout green">Cointegrated (p &lt; 0.05), H &lt; 0.5, correlation &gt; 0.7 → <strong>good pair</strong></div>
+<div class="callout red" style="margin-top:8px;">p &gt; 0.10 or H &gt; 0.6 → skip this pair</div>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 500, zwindow: 20 }
+    },
+    {
+      id: 'zscore',
+      title: '4. Spread & Z-score',
+      content: `
+<h2>Reading the Spread Chart</h2>
+<p>The Spread Analysis tab shows <strong>two lines on one canvas</strong> with two Y-axes:</p>
+
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin:12px 0;">
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#58a6ff" stroke-width="2.5"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#58a6ff;">Blue line</strong> — Spread (left axis)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#e3b341" stroke-width="2.5"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#e3b341;">Yellow line</strong> — Z-score (right axis)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#f85149;">Red dashed</strong> — entry threshold (±2σ)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#3fb950;">Green dashed</strong> — exit threshold (±0.5σ)</span>
+    </div>
+  </div>
+
+  <svg viewBox="0 0 420 180" width="100%" style="display:block;border-radius:6px;overflow:visible;">
+    <rect width="420" height="180" fill="#0d1117" rx="4"/>
+    <line x1="40" y1="20" x2="400" y2="20" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="55" x2="400" y2="55" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="90" x2="400" y2="90" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="125" x2="400" y2="125" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="160" x2="400" y2="160" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="90" x2="400" y2="90" stroke="#30363d" stroke-width="1.5"/>
+    <line x1="40" y1="37" x2="400" y2="37" stroke="#f85149" stroke-width="1" stroke-dasharray="5,4" opacity="0.8"/>
+    <text x="403" y="41" fill="#f85149" font-size="9" font-family="monospace">+2σ</text>
+    <line x1="40" y1="143" x2="400" y2="143" stroke="#3fb950" stroke-width="1" stroke-dasharray="5,4" opacity="0.8"/>
+    <text x="403" y="147" fill="#3fb950" font-size="9" font-family="monospace">−2σ</text>
+    <line x1="40" y1="77" x2="400" y2="77" stroke="#f85149" stroke-width="1" stroke-dasharray="2,4" opacity="0.4"/>
+    <line x1="40" y1="103" x2="400" y2="103" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,4" opacity="0.4"/>
+    <polyline points="40,92 65,85 90,78 115,72 140,68 165,74 190,85 215,91 240,96 265,105 290,116 315,124 340,118 365,108 390,97 400,92"
+      fill="none" stroke="#58a6ff" stroke-width="1.8" stroke-linejoin="round" opacity="0.85"/>
+    <polyline points="40,91 65,78 90,55 115,38 140,32 165,44 190,72 215,89 240,95 265,110 290,133 315,144 340,134 365,112 390,94 400,90"
+      fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="140" cy="32" r="5" fill="#f85149" opacity="0.9"/>
+    <rect x="100" y="6" width="80" height="16" rx="3" fill="#f8514922"/>
+    <text x="140" y="17" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">SHORT SPREAD ↓</text>
+    <circle cx="315" cy="144" r="5" fill="#3fb950" opacity="0.9"/>
+    <rect x="275" y="160" width="80" height="16" rx="3" fill="#3fb95022"/>
+    <text x="315" y="171" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">LONG SPREAD ↑</text>
+    <circle cx="215" cy="89" r="4" fill="#8b949e" opacity="0.9"/>
+    <text x="218" y="82" fill="#8b949e" font-size="8.5" font-family="sans-serif">exit</text>
+    <text x="36" y="92" fill="#58a6ff" font-size="9" font-family="monospace" text-anchor="end">avg</text>
+    <text x="403" y="93" fill="#e3b341" font-size="9" font-family="monospace">  0</text>
+  </svg>
+</div>
+
+<h3>Why two lines?</h3>
+<p>The spread is a raw number (e.g. 4.587). Alone it's hard to interpret. Z-score converts it to <strong>standard deviations from the mean</strong>: Z=2 means "the spread is currently 2 sigmas above normal."</p>
+<p>Both lines move <strong>in sync</strong> — they describe the same phenomenon at different scales. Use the <strong>yellow line (Z-score)</strong> for trading decisions.</p>
+
+<h3>The dashed threshold lines</h3>
+<table>
+  <thead><tr><th>Level</th><th>Color</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>+2.0 / −2.0</strong></td><td><span class="neg">red</span></td><td>Entry threshold — yellow line crosses → signal</td></tr>
+    <tr><td><strong>+0.5 / −0.5</strong></td><td><span class="pos">green</span></td><td>Exit threshold — spread returned to normal</td></tr>
+    <tr><td><strong>0</strong></td><td style="color:#8b949e">gray</td><td>Spread equilibrium (rolling mean)</td></tr>
+  </tbody>
+</table>
+
+<h3>Example trade walkthrough</h3>
+<div class="callout">
+  <strong>1.</strong> Yellow line rises above red dashes (+2) → BTC is expensive relative to ETH<br/>
+  → Click <strong>Short Spread</strong> (sell BTC, buy ETH)<br/><br/>
+  <strong>2.</strong> Wait — Z-score starts falling back toward zero<br/><br/>
+  <strong>3.</strong> Yellow line drops below green dashes (+0.5) → spread normalized<br/>
+  → Click <strong>Close All</strong>, take profit
+</div>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '1h', limit: 300, zwindow: 20 }
+    },
+    {
+      id: 'stats',
+      title: '5. Statistics Guide',
+      content: `
+<h2>Understanding Each Metric</h2>
+<h3>Hedge Ratio (β)</h3>
+<p>OLS regression: <code style="background:#0f1117;padding:1px 4px;border-radius:3px;">log(P1) = β × log(P2) + α</code>. If β = 0.8, for $1000 in S1 you need $800 in S2.</p>
+<h3>Half-Life</h3>
+<table>
+  <thead><tr><th>Value</th><th>Assessment</th></tr></thead>
+  <tbody>
+    <tr><td>&lt; 5 bars</td><td class="neg">Too fast — hard to execute</td></tr>
+    <tr><td>5–50 bars</td><td class="pos">Optimal ✓</td></tr>
+    <tr><td>&gt; 100 bars</td><td class="neg">Too slow — capital tied up</td></tr>
+  </tbody>
+</table>
+<h3>Hurst Exponent</h3>
+<table>
+  <thead><tr><th>H value</th><th>Process type</th></tr></thead>
+  <tbody>
+    <tr><td class="pos">&lt; 0.5</td><td>Mean reverting ✓</td></tr>
+    <tr><td class="neu">≈ 0.5</td><td>Random walk</td></tr>
+    <tr><td class="neg">&gt; 0.5</td><td>Trending</td></tr>
+  </tbody>
+</table>`
+    },
+    {
+      id: 'backtest',
+      title: '6. Backtesting',
+      content: `
+<h2>How to Backtest</h2>
+<h3>Parameters</h3>
+<ul>
+  <li><strong>Entry Z-score</strong> (default 2.0) — higher = fewer but more accurate signals</li>
+  <li><strong>Exit Z-score</strong> (default 0.5) — exit when spread reverts to mean</li>
+  <li><strong>Position Size</strong> — USD amount per leg</li>
+</ul>
+<h3>Result Metrics</h3>
+<table>
+  <thead><tr><th>Metric</th><th>Good</th><th>Bad</th></tr></thead>
+  <tbody>
+    <tr><td>Total PnL</td><td class="pos">&gt; 0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Sharpe</td><td class="pos">&gt; 1.0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Max Drawdown</td><td class="pos">&lt; 15%</td><td class="neg">&gt; 30%</td></tr>
+    <tr><td>Win Rate</td><td class="pos">&gt; 55%</td><td class="neg">&lt; 40%</td></tr>
+  </tbody>
+</table>`,
+      example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 600, zwindow: 20, entryZ: 2.0, exitZ: 0.5 }
+    },
+    {
+      id: 'trading',
+      title: '7. Executing Trades',
+      content: `
+<h2>How to Open & Close Trades</h2>
+<div class="callout red"><strong>Requires Binance API keys</strong> with Futures Trading permissions.</div>
+<ol style="padding-left:18px;">
+  <li style="margin-bottom:8px;">Run <strong>analysis</strong> first</li>
+  <li style="margin-bottom:8px;">Check current <strong>Z-score</strong>:<br/>
+    <span style="color:#3fb950">Z &lt; −2</span> → click <strong>Long Spread</strong> (buy S1, sell S2)<br/>
+    <span style="color:#f85149">Z &gt; +2</span> → click <strong>Short Spread</strong> (sell S1, buy S2)
+  </li>
+  <li>When <strong>|Z| &lt; 0.5</strong> → click <strong>Close All</strong></li>
+</ol>`
+    },
+    {
+      id: 'risk',
+      title: '8. Risk Management',
+      content: `
+<h2>Risk Management</h2>
+<div class="callout red"><strong>Pair trading carries real risks.</strong> Cointegration can break down. Always size positions conservatively.</div>
+<h3>Key Rules</h3>
+<ul>
+  <li>Never allocate more than <strong>10–20% of capital</strong> to one pair</li>
+  <li>Stop-loss: close if |Z-score| > <strong>3.5–4.0</strong></li>
+  <li>Recalculate statistics every <strong>1–2 weeks</strong></li>
+  <li>Avoid entries before <strong>major news events</strong></li>
+  <li>Use minimal leverage — ideally <strong>1×–3×</strong></li>
+</ul>
+<div class="callout green">Start with minimum positions ($100–200) until you verify the strategy performs on live markets.</div>`
+    }
+  ]
+};
+
+let guideCurrentSection = 0;
+
+function openGuide() {
+  document.getElementById('guide-backdrop').classList.add('open');
+  document.getElementById('guide-drawer').classList.add('open');
+  renderGuide(guideCurrentSection);
+}
+
+function closeGuide() {
+  document.getElementById('guide-backdrop').classList.remove('open');
+  document.getElementById('guide-drawer').classList.remove('open');
+}
+
+function renderGuide(idx) {
+  guideCurrentSection = idx;
+  const sections = GUIDE[currentLang] || GUIDE.ru;
+  const sec = sections[idx];
+  if (!sec) return;
+
+  // Update title label
+  document.getElementById('guide-title-label').textContent = currentLang === 'ru' ? 'Руководство' : 'Guide';
+
+  // Render nav
+  const nav = document.getElementById('guide-nav');
+  nav.innerHTML = sections.map((s, i) => `
+    <div class="guide-nav-item ${i === idx ? 'active' : ''}" onclick="renderGuide(${i})">${s.title}</div>
+  `).join('');
+
+  // Render content
+  const cont = document.getElementById('guide-content');
+  const tryBtn = sec.example ? `
+    <button class="guide-try-btn" onclick="applyGuideExample(${JSON.stringify(sec.example).replace(/"/g, '&quot;')})">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      ${currentLang === 'ru' ? 'Попробовать пример' : 'Try example'}
+    </button>` : '';
+
+  const nav2 = `
+    <div style="display:flex;justify-content:space-between;margin-top:24px;padding-top:16px;border-top:1px solid #30363d;">
+      ${idx > 0 ? `<button onclick="renderGuide(${idx-1})" style="font-size:12px;color:#8b949e;cursor:pointer;background:none;border:none;padding:0;display:flex;align-items:center;gap:4px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        ${sections[idx-1].title}
+      </button>` : '<span></span>'}
+      ${idx < sections.length - 1 ? `<button onclick="renderGuide(${idx+1})" style="font-size:12px;color:#8b949e;cursor:pointer;background:none;border:none;padding:0;display:flex;align-items:center;gap:4px;">
+        ${sections[idx+1].title}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>` : '<span></span>'}
+    </div>`;
+
+  cont.innerHTML = sec.content + tryBtn + nav2;
+}
+
+function applyGuideExample(ex) {
+  if (ex.sym1) document.getElementById('sym1-input').value = ex.sym1;
+  if (ex.sym2) document.getElementById('sym2-input').value = ex.sym2;
+  if (ex.tf)   setTimeframe(ex.tf);
+  if (ex.limit)   document.getElementById('limit-input').value = ex.limit;
+  if (ex.zwindow) document.getElementById('zwindow-input').value = ex.zwindow;
+  if (ex.entryZ)  document.getElementById('entry-z-input').value = ex.entryZ;
+  if (ex.exitZ)   document.getElementById('exit-z-input').value = ex.exitZ;
+  closeGuide();
+  showToast(currentLang === 'ru' ? 'Пример загружен. Нажмите «Анализировать пару»' : 'Example loaded. Click Analyze Pair', 'info');
+}
+
+// Keyboard close
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeGuide(); });
+
+// ------------------------------------------------------------------ //
+//  Tooltip positioning via fixed coordinates
+// ------------------------------------------------------------------ //
+document.querySelectorAll('.tooltip-container').forEach(container => {
+  const box = container.querySelector('.tooltip-box');
+  if (!box) return;
+  container.addEventListener('mouseenter', () => {
+    const rect = container.getBoundingClientRect();
+    const boxW = 240;
+    let left = rect.left + rect.width / 2 - boxW / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - boxW - 8));
+    box.style.left = left + 'px';
+    box.style.top = '-9999px';
+    box.classList.add('visible');
+    const bh = box.offsetHeight;
+    const spaceAbove = rect.top;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    let top;
+    if (spaceAbove >= bh + 8) {
+      top = rect.top - bh - 8;
+    } else if (spaceBelow >= bh + 8) {
+      top = rect.bottom + 8;
+    } else {
+      top = Math.max(8, Math.min(rect.top - bh - 8, window.innerHeight - bh - 8));
+    }
+    box.style.top = top + 'px';
+  });
+  container.addEventListener('mouseleave', () => {
+    box.classList.remove('visible');
+  });
+});
+</script>
+
+</body>
+</html>
