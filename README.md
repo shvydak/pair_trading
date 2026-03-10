@@ -77,7 +77,7 @@ open frontend/index.html
 
 1. Enter two symbols in **Symbol 1** and **Symbol 2**
    Examples: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `BTC/USDC:USDC`, `ETHUSDC`
-2. Select a timeframe: `1h` / `4h` / `1d`
+2. Select a timeframe: `5m` / `1h` / `4h` / `1d`
 3. Set the lookback (candles) and Z-score window
 4. Click **Analyze Pair**
 

@@ -99,7 +99,7 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 
 ## Key Parameters for `/api/history`
 - `symbol1`, `symbol2` — ccxt format, e.g. `BTC/USDT:USDT` or `BTC/USDC:USDC`
-- `timeframe` — `1h`, `4h`, `1d`
+- `timeframe` — `5m`, `1h`, `4h`, `1d`
 - `limit` — number of candles (default 500, max 1500)
 - `zscore_window` — rolling window for z-score (default 20)
 
