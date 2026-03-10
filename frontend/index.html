@@ -533,7 +533,7 @@
             <label class="text-xs text-muted mb-1 flex items-center gap-1" data-i18n="entry_z">Entry Z-score
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
             </label>
-            <input id="entry-z-input" type="number" value="2.0" step="0.1" min="0.5" max="5"
+            <input id="entry-z-input" type="number" value="2.0" step="0.1" min="0.5" max="5" oninput="updateThresholdLines()"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
             <div class="tooltip-box" data-i18n-html="tip_entry_z"></div>
           </div>
@@ -541,7 +541,7 @@
             <label class="text-xs text-muted mb-1 flex items-center gap-1" data-i18n="exit_z">Exit Z-score
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
             </label>
-            <input id="exit-z-input" type="number" value="0.5" step="0.1" min="0" max="3"
+            <input id="exit-z-input" type="number" value="0.5" step="0.1" min="0" max="3" oninput="updateThresholdLines()"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
             <div class="tooltip-box" data-i18n-html="tip_exit_z"></div>
           </div>
@@ -1301,6 +1301,23 @@ async function refreshPositions() {
   } catch(e) {
     showToast(t('toast_positions_fail') + e.message, 'error');
   }
+}
+
+// ------------------------------------------------------------------ //
+//  Live threshold update on Z-score input change
+// ------------------------------------------------------------------ //
+function updateThresholdLines() {
+  if (!state.spreadChart) return;
+  const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 2.0;
+  const exitZ  = parseFloat(document.getElementById('exit-z-input').value)  || 0.5;
+  const ann = state.spreadChart.options.plugins.annotation.annotations;
+  ann.entryHigh.yMin = entryZ;  ann.entryHigh.yMax = entryZ;
+  ann.entryHigh.label.content = `+${entryZ}σ`;
+  ann.entryLow.yMin  = -entryZ; ann.entryLow.yMax  = -entryZ;
+  ann.entryLow.label.content  = `-${entryZ}σ`;
+  ann.exitHigh.yMin  = exitZ;   ann.exitHigh.yMax  = exitZ;
+  ann.exitLow.yMin   = -exitZ;  ann.exitLow.yMax   = -exitZ;
+  state.spreadChart.update('none');
 }
 
 // ------------------------------------------------------------------ //

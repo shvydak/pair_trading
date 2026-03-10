@@ -9,11 +9,13 @@ Monitors the spread between two correlated assets in real time, runs backtests, 
 ## Features
 
 - **Pair analysis** — cointegration, hedge ratio, half-life, Hurst exponent, correlation
-- **Spread & Z-score chart** — with entry/exit threshold lines, real-time WebSocket updates
+- **Spread & Z-score chart** — entry/exit threshold lines update live as you type, real-time WebSocket updates
 - **Normalised price chart** — see how both assets move relative to each other
 - **Backtesting** — equity curve, Sharpe ratio, max drawdown, trade log
 - **Live trading** — Long/Short spread with one click via Binance Futures API
-- **Built-in guide** — slide-in panel with 8 sections, examples and "Try it" buttons
+- **Position sizing** — three methods: OLS β (default), ATR volatility parity, Equal dollar
+- **Position preview** — see exact quantities and dollar values before placing a trade
+- **Built-in guide** — slide-in panel with 8 sections, SVG charts, examples and "Try it" buttons
 - **EN / RU interface** — language toggle in the header
 
 ---
@@ -103,7 +105,15 @@ open frontend/index.html
 - **Short Spread** — sell S1, buy S2 (when Z-score > +2, S1 is overvalued)
 - **Close All** — closes both legs
 
-> Position size is split between the two legs proportionally to the hedge ratio.
+**Position sizing methods:**
+
+| Method | Formula | When to use |
+|--------|---------|-------------|
+| **OLS β** (default) | `qty1 = size/P1`, `qty2 = size×\|β\|/P2` | Most pairs |
+| **ATR** | `qty1 = size/P1`, `qty2 = qty1×(ATR1/ATR2)` | Equal dollar-volatility per leg |
+| **Equal $** | `qty1 = size/P1`, `qty2 = size/P2` | Equal dollar exposure |
+
+> The **Position Preview** panel shows exact quantities and dollar values before you click Long/Short.
 
 ---
 
@@ -171,6 +181,9 @@ Look for: cointegration (p < 0.05), Hurst exponent < 0.5, correlation > 0.7, hal
 
 **WebSocket shows "Disconnected"?**
 Make sure the backend is running on `localhost:8080`. The connection is established after clicking **Analyze Pair**.
+
+**Port conflict on macOS?**
+Port 5000 is reserved by macOS AirPlay Receiver. Use port 8080 (default) or any other free port.
 
 ---
 

@@ -68,6 +68,12 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 - **Half-life**: AR(1) on spread differences — `half_life = -log(2) / log(φ)`
 - **Hurst exponent**: R/S analysis — H < 0.5 means mean-reverting
 - **Backtest signals**: enter at `|z| > entry_threshold`, exit at `|z| < exit_threshold`
+- **ATR**: `calculate_atr(df, period=14)` — average true range from OHLCV DataFrame
+- **Position sizing** (`calculate_position_sizes`):
+  - `ols`: `qty1 = size/P1`, `qty2 = size*|β|/P2`
+  - `atr`: `qty1 = size/P1`, `qty2 = qty1 * (ATR1/ATR2)` — equal dollar volatility per leg
+  - `equal`: `qty1 = size/P1`, `qty2 = size/P2`
+  - ⚠️ ATR formula does NOT include `* (P1/P2)` — that was a bug, correct is `qty2 = qty1 * ratio`
 
 ## Binance Client Notes (`binance_client.py`)
 - Uses `ccxt.async_support.binanceusdm` (not `binance`)
@@ -83,6 +89,9 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 - Language stored in `localStorage` key `pt_lang`, default `ru`
 - Tooltips: `position: fixed` with JS positioning — handles viewport clipping above/below
 - API keys stored in `localStorage` (`binance_api_key`, `binance_secret`)
+- **Live threshold lines**: `updateThresholdLines()` — called `oninput` on entry/exit Z-score fields; updates chart annotations immediately via `chart.update('none')` without re-fetching data
+- **Position sizing**: `sizingMethod` global (`ols`/`atr`/`equal`), `updateSizePreview()` computes qty/value client-side from `state.historyData` prices + ATR
+- **state** includes: `historyData`, `hedgeRatio`, `atr1`, `atr2`, `spreadChart`, `priceChart`, `ws`
 
 ## Guide Drawer
 - Triggered by "? Руководство / Guide" button in header
@@ -107,6 +116,7 @@ Private endpoints (positions, balance, trade) require valid keys.
 - **`pip` not found**: use `.venv/bin/pip` — Homebrew Python blocks system installs
 - **CORS errors**: backend has CORS middleware allowing all origins including `file://`
 - **NaN/Inf in JSON**: `_clean()` helper in `main.py` recursively strips non-serializable floats
+- **Port 5000 on macOS**: reserved by AirPlay Receiver (Control Center) — use port 8080 instead
 
 ## User Preferences
 - Русский язык по умолчанию в UI
