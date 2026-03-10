@@ -231,11 +231,11 @@ class PairTradingStrategy:
                     position = 1   # long spread (buy asset1, sell asset2)
                 elif z >= entry_threshold:
                     position = -1  # short spread (sell asset1, buy asset2)
-            elif position == 1:
-                if z >= exit_threshold:
+            elif position == 1:   # long spread: entered at z <= -entry, exit when z >= -exit (recovered from below)
+                if z >= -exit_threshold:
                     position = 0
-            elif position == -1:
-                if z <= -exit_threshold:
+            elif position == -1:  # short spread: entered at z >= +entry, exit when z <= +exit (recovered from above)
+                if z <= exit_threshold:
                     position = 0
 
             signals.iloc[i] = position
@@ -355,13 +355,15 @@ class PairTradingStrategy:
         else:
             sharpe = 0.0
 
-        # Max drawdown
-        peak = eq_values[0]
+        # Max drawdown as % of position_size_usd (capital at risk)
+        # equity values are PnL relative to zero, so portfolio = position_size_usd + equity
+        peak_portfolio = position_size_usd
         max_dd = 0.0
         for v in eq_values:
-            if v > peak:
-                peak = v
-            dd = (peak - v) / (abs(peak) + 1e-9)
+            portfolio_val = position_size_usd + v
+            if portfolio_val > peak_portfolio:
+                peak_portfolio = portfolio_val
+            dd = (peak_portfolio - portfolio_val) / peak_portfolio
             if dd > max_dd:
                 max_dd = dd
 

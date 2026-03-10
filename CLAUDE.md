@@ -49,6 +49,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET | `/api/symbols` | List all active USDT-M perpetual futures |
 | GET | `/api/history` | OHLCV + spread/z-score + stats for a pair |
 | GET | `/api/backtest` | Full backtest with equity curve and trades |
+| GET | `/api/status` | Binance connection status + USDT balance (no keys → `no_keys`, bad keys → `auth_error`) |
 | GET | `/api/positions` | Open positions from Binance (requires API keys) |
 | GET | `/api/balance` | USDT balance (requires API keys) |
 | POST | `/api/trade` | Place market order pair trade |
@@ -80,6 +81,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 - Symbol format: `BTC/USDT:USDT` (ccxt unified format, NOT `BTCUSDT`)
 - The UI sends `BTCUSDT` → backend normalizes via `_normalise_symbol()`
 - API keys are only injected into ccxt config if they are non-empty and non-placeholder
+- `self.has_creds: bool` — exposed for use in `/api/status`
 - Market type filter: `type in ("swap", "future")` — Binance perpetuals show as `swap`
 
 ## Frontend (`frontend/index.html`)
@@ -88,10 +90,13 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 - i18n: `I18N` object with `en`/`ru` keys, `t(key)` function, `applyLocale()` on load and lang switch
 - Language stored in `localStorage` key `pt_lang`, default `ru`
 - Tooltips: `position: fixed` with JS positioning — handles viewport clipping above/below
-- API keys stored in `localStorage` (`binance_api_key`, `binance_secret`)
+- **Binance status section** in sidebar — `checkApiStatus()` calls `/api/status` on page load and on refresh button click; `renderApiStatus(data)` renders colored dot + balance or error message; states: `no_keys` (grey) / connected (green) / `auth_error` (red) / network error (yellow)
 - **Live threshold lines**: `updateThresholdLines()` — called `oninput` on entry/exit Z-score fields; updates chart annotations immediately via `chart.update('none')` without re-fetching data
 - **Position sizing**: `sizingMethod` global (`ols`/`atr`/`equal`), `updateSizePreview()` computes qty/value client-side from `state.historyData` prices + ATR
 - **state** includes: `historyData`, `hedgeRatio`, `atr1`, `atr2`, `spreadChart`, `priceChart`, `ws`
+- **Tooltips with i18n**: tooltip HTML is stored in `I18N.en.tip_*` / `I18N.ru.tip_*` keys; `tooltip-box` div uses `data-i18n-html` attribute; `applyLocale()` sets `innerHTML` for these. Existing tooltip keys: `tip_entry_z`, `tip_exit_z`, `tip_zwindow`
+- **Trades table**: colored rows (green/red bg tint), `+/-` PnL signs, legs column showing ▲/▼ per symbol, cumulative PnL column. Populated in `runBacktest()` from `data.trades`
+- **Guide nav**: redesigned as sidebar-style list on left of drawer (not a cramped top bar); numbered sections with readable text
 
 ## Guide Drawer
 - Triggered by "? Руководство / Guide" button in header

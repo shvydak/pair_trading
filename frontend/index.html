@@ -51,13 +51,19 @@
       position: fixed;
       background: #1c2333; border: 1px solid #30363d; border-radius: 6px;
       padding: 8px 12px; font-size: 11px; line-height: 1.5; color: #c9d1d9;
-      width: 240px; z-index: 9999; pointer-events: none;
+      width: 280px; z-index: 9999; pointer-events: none;
       transition: opacity 0.15s ease;
     }
     .tooltip-box.visible { visibility: visible; opacity: 1; }
     .tooltip-box::after {
-      content: ''; position: absolute; top: 100%; left: 50%; margin-left: -5px;
-      border: 5px solid transparent; border-top-color: #30363d;
+      content: ''; position: absolute; left: 50%; margin-left: -5px;
+      border: 5px solid transparent;
+    }
+    .tooltip-box:not(.arrow-below)::after {
+      bottom: -10px; border-top-color: #30363d;
+    }
+    .tooltip-box.arrow-below::after {
+      top: -10px; border-bottom-color: #30363d;
     }
 
     /* tab active */
@@ -137,6 +143,7 @@
       timeframe: 'Timeframe',
       lookback: 'Lookback (candles)',
       zscore_window: 'Z-score Window',
+      tip_zwindow: '<strong>Z-score Window</strong><br/>How many recent candles define the "normal" spread level. With window=20 and 4h timeframe, the system looks at the last 20 bars (~3 days) as baseline — anything deviating strongly from it becomes a signal.<br/><br/>Lower (10) → reacts faster, more false signals.<br/>Higher (50) → more stable, slower to react.<br/>Start with 20.',
       analyze_btn: 'Analyze Pair',
       analyzing: 'Analyzing…',
 
@@ -157,11 +164,15 @@
       short_spread_sub: '(Sell S1 / Buy S2)',
       close_all: 'Close All Positions',
 
-      api_keys: 'API Keys',
-      api_key_label: 'API Key',
-      secret_label: 'Secret',
-      save_keys: 'Save to LocalStorage',
-      keys_saved: 'Saved to localStorage',
+      binance_section: 'Binance',
+      api_connected: 'Connected',
+      api_no_keys: 'Not configured',
+      api_no_keys_hint: 'Add BINANCE_API_KEY and BINANCE_SECRET to the .env file',
+      api_auth_error: 'Auth error',
+      api_network_error: 'Backend unavailable',
+      api_checking: 'Checking…',
+      api_free: 'Free',
+      api_used: 'In use',
 
       // tabs
       tab_spread: 'Spread Analysis',
@@ -195,6 +206,9 @@
       legend_spread: 'Spread',
       legend_zscore: 'Z-Score',
       legend_threshold: '±2σ threshold',
+      tip_legend_spread: '<strong>Spread</strong> — the gap between the two assets in log-price space.<br/><br/>Formula: <code>log(P₁) − β × log(P₂)</code><br/><br/>Example: BTC at 84000, ETH at 2000, β = 1.2<br/>Spread = ln(84000) − 1.2 × ln(2000) ≈ 4.89<br/><br/>When BTC rises faster than ETH → spread goes up.<br/>When ETH catches up → spread falls back.<br/>A healthy spread oscillates around a stable mean.',
+      tip_legend_zscore: '<strong>Z-Score</strong> — how many standard deviations the spread is from its recent average.<br/><br/>Formula: <code>Z = (Spread − Mean) / StdDev</code><br/><br/>Z = 0 → spread is at its normal level<br/>Z = +2 → spread is 2σ above normal → asset 1 is expensive<br/>Z = −2 → spread is 2σ below normal → asset 1 is cheap<br/><br/>The Z-score is what triggers entry and exit signals.',
+      tip_legend_threshold: '<strong>±2σ Threshold</strong> — signal lines on the Z-score axis.<br/><br/><svg width="200" height="70" style="display:block;margin:6px 0"><line x1="0" y1="15" x2="200" y2="15" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="55" x2="200" y2="55" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="35" x2="200" y2="35" stroke="#8b949e" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/><text x="4" y="12" fill="#f85149" font-size="9">+2σ — short spread here</text><text x="4" y="68" fill="#3fb950" font-size="9">−2σ — long spread here</text><path d="M0,35 C20,28 30,10 50,13 S70,40 90,35 S110,20 130,22 S160,50 180,42 S195,30 200,35" fill="none" stroke="#e3b341" stroke-width="1.5"/></svg>Red line (+2σ): Z-score crosses up → spread too wide → short spread (sell S1, buy S2).<br/>Green line (−2σ): Z-score crosses down → spread too narrow → long spread (buy S1, sell S2).<br/>Inner dotted lines (exit zone): trade closes when Z-score returns here.',
       price_chart_title: 'Normalised Price (indexed to 100)',
       indexed_label: 'Indexed (base=100)',
 
@@ -212,6 +226,7 @@
       th_entry_z: 'Entry Z',
       th_exit_z: 'Exit Z',
       th_pnl: 'PnL (USD)',
+      th_cumulative: 'Cumulative',
       no_trades_hint: 'Run a backtest to see trades.',
       no_trades: 'No trades in backtest period.',
       trade_long: '▲ Long',
@@ -257,12 +272,12 @@
       sizing_ratio: 'Ratio S1/S2 $',
 
       // tooltips
-      tip_zscore: '<strong>Z-Score</strong><br/>Standard deviations the spread is away from its rolling mean. |Z| &gt; 2 signals a trading opportunity. Positive Z → overvalued S1 vs S2 → short spread. Negative Z → undervalued S1 → long spread.',
-      tip_hedge: '<strong>Hedge Ratio (β)</strong><br/>OLS regression coefficient: log(P1) = β·log(P2) + α. For every 1 unit of Asset 2, hold β units of Asset 1 to construct a stationary spread. Also the number of contracts ratio between the two legs.',
-      tip_halflife: '<strong>Half-Life</strong><br/>Expected time (in bars) for the spread to revert halfway to its mean. Derived from AR(1) model: half_life = −log(2)/log(φ). Shorter half-life = faster mean reversion. Ideal range: 5–50 bars.',
-      tip_hurst: '<strong>Hurst Exponent (H)</strong><br/>Measures the long-term memory of the spread.<br/>H &lt; 0.5 → Mean reverting ✓<br/>H ≈ 0.5 → Random walk<br/>H &gt; 0.5 → Trending<br/>Calculated via R/S analysis.',
-      tip_corr: '<strong>Pearson Correlation</strong><br/>Correlation of log returns between the two assets. Higher correlation (≥ 0.7) is preferred. Does not guarantee cointegration.',
-      tip_coint: '<strong>Cointegration (Engle-Granger)</strong><br/>Tests whether a linear combination of two non-stationary price series is stationary. p-value &lt; 0.05 means cointegrated at 95% confidence — the spread has a long-run equilibrium and will revert.',
+      tip_zscore: '<strong>Z-Score</strong><br/>Deviation of the spread from its rolling mean, in standard deviations. The primary entry/exit signal.<svg viewBox="0 0 212 34" width="100%" style="display:block;margin:6px 0 4px"><rect x="10" y="9" width="32" height="8" fill="#f85149" opacity="0.4" rx="1"/><rect x="90" y="9" width="32" height="8" fill="#8b949e" opacity="0.2" rx="1"/><rect x="170" y="9" width="32" height="8" fill="#3fb950" opacity="0.4" rx="1"/><line x1="10" y1="13" x2="202" y2="13" stroke="#3a4050" stroke-width="1"/><line x1="42" y1="8" x2="42" y2="18" stroke="#f85149" stroke-width="1.5"/><line x1="106" y1="7" x2="106" y2="19" stroke="#8b949e" stroke-width="1.5"/><line x1="170" y1="8" x2="170" y2="18" stroke="#3fb950" stroke-width="1.5"/><text x="26" y="28" text-anchor="middle" font-size="9" fill="#f85149">−2 Long</text><text x="106" y="28" text-anchor="middle" font-size="9" fill="#8b949e">0 Exit</text><text x="186" y="28" text-anchor="middle" font-size="9" fill="#3fb950">+2 Short</text></svg><span style="color:#f85149">Z &lt; −2</span> S1 cheap → long spread<br/><span style="color:#3fb950">Z &gt; +2</span> S1 dear → short spread<br/><span style="color:#8b949e">|Z| &lt; 0.5</span> near mean → exit',
+      tip_hedge: '<strong>Hedge Ratio (β)</strong><br/>The size ratio between legs that keeps the spread stationary. Calculated by OLS on log prices.<div style="background:#161b22;border-radius:4px;padding:5px 8px;margin:6px 0;font-size:11px;line-height:1.9">β = 0.82, position = $1 000<br/><span style="color:#58a6ff">▲ Buy S1:</span> $1 000 &nbsp;(qty = 1000 / P₁)<br/><span style="color:#f85149">▼ Sell S2:</span> $820 &nbsp;(qty = 820 / P₂)</div>β ≠ 1 → legs are unequal in $ — by design so they offset each other.',
+      tip_halflife: '<strong>Half-Life</strong><br/>Expected bars for the spread to revert <em>halfway</em> to its mean. Shorter = faster.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><line x1="20" y1="44" x2="200" y2="44" stroke="#3a4050" stroke-width="1"/><line x1="20" y1="8" x2="20" y2="44" stroke="#3a4050" stroke-width="1"/><line x1="20" y1="26" x2="200" y2="26" stroke="#58a6ff" stroke-width="0.8" stroke-dasharray="3,3"/><polyline points="20,8 50,14 80,20 110,26 140,31 170,34 200,37" fill="none" stroke="#d29922" stroke-width="1.5"/><circle cx="110" cy="26" r="3" fill="#58a6ff"/><line x1="110" y1="26" x2="110" y2="44" stroke="#58a6ff" stroke-width="0.8" stroke-dasharray="2,2"/><text x="15" y="10" text-anchor="end" font-size="8" fill="#8b949e">+1σ</text><text x="15" y="27" text-anchor="end" font-size="8" fill="#58a6ff">+½σ</text><text x="15" y="45" text-anchor="end" font-size="8" fill="#8b949e">0</text><text x="110" y="49" text-anchor="middle" font-size="8" fill="#58a6ff">N bars</text><text x="200" y="41" text-anchor="end" font-size="8" fill="#8b949e">→ mean</text></svg>E.g. 29 bars × 1h ≈ 29 h to halfway back.<br/><strong>Ideal: 5–50 bars.</strong> &lt;5 noisy &nbsp; &gt;100 too slow',
+      tip_hurst: '<strong>Hurst Exponent (H)</strong><br/>Nature of the spread process — mean-reverting, random, or trending.<svg viewBox="0 0 212 36" width="100%" style="display:block;margin:6px 0 4px"><rect x="10" y="11" width="96" height="8" fill="#3fb950" opacity="0.35" rx="1"/><rect x="106" y="11" width="19" height="8" fill="#d29922" opacity="0.4" rx="1"/><rect x="125" y="11" width="77" height="8" fill="#f85149" opacity="0.35" rx="1"/><line x1="10" y1="15" x2="202" y2="15" stroke="#3a4050" stroke-width="1"/><line x1="106" y1="10" x2="106" y2="20" stroke="#d29922" stroke-width="1.5"/><text x="10" y="28" text-anchor="start" font-size="9" fill="#3fb950">0 mean-rev. ✓</text><text x="106" y="28" text-anchor="middle" font-size="9" fill="#d29922">0.5</text><text x="202" y="28" text-anchor="end" font-size="9" fill="#f85149">1 trend ✗</text><text x="58" y="36" text-anchor="middle" font-size="8" fill="#3fb950">ideal zone</text><text x="163" y="36" text-anchor="middle" font-size="8" fill="#f85149">avoid</text></svg>H &lt; 0.5 → mean-reverting ✓ &nbsp; H &gt; 0.5 → trending ✗<br/>Pair trading works best when H is clearly below 0.5.',
+      tip_corr: '<strong>Pearson Correlation</strong><br/>How synchronised the log-returns of both assets are.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">ρ = 0.9 ✓</text><polyline points="10,24 22,20 34,26 46,22 58,28 70,23 82,26 96,24" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="10,25 22,21 34,27 46,23 58,29 70,24 82,27 96,25" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">ρ = 0.3 ✗</text><polyline points="116,26 128,22 140,28 152,24 164,20 176,26 188,22 202,26" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="116,28 128,34 140,26 152,36 164,28 176,34 188,24 202,32" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="53" y="45" text-anchor="middle" font-size="8" fill="#8b949e">move together</text><text x="159" y="45" text-anchor="middle" font-size="8" fill="#8b949e">diverge often</text></svg>≥ 0.7 preferred. High correlation ≠ cointegration — spread can still drift.',
+      tip_coint: '<strong>Cointegration (Engle–Granger)</strong><br/>Does a long-run equilibrium exist? If yes, the spread always returns to its mean.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">Cointegrated ✓</text><line x1="10" y1="30" x2="96" y2="30" stroke="#3fb950" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="10,30 20,24 30,32 40,24 50,34 60,26 70,32 80,24 96,30" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">Not cointegrated ✗</text><line x1="116" y1="30" x2="202" y2="30" stroke="#f85149" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="116,30 126,28 136,26 146,22 156,18 166,14 176,12 188,10 202,8" fill="none" stroke="#f85149" stroke-width="1.5"/><text x="53" y="46" text-anchor="middle" font-size="8" fill="#8b949e">spread bounded</text><text x="159" y="46" text-anchor="middle" font-size="8" fill="#8b949e">spread drifts away</text></svg>p &lt; 0.05 → cointegrated ✓ (safe to trade)<br/>p ≥ 0.05 → unreliable — spread may drift permanently',
     },
     ru: {
       title: 'Дашборд Парного Трейдинга',
@@ -277,6 +292,7 @@
       timeframe: 'Таймфрейм',
       lookback: 'История (свечей)',
       zscore_window: 'Окно Z-score',
+      tip_zwindow: '<strong>Окно Z-score</strong><br/>Сколько последних свечей определяют «нормальный» уровень спреда. При окне=20 и таймфрейме 4h система смотрит на последние 20 баров (~3 дня) как на базу — всё, что сильно отклоняется от неё, становится сигналом.<br/><br/>Меньше (10) → быстрее реагирует, больше ложных сигналов.<br/>Больше (50) → стабильнее, реагирует медленнее.<br/>Начните с 20.',
       analyze_btn: 'Анализировать пару',
       analyzing: 'Анализ…',
 
@@ -297,11 +313,15 @@
       short_spread_sub: '(Продать S1 / Купить S2)',
       close_all: 'Закрыть все позиции',
 
-      api_keys: 'API Ключи',
-      api_key_label: 'API Ключ',
-      secret_label: 'Секрет',
-      save_keys: 'Сохранить',
-      keys_saved: 'Сохранено',
+      binance_section: 'Binance',
+      api_connected: 'Подключено',
+      api_no_keys: 'Не настроено',
+      api_no_keys_hint: 'Добавьте BINANCE_API_KEY и BINANCE_SECRET в файл .env',
+      api_auth_error: 'Ошибка авторизации',
+      api_network_error: 'Бэкенд недоступен',
+      api_checking: 'Проверяем…',
+      api_free: 'Свободно',
+      api_used: 'Используется',
 
       tab_spread: 'Анализ спреда',
       tab_price: 'График цен',
@@ -330,6 +350,9 @@
       legend_spread: 'Спред',
       legend_zscore: 'Z-счёт',
       legend_threshold: '±2σ порог',
+      tip_legend_spread: '<strong>Спред</strong> — разница между двумя активами в пространстве логарифмических цен.<br/><br/>Формула: <code>log(P₁) − β × log(P₂)</code><br/><br/>Пример: BTC = 84000, ETH = 2000, β = 1.2<br/>Спред = ln(84000) − 1.2 × ln(2000) ≈ 4.89<br/><br/>BTC растёт быстрее ETH → спред растёт.<br/>ETH догоняет → спред падает обратно.<br/>Здоровый спред колеблется вокруг стабильного среднего.',
+      tip_legend_zscore: '<strong>Z-счёт</strong> — на сколько стандартных отклонений текущий спред отклонился от своего среднего.<br/><br/>Формула: <code>Z = (Спред − Среднее) / СтдОткл</code><br/><br/>Z = 0 → спред на обычном уровне<br/>Z = +2 → спред на 2σ выше нормы → актив 1 дорогой<br/>Z = −2 → спред на 2σ ниже нормы → актив 1 дешёвый<br/><br/>Z-счёт — это то, что запускает сигналы входа и выхода.',
+      tip_legend_threshold: '<strong>±2σ порог</strong> — сигнальные линии на оси Z-счёта.<br/><br/><svg width="200" height="70" style="display:block;margin:6px 0"><line x1="0" y1="15" x2="200" y2="15" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="55" x2="200" y2="55" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="35" x2="200" y2="35" stroke="#8b949e" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/><text x="4" y="12" fill="#f85149" font-size="9">+2σ — шорт спреда здесь</text><text x="4" y="68" fill="#3fb950" font-size="9">−2σ — лонг спреда здесь</text><path d="M0,35 C20,28 30,10 50,13 S70,40 90,35 S110,20 130,22 S160,50 180,42 S195,30 200,35" fill="none" stroke="#e3b341" stroke-width="1.5"/></svg>Красная линия (+2σ): Z-счёт пробивает вверх → шорт спреда (продать S1, купить S2).<br/>Зелёная линия (−2σ): Z-счёт пробивает вниз → лонг спреда (купить S1, продать S2).<br/>Внутренние пунктиры (зона выхода): сделка закрывается когда Z-счёт возвращается сюда.',
       price_chart_title: 'Нормализованные цены (база=100)',
       indexed_label: 'Индекс (база=100)',
 
@@ -346,6 +369,7 @@
       th_entry_z: 'Z входа',
       th_exit_z: 'Z выхода',
       th_pnl: 'PnL (USD)',
+      th_cumulative: 'Итого',
       no_trades_hint: 'Запустите бэктест для просмотра сделок.',
       no_trades: 'Нет сделок за указанный период.',
       trade_long: '▲ Лонг',
@@ -388,12 +412,12 @@
       sizing_preview: 'Предпросмотр позиции',
       sizing_ratio: 'Соотношение S1/S2 $',
 
-      tip_zscore: '<strong>Z-счёт</strong><br/>Количество стандартных отклонений спреда от скользящего среднего. |Z| &gt; 2 — сигнал для входа. Положительный Z → S1 дорог → шорт спред. Отрицательный Z → S1 дёшев → лонг спред.',
-      tip_hedge: '<strong>Коэффициент хеджирования (β)</strong><br/>Коэффициент OLS-регрессии: log(P1) = β·log(P2) + α. На каждую 1 единицу актива 2 держим β единиц актива 1 для построения стационарного спреда. Также это соотношение контрактов между двумя ногами.',
-      tip_halflife: '<strong>Период полураспада</strong><br/>Ожидаемое время (в барах) для возврата спреда на половину пути к среднему. Рассчитывается через AR(1): half_life = −log(2)/log(φ). Чем короче — тем лучше для парного трейдинга. Идеально: 5–50 баров.',
-      tip_hurst: '<strong>Показатель Хёрста (H)</strong><br/>Измеряет долгосрочную память временного ряда спреда.<br/>H &lt; 0.5 → Возврат к среднему ✓<br/>H ≈ 0.5 → Случайное блуждание<br/>H &gt; 0.5 → Тренд<br/>Рассчитывается методом R/S-анализа.',
-      tip_corr: '<strong>Корреляция Пирсона</strong><br/>Корреляция лог-доходностей двух активов. Предпочтительно ≥ 0.7 — цены движутся вместе и спред стабилен. Не гарантирует коинтеграцию.',
-      tip_coint: '<strong>Коинтеграция (Энгл-Грэнджер)</strong><br/>Проверяет, является ли линейная комбинация двух нестационарных рядов стационарной. p-value &lt; 0.05 означает коинтеграцию на уровне 95% — спред имеет долгосрочное равновесие и будет возвращаться к нему.',
+      tip_zscore: '<strong>Z-счёт</strong><br/>Отклонение спреда от скользящего среднего в единицах σ. Основной сигнал для входа и выхода.<svg viewBox="0 0 212 34" width="100%" style="display:block;margin:6px 0 4px"><rect x="10" y="9" width="32" height="8" fill="#f85149" opacity="0.4" rx="1"/><rect x="90" y="9" width="32" height="8" fill="#8b949e" opacity="0.2" rx="1"/><rect x="170" y="9" width="32" height="8" fill="#3fb950" opacity="0.4" rx="1"/><line x1="10" y1="13" x2="202" y2="13" stroke="#3a4050" stroke-width="1"/><line x1="42" y1="8" x2="42" y2="18" stroke="#f85149" stroke-width="1.5"/><line x1="106" y1="7" x2="106" y2="19" stroke="#8b949e" stroke-width="1.5"/><line x1="170" y1="8" x2="170" y2="18" stroke="#3fb950" stroke-width="1.5"/><text x="26" y="28" text-anchor="middle" font-size="9" fill="#f85149">−2σ лонг</text><text x="106" y="28" text-anchor="middle" font-size="9" fill="#8b949e">0 выход</text><text x="186" y="28" text-anchor="middle" font-size="9" fill="#3fb950">+2σ шорт</text></svg><span style="color:#f85149">Z &lt; −2</span> S1 дёшев → лонг спред<br/><span style="color:#3fb950">Z &gt; +2</span> S1 дорог → шорт спред<br/><span style="color:#8b949e">|Z| &lt; 0.5</span> у среднего → выход',
+      tip_hedge: '<strong>Коэф. хеджирования (β)</strong><br/>Соотношение размеров позиций, при котором одна нога нейтрализует другую. Рассчитывается OLS-регрессией на лог-ценах.<div style="background:#161b22;border-radius:4px;padding:5px 8px;margin:6px 0;font-size:11px;line-height:1.9">β = 0.82, размер = $1 000<br/><span style="color:#58a6ff">▲ Купить S1:</span> $1 000 &nbsp;(кол-во = 1000 / P₁)<br/><span style="color:#f85149">▼ Продать S2:</span> $820 &nbsp;(кол-во = 820 / P₂)</div>β ≠ 1 → ноги неравны по $ — намеренно, чтобы спред был стационарным.',
+      tip_halflife: '<strong>Период полураспада</strong><br/>Сколько баров нужно спреду, чтобы вернуться на <em>полпути</em> к среднему. Чем меньше — тем лучше.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><line x1="20" y1="44" x2="200" y2="44" stroke="#3a4050" stroke-width="1"/><line x1="20" y1="8" x2="20" y2="44" stroke="#3a4050" stroke-width="1"/><line x1="20" y1="26" x2="200" y2="26" stroke="#58a6ff" stroke-width="0.8" stroke-dasharray="3,3"/><polyline points="20,8 50,14 80,20 110,26 140,31 170,34 200,37" fill="none" stroke="#d29922" stroke-width="1.5"/><circle cx="110" cy="26" r="3" fill="#58a6ff"/><line x1="110" y1="26" x2="110" y2="44" stroke="#58a6ff" stroke-width="0.8" stroke-dasharray="2,2"/><text x="15" y="10" text-anchor="end" font-size="8" fill="#8b949e">+1σ</text><text x="15" y="27" text-anchor="end" font-size="8" fill="#58a6ff">+½σ</text><text x="15" y="45" text-anchor="end" font-size="8" fill="#8b949e">0</text><text x="110" y="49" text-anchor="middle" font-size="8" fill="#58a6ff">N баров</text><text x="200" y="41" text-anchor="end" font-size="8" fill="#8b949e">→ ср.</text></svg>Пример: 29 баров × 1h ≈ 29 ч до половины пути.<br/><strong>Идеально: 5–50 баров.</strong> &lt;5 шум &nbsp; &gt;100 слишком медленно',
+      tip_hurst: '<strong>Показатель Хёрста (H)</strong><br/>Характер временного ряда спреда — возвратный, случайный или трендовый.<svg viewBox="0 0 212 36" width="100%" style="display:block;margin:6px 0 4px"><rect x="10" y="11" width="96" height="8" fill="#3fb950" opacity="0.35" rx="1"/><rect x="106" y="11" width="19" height="8" fill="#d29922" opacity="0.4" rx="1"/><rect x="125" y="11" width="77" height="8" fill="#f85149" opacity="0.35" rx="1"/><line x1="10" y1="15" x2="202" y2="15" stroke="#3a4050" stroke-width="1"/><line x1="106" y1="10" x2="106" y2="20" stroke="#d29922" stroke-width="1.5"/><text x="10" y="28" text-anchor="start" font-size="9" fill="#3fb950">0 возврат ✓</text><text x="106" y="28" text-anchor="middle" font-size="9" fill="#d29922">0.5</text><text x="202" y="28" text-anchor="end" font-size="9" fill="#f85149">1 тренд ✗</text><text x="58" y="36" text-anchor="middle" font-size="8" fill="#3fb950">идеальная зона</text><text x="163" y="36" text-anchor="middle" font-size="8" fill="#f85149">опасно</text></svg>H &lt; 0.5 → возврат к среднему ✓ &nbsp; H &gt; 0.5 → тренд ✗<br/>Стратегия лучше всего работает при H явно ниже 0.5.',
+      tip_corr: '<strong>Корреляция Пирсона</strong><br/>Насколько синхронны лог-доходности двух активов.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">ρ = 0.9 ✓</text><polyline points="10,24 22,20 34,26 46,22 58,28 70,23 82,26 96,24" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="10,25 22,21 34,27 46,23 58,29 70,24 82,27 96,25" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">ρ = 0.3 ✗</text><polyline points="116,26 128,22 140,28 152,24 164,20 176,26 188,22 202,26" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="116,28 128,34 140,26 152,36 164,28 176,34 188,24 202,32" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="53" y="45" text-anchor="middle" font-size="8" fill="#8b949e">движутся вместе</text><text x="159" y="45" text-anchor="middle" font-size="8" fill="#8b949e">расходятся</text></svg>≥ 0.7 хорошо. Высокая корреляция ≠ коинтеграция — спред всё равно может дрейфовать.',
+      tip_coint: '<strong>Коинтеграция (Энгл-Грэнджер)</strong><br/>Есть ли долгосрочное равновесие? Если да — спред всегда возвращается к среднему.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">Коинтегр. ✓</text><line x1="10" y1="30" x2="96" y2="30" stroke="#3fb950" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="10,30 20,24 30,32 40,24 50,34 60,26 70,32 80,24 96,30" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">Не коинтегр. ✗</text><line x1="116" y1="30" x2="202" y2="30" stroke="#f85149" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="116,30 126,28 136,26 146,22 156,18 166,14 176,12 188,10 202,8" fill="none" stroke="#f85149" stroke-width="1.5"/><text x="53" y="46" text-anchor="middle" font-size="8" fill="#8b949e">спред у среднего</text><text x="159" y="46" text-anchor="middle" font-size="8" fill="#8b949e">спред дрейфует</text></svg>p &lt; 0.05 → коинтегрированы ✓ (безопасно торговать)<br/>p ≥ 0.05 → ненадёжно — спред может уйти навсегда',
     }
   };
 
@@ -509,10 +533,13 @@
             <input id="limit-input" type="number" value="500" min="50" max="1500"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
           </div>
-          <div class="flex-1">
-            <label class="text-xs text-muted mb-1 block" data-i18n="zscore_window">Z-score Window</label>
+          <div class="flex-1 tooltip-container">
+            <label class="text-xs text-muted mb-1 flex items-center gap-1" data-i18n="zscore_window">Z-score Window
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            </label>
             <input id="zwindow-input" type="number" value="20" min="5" max="200"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+            <div class="tooltip-box" data-i18n-html="tip_zwindow"></div>
           </div>
         </div>
 
@@ -610,26 +637,18 @@
       </div>
     </section>
 
-    <!-- API Keys -->
+    <!-- Binance Connection Status -->
     <section class="bg-card rounded-lg p-4 border border-border">
-      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="api_keys">API Keys</h3>
-      <div class="flex flex-col gap-2">
-        <div>
-          <label class="text-xs text-muted mb-1 block" data-i18n="api_key_label">API Key</label>
-          <input id="api-key-input" type="password" placeholder="Binance API Key"
-            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
-        </div>
-        <div>
-          <label class="text-xs text-muted mb-1 block" data-i18n="secret_label">Secret</label>
-          <input id="api-secret-input" type="password" placeholder="Binance Secret"
-            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
-        </div>
-        <button onclick="saveApiKeys()"
-          class="w-full py-2 rounded-md text-sm font-semibold bg-surface border border-border text-muted hover:border-yellow hover:text-yellow transition">
-          <span data-i18n="save_keys">Save to LocalStorage</span>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-xs font-semibold text-muted uppercase tracking-wider" data-i18n="binance_section">Binance</h3>
+        <button onclick="checkApiStatus()" id="api-refresh-btn" title="Refresh"
+          class="text-muted hover:text-white transition rounded p-0.5">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.06-3.39L10 6h5V1l-1.35 1.35z"/>
+          </svg>
         </button>
-        <div id="api-save-msg" class="text-xs text-center text-muted"></div>
       </div>
+      <div id="api-status-content" class="text-xs text-muted" data-i18n="api_checking">Checking…</div>
     </section>
 
   </aside>
@@ -722,9 +741,21 @@
         <div class="flex items-center justify-between">
           <h3 class="text-sm font-semibold text-white" data-i18n="spread_chart_title">Spread &amp; Z-Score</h3>
           <div class="flex items-center gap-4 text-xs text-muted">
-            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span> <span data-i18n="legend_spread">Spread</span></span>
-            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-yellow-400 inline-block"></span> <span data-i18n="legend_zscore">Z-Score</span></span>
-            <span class="flex items-center gap-1"><span class="w-3 h-px border-t border-dashed border-red-400 inline-block"></span> <span data-i18n="legend_threshold">±2σ threshold</span></span>
+            <span class="tooltip-container flex items-center gap-1 cursor-default">
+              <span class="w-3 h-0.5 bg-blue-400 inline-block"></span>
+              <span data-i18n="legend_spread">Spread</span>
+              <div class="tooltip-box" data-i18n-html="tip_legend_spread"></div>
+            </span>
+            <span class="tooltip-container flex items-center gap-1 cursor-default">
+              <span class="w-3 h-0.5 bg-yellow-400 inline-block"></span>
+              <span data-i18n="legend_zscore">Z-Score</span>
+              <div class="tooltip-box" data-i18n-html="tip_legend_zscore"></div>
+            </span>
+            <span class="tooltip-container flex items-center gap-1 cursor-default">
+              <span class="w-3 h-px border-t border-dashed border-red-400 inline-block"></span>
+              <span data-i18n="legend_threshold">±2σ threshold</span>
+              <div class="tooltip-box" data-i18n-html="tip_legend_threshold"></div>
+            </span>
           </div>
         </div>
         <div class="chart-wrap">
@@ -791,14 +822,15 @@
               <tr>
                 <th data-i18n="th_entry_time">Entry Time</th>
                 <th data-i18n="th_exit_time">Exit Time</th>
-                <th data-i18n="th_side">Side</th>
+                <th data-i18n="th_side">Legs</th>
                 <th data-i18n="th_entry_z">Entry Z</th>
                 <th data-i18n="th_exit_z">Exit Z</th>
                 <th data-i18n="th_pnl">PnL (USD)</th>
+                <th data-i18n="th_cumulative">Cumulative</th>
               </tr>
             </thead>
             <tbody id="trades-body">
-              <tr><td colspan="6" class="text-center text-muted py-8" data-i18n="no_trades_hint">Run a backtest to see trades.</td></tr>
+              <tr><td colspan="7" class="text-center text-muted py-8" data-i18n="no_trades_hint">Run a backtest to see trades.</td></tr>
             </tbody>
           </table>
         </div>
@@ -905,11 +937,62 @@ let state = {
 //  Init
 // ------------------------------------------------------------------ //
 window.addEventListener('DOMContentLoaded', () => {
-  loadApiKeys();
   fetchSymbols();
   setTimeframe('1h');
   applyLocale();
+  checkApiStatus();
+  initTooltips();
 });
+
+function initTooltips() {
+  document.querySelectorAll('.tooltip-container').forEach(container => {
+    const box = container.querySelector('.tooltip-box');
+    if (!box) return;
+
+    container.addEventListener('mouseenter', () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const pad = 8;
+      const gap = 6;
+      const boxW = Math.min(280, vw - pad * 2);
+
+      // Position off-screen, make visible to measure real height
+      box.style.left    = '-9999px';
+      box.style.top     = '-9999px';
+      box.style.width   = boxW + 'px';
+      box.style.transform = 'none';
+      box.classList.add('visible');
+
+      const boxH  = box.offsetHeight;
+      const rect  = container.getBoundingClientRect();
+
+      // Horizontal: centre on trigger, clamp to viewport
+      let left = rect.left + rect.width / 2 - boxW / 2;
+      left = Math.max(pad, Math.min(left, vw - boxW - pad));
+
+      // Vertical: prefer above, fall back to below
+      let top, showAbove;
+      if (rect.top - gap - boxH >= pad) {
+        top = rect.top - gap - boxH;
+        showAbove = true;
+      } else {
+        top = rect.bottom + gap;
+        showAbove = false;
+        // If it still overflows below, clamp
+        if (top + boxH > vh - pad) top = vh - boxH - pad;
+      }
+
+      box.style.left = left + 'px';
+      box.style.top  = top  + 'px';
+      box.classList.toggle('arrow-below', !showAbove);
+    });
+
+    container.addEventListener('mouseleave', () => {
+      box.classList.remove('visible');
+      box.classList.remove('arrow-below');
+    });
+  });
+}
 
 // ------------------------------------------------------------------ //
 //  Symbol loading
@@ -1247,17 +1330,32 @@ function renderBacktest(data) {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-8">${t('no_trades')}</td></tr>`;
     return;
   }
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  let cumulative = 0;
   tbody.innerHTML = data.trades.map(tr => {
-    const pnlClass  = tr.pnl >= 0 ? 'text-green-400' : 'text-red-400';
-    const sideClass = tr.side === 'long_spread' ? 'text-blue-400' : 'text-orange-400';
-    const sideLabel = tr.side === 'long_spread' ? t('trade_long') : t('trade_short');
-    return `<tr>
+    cumulative += tr.pnl;
+    const isProfit = tr.pnl >= 0;
+    const rowBg   = isProfit ? 'background:rgba(63,185,80,0.05)' : 'background:rgba(248,81,73,0.05)';
+    const pnlColor = isProfit ? '#3fb950' : '#f85149';
+    const pnlSign  = isProfit ? '+' : '';
+    const cumColor = cumulative >= 0 ? '#3fb950' : '#f85149';
+    const isLong   = tr.side === 'long_spread';
+    // legs: long spread = buy S1, sell S2 / short spread = sell S1, buy S2
+    const leg1 = isLong
+      ? `<span style="color:#3fb950">▲ ${sym1}</span>`
+      : `<span style="color:#f85149">▼ ${sym1}</span>`;
+    const leg2 = isLong
+      ? `<span style="color:#f85149">▼ ${sym2}</span>`
+      : `<span style="color:#3fb950">▲ ${sym2}</span>`;
+    return `<tr style="${rowBg}">
       <td class="text-muted">${fmtTime(tr.entry_time)}</td>
       <td class="text-muted">${fmtTime(tr.exit_time)}</td>
-      <td class="${sideClass} font-medium">${sideLabel}</td>
+      <td class="font-medium" style="white-space:nowrap">${leg1} / ${leg2}</td>
       <td>${fmt(tr.entry_zscore, 3)}</td>
       <td>${fmt(tr.exit_zscore, 3)}</td>
-      <td class="${pnlClass} font-medium">$${fmt(tr.pnl, 2)}</td>
+      <td class="font-medium" style="color:${pnlColor}">${pnlSign}$${fmt(tr.pnl, 2)}</td>
+      <td class="font-medium" style="color:${cumColor}">${cumulative >= 0 ? '+' : ''}$${fmt(cumulative, 2)}</td>
     </tr>`;
   }).join('');
 }
@@ -1482,24 +1580,62 @@ function setWsStatus(connected) {
 }
 
 // ------------------------------------------------------------------ //
-//  API Keys
+//  Binance Connection Status
 // ------------------------------------------------------------------ //
-function loadApiKeys() {
-  const key = localStorage.getItem('binance_api_key');
-  const sec = localStorage.getItem('binance_secret');
-  if (key) document.getElementById('api-key-input').value = key;
-  if (sec) document.getElementById('api-secret-input').value = sec;
+async function checkApiStatus() {
+  const el = document.getElementById('api-status-content');
+  const btn = document.getElementById('api-refresh-btn');
+  el.innerHTML = `<span class="text-muted">${t('api_checking')}</span>`;
+  btn.classList.add('animate-spin');
+  try {
+    const res = await fetch(`${API}/api/status`);
+    const data = await res.json();
+    renderApiStatus(data);
+  } catch(e) {
+    renderApiStatus({ connected: false, reason: 'network_error' });
+  } finally {
+    btn.classList.remove('animate-spin');
+  }
 }
 
-function saveApiKeys() {
-  const key = document.getElementById('api-key-input').value.trim();
-  const sec = document.getElementById('api-secret-input').value.trim();
-  localStorage.setItem('binance_api_key', key);
-  localStorage.setItem('binance_secret', sec);
-  const msg = document.getElementById('api-save-msg');
-  msg.textContent = t('keys_saved');
-  msg.className = 'text-xs text-center text-green-400';
-  setTimeout(() => { msg.textContent = ''; }, 3000);
+function renderApiStatus(data) {
+  const el = document.getElementById('api-status-content');
+  if (data.connected) {
+    const b = data.balance || {};
+    el.innerHTML = `
+      <div class="flex items-center gap-1.5 mb-2.5">
+        <span class="w-2 h-2 rounded-full bg-green-400 shrink-0"></span>
+        <span class="text-green-400 font-medium">${t('api_connected')}</span>
+      </div>
+      <div class="flex justify-between mb-1">
+        <span class="text-muted">${t('api_free')}</span>
+        <span class="text-white font-mono">$${fmt(b.free, 2)}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-muted">${t('api_used')}</span>
+        <span class="text-muted font-mono">$${fmt(b.used, 2)}</span>
+      </div>`;
+  } else if (data.reason === 'no_keys') {
+    el.innerHTML = `
+      <div class="flex items-center gap-1.5 mb-2">
+        <span class="w-2 h-2 rounded-full bg-gray-500 shrink-0"></span>
+        <span class="text-muted">${t('api_no_keys')}</span>
+      </div>
+      <div class="text-muted/70 leading-relaxed">${t('api_no_keys_hint')}</div>`;
+  } else if (data.reason === 'auth_error') {
+    el.innerHTML = `
+      <div class="flex items-center gap-1.5 mb-2">
+        <span class="w-2 h-2 rounded-full bg-red-400 shrink-0"></span>
+        <span class="text-red-400">${t('api_auth_error')}</span>
+      </div>
+      <div class="text-red-300/70 leading-relaxed break-all">${data.message || ''}</div>`;
+  } else {
+    el.innerHTML = `
+      <div class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-yellow-500 shrink-0"></span>
+        <span class="text-yellow-400">${t('api_network_error')}</span>
+      </div>`;
+  }
 }
 
 // ------------------------------------------------------------------ //
@@ -1575,8 +1711,124 @@ const GUIDE = {
 <div class="callout yellow">Стратегия работает только при наличии <strong>коинтеграции</strong> между активами. Без неё возврат к среднему не гарантирован.</div>`
     },
     {
+      id: 'theory',
+      title: '2. От цен к сделке',
+      content: `
+<h2>От цен к сделке: как всё строится</h2>
+<p>Вот что происходит за кулисами — три шага, которые превращают два ценовых графика в торговый сигнал.</p>
+
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin:12px 0;">
+<svg viewBox="0 0 430 390" width="100%" style="display:block;border-radius:4px;overflow:visible;">
+  <!-- ===== PANEL 1: PRICES ===== -->
+  <rect x="0" y="0" width="430" height="118" fill="#0d1117"/>
+  <text x="12" y="13" fill="#8b949e" font-size="9" font-family="sans-serif" font-weight="600">ШАГ 1 — Цены двух активов (нормализованы к 100)</text>
+  <line x1="46" y1="28" x2="415" y2="28" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="55" x2="415" y2="55" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="82" x2="415" y2="82" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="108" x2="415" y2="108" stroke="#21262d" stroke-width="0.8"/>
+  <text x="42" y="31" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">118</text>
+  <text x="42" y="58" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">110</text>
+  <text x="42" y="85" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">103</text>
+  <text x="42" y="111" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">100</text>
+  <!-- BTC blue: diverges sharply upward -->
+  <polyline points="50,108 90,105 130,101 170,97 210,83 250,62 290,32 320,40 355,55 395,68 415,72"
+    fill="none" stroke="#58a6ff" stroke-width="2.2" stroke-linejoin="round"/>
+  <!-- ETH green: moves modestly -->
+  <polyline points="50,108 90,106 130,102 170,101 210,96 250,90 290,84 320,88 355,93 395,98 415,100"
+    fill="none" stroke="#3fb950" stroke-width="2.2" stroke-linejoin="round"/>
+  <text x="418" y="75" fill="#58a6ff" font-size="9" font-family="sans-serif" font-weight="600">BTC</text>
+  <text x="418" y="103" fill="#3fb950" font-size="9" font-family="sans-serif" font-weight="600">ETH</text>
+  <!-- divergence annotation -->
+  <line x1="250" y1="18" x2="250" y2="115" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.45"/>
+  <text x="255" y="22" fill="#8b949e" font-size="8" font-family="sans-serif">BTC уходит, ETH отстаёт</text>
+
+  <!-- ===== ARROW 1→2 ===== -->
+  <text x="202" y="133" fill="#8b949e" font-size="9" font-family="sans-serif" text-anchor="middle">Спред = log(BTC) − β × log(ETH)</text>
+  <line x1="202" y1="122" x2="202" y2="128" stroke="#8b949e" stroke-width="1"/>
+  <polygon points="199,130 202,136 205,130" fill="#8b949e" opacity="0.7"/>
+
+  <!-- ===== PANEL 2: SPREAD ===== -->
+  <rect x="0" y="138" width="430" height="100" fill="#0d1117"/>
+  <text x="12" y="151" fill="#8b949e" font-size="9" font-family="sans-serif" font-weight="600">ШАГ 2 — Спред (разница в лог. ценах)</text>
+  <line x1="46" y1="163" x2="415" y2="163" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="188" x2="415" y2="188" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="46" y1="213" x2="415" y2="213" stroke="#21262d" stroke-width="0.8"/>
+  <text x="42" y="166" fill="#58a6ff" font-size="8" font-family="monospace" text-anchor="end">высок.</text>
+  <text x="42" y="191" fill="#58a6ff" font-size="8" font-family="monospace" text-anchor="end">ср.</text>
+  <text x="42" y="216" fill="#58a6ff" font-size="8" font-family="monospace" text-anchor="end">низк.</text>
+  <!-- Spread line (blue) -->
+  <polyline points="50,188 90,187 130,185 170,183 210,176 250,164 290,152 320,158 355,170 395,181 415,183"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <text x="418" y="186" fill="#58a6ff" font-size="8.5" font-family="sans-serif">спред</text>
+  <!-- spread grows annotation -->
+  <text x="265" y="149" fill="#8b949e" font-size="8" font-family="sans-serif" text-anchor="middle">↑ спред растёт</text>
+
+  <!-- ===== ARROW 2→3 ===== -->
+  <text x="202" y="254" fill="#8b949e" font-size="9" font-family="sans-serif" text-anchor="middle">Z = (Спред − Среднее) / σ</text>
+  <line x1="202" y1="242" x2="202" y2="248" stroke="#8b949e" stroke-width="1"/>
+  <polygon points="199,250 202,256 205,250" fill="#8b949e" opacity="0.7"/>
+
+  <!-- ===== PANEL 3: Z-SCORE ===== -->
+  <rect x="0" y="260" width="430" height="130" fill="#0d1117" rx="0 0 4 4"/>
+  <text x="12" y="273" fill="#8b949e" font-size="9" font-family="sans-serif" font-weight="600">ШАГ 3 — Z-счёт и торговые сигналы</text>
+  <!-- +2σ line red -->
+  <line x1="46" y1="292" x2="415" y2="292" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.85"/>
+  <text x="418" y="295" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <!-- +0.5σ exit line -->
+  <line x1="46" y1="318" x2="415" y2="318" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <!-- zero line -->
+  <line x1="46" y1="332" x2="415" y2="332" stroke="#30363d" stroke-width="1.2"/>
+  <text x="418" y="335" fill="#e3b341" font-size="8" font-family="monospace">0</text>
+  <!-- -0.5σ -->
+  <line x1="46" y1="346" x2="415" y2="346" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <!-- -2σ -->
+  <line x1="46" y1="372" x2="415" y2="372" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.85"/>
+  <text x="418" y="375" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <!-- Z-score line yellow -->
+  <polyline points="50,332 90,330 130,325 170,319 210,306 250,292 290,281 320,289 355,305 395,319 415,322"
+    fill="none" stroke="#e3b341" stroke-width="2.2" stroke-linejoin="round"/>
+  <!-- Entry signal circle at x=290 -->
+  <circle cx="290" cy="281" r="5.5" fill="#f85149" opacity="0.9"/>
+  <line x1="290" y1="262" x2="290" y2="278" stroke="#f85149" stroke-width="1" stroke-dasharray="2,2" opacity="0.7"/>
+  <rect x="248" y="260" width="84" height="13" rx="3" fill="#f8514922"/>
+  <text x="290" y="270" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ШОРТ ВХОД ↓</text>
+  <!-- Exit signal circle at x=395 -->
+  <circle cx="395" cy="319" r="4.5" fill="#3fb950" opacity="0.9"/>
+  <rect x="345" y="305" width="68" height="13" rx="3" fill="#3fb95022"/>
+  <text x="379" y="315" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ВЫХОД ✓</text>
+  <!-- Shaded trade region -->
+  <rect x="290" y="280" width="105" height="52" fill="#3fb950" opacity="0.05" rx="2"/>
+  <!-- Z-score label -->
+  <text x="418" y="325" fill="#e3b341" font-size="8.5" font-family="sans-serif">Z</text>
+</svg>
+</div>
+
+<h3>Что происходит на каждом шаге</h3>
+<div class="callout">
+  <strong>Шаг 1 — Цены:</strong> BTC начинает расти быстрее ETH. Сами по себе цены ничего не говорят — нельзя просто сравнить $84,000 и $2,000.
+</div>
+<div class="callout" style="margin-top:8px;">
+  <strong>Шаг 2 — Спред:</strong> Мы считаем <code>log(BTC) − β×log(ETH)</code>. Теперь видно: они расходятся. Спред поднимается выше своего среднего значения.
+</div>
+<div class="callout green" style="margin-top:8px;">
+  <strong>Шаг 3 — Z-счёт:</strong> Мы спрашиваем: «насколько это отклонение необычно?» Z=+2.3 значит — такое происходит редко, скорее всего они сойдутся обратно. <strong>Это сигнал.</strong>
+</div>
+
+<h3>Конкретный пример: BTC/ETH</h3>
+<table>
+  <thead><tr><th>Момент</th><th>BTC</th><th>ETH</th><th>Спред</th><th>Z-счёт</th><th>Действие</th></tr></thead>
+  <tbody>
+    <tr><td>Норма</td><td>84 000</td><td>2 000</td><td>4.89</td><td style="color:#e3b341">0.0</td><td style="color:#8b949e">—</td></tr>
+    <tr><td>Дивергенция</td><td>92 000</td><td>2 010</td><td>4.97</td><td style="color:#f85149">+2.4</td><td style="color:#f85149">ШОРТ СПРЕД</td></tr>
+    <tr><td>Возврат</td><td>87 000</td><td>2 050</td><td>4.90</td><td style="color:#3fb950">+0.4</td><td style="color:#3fb950">ВЫХОД +P&L</td></tr>
+  </tbody>
+</table>
+
+<div class="callout yellow">Ключевая идея: мы не торгуем «BTC растёт» — мы торгуем «BTC стал дорогим <em>относительно ETH</em>» и ждём возврата к равновесию.</div>`
+    },
+    {
       id: 'pair-selection',
-      title: '2. Выбор хорошей пары',
+      title: '3. Выбор хорошей пары',
       content: `
 <h2>Выбор хорошей пары</h2>
 <p>Не каждая пара активов подходит для парного трейдинга. Вот чеклист для оценки.</p>
@@ -1603,7 +1855,7 @@ const GUIDE = {
     },
     {
       id: 'analysis',
-      title: '3. Анализ пары',
+      title: '4. Анализ пары',
       content: `
 <h2>Как запустить анализ</h2>
 <ol style="padding-left:18px;margin-bottom:12px;">
@@ -1622,7 +1874,7 @@ const GUIDE = {
     },
     {
       id: 'zscore',
-      title: '4. Спред и Z-score',
+      title: '5. Спред и Z-score',
       content: `
 <h2>Как читать график спреда</h2>
 <p>На вкладке «Анализ спреда» — <strong>два графика на одном холсте</strong> с двумя осями Y:</p>
@@ -1740,7 +1992,7 @@ const GUIDE = {
     },
     {
       id: 'stats',
-      title: '5. Интерпретация статистик',
+      title: '6. Интерпретация статистик',
       content: `
 <h2>Что означает каждый показатель</h2>
 <h3>Коэффициент хеджирования (β)</h3>
@@ -1772,7 +2024,7 @@ const GUIDE = {
     },
     {
       id: 'backtest',
-      title: '6. Бэктест',
+      title: '7. Бэктест',
       content: `
 <h2>Как запустить и читать бэктест</h2>
 <p>Бэктест — это проверка стратегии на <em>исторических данных</em>: система смотрит, что было бы, если бы вы торговали по заданным правилам в прошлом.</p>
@@ -1886,12 +2138,197 @@ const GUIDE = {
     <tr><td># Trades</td><td>Количество сделок — меньше 10 это слишком мало для выводов</td><td class="pos">&gt; 20</td><td class="neg">&lt; 5</td></tr>
   </tbody>
 </table>
-<div class="callout yellow"><strong>Осторожно:</strong> хороший бэктест не гарантирует прибыль в будущем. Всегда проверяйте на последних 1–3 месяцах данных — если там тоже плюс, стратегия устойчива.</div>`,
+<div class="callout yellow"><strong>Осторожно:</strong> хороший бэктест не гарантирует прибыль в будущем. Всегда проверяйте на последних 1–3 месяцах данных — если там тоже плюс, стратегия устойчива.</div>
+
+<h3>Сценарии сделок</h3>
+<p>Каждый сценарий показывает <strong>два графика</strong>: цены обоих активов (норм. к 100) и Z-score с уровнями входа/выхода. Так видно что происходит на рынке и как это отражается в сигнале.</p>
+
+<p style="font-weight:600;color:#3fb950;margin:16px 0 6px;">✅ Кейс 1 — Прибыльный ШОРТ: BTC резко вырос, ETH не последовал</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <!-- Price panel label -->
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Цены (норм. к 100)</text>
+  <text x="375" y="13" fill="#58a6ff" font-size="8" font-family="sans-serif" text-anchor="end">BTC</text>
+  <text x="390" y="13" fill="#3fb950" font-size="8" font-family="sans-serif" text-anchor="end">ETH</text>
+  <!-- Price grid -->
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <!-- Entry/exit vertical guides on price panel -->
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="328" y1="18" x2="328" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <!-- BTC price line -->
+  <polyline points="40,100 76,99 112,94 148,87 184,76 220,73 256,78 292,85 328,94 364,99"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <!-- ETH price line -->
+  <polyline points="40,100 76,100 112,99 148,99 184,97 220,97 256,97 292,96 328,97 364,99"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <!-- BTC entry/exit dots on price -->
+  <circle cx="184" cy="76" r="3.5" fill="#f85149" opacity="0.9"/>
+  <circle cx="328" cy="94" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <!-- Divider -->
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-счёт</text>
+  <!-- Z panel lines: +2σ=166 +0.5σ=187 0=194 -0.5σ=201 -2σ=222 -->
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <!-- Trade shade -->
+  <rect x="184" y="148" width="144" height="80" fill="#3fb950" opacity="0.05" rx="2"/>
+  <!-- Z-score line -->
+  <polyline points="40,194 76,190 112,184 148,175 184,162 220,158 256,167 292,179 328,188 364,193"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Entry marker -->
+  <circle cx="184" cy="162" r="5" fill="#f85149" opacity="0.95"/>
+  <rect x="142" y="148" width="84" height="13" rx="3" fill="#f8514922"/>
+  <text x="184" y="158" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ШОРТ ВХОД ↓</text>
+  <!-- Exit marker -->
+  <circle cx="328" cy="188" r="4.5" fill="#3fb950" opacity="0.95"/>
+  <rect x="286" y="237" width="76" height="13" rx="3" fill="#3fb95022"/>
+  <text x="324" y="247" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ВЫХОД +P&amp;L ✓</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC вырос с 100 до 118 пока ETH оставался у 100. Мы продали BTC (шорт спред) при Z=+2.4. BTC откатился обратно к 104 — купили дешевле. <span style="color:#3fb950">Прибыль: разница BTC вход/выход.</span></div>
+
+<p style="font-weight:600;color:#3fb950;margin:16px 0 6px;">✅ Кейс 2 — Прибыльный ЛОНГ: BTC упал, ETH устоял, BTC восстановился</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Цены (норм. к 100)</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="328" y1="18" x2="328" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <polyline points="40,100 76,102 112,108 148,117 184,124 220,127 256,121 292,112 328,105 364,100"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="40,100 76,100 112,99 148,99 184,97 220,97 256,97 292,97 328,97 364,99"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="124" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <circle cx="328" cy="105" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-счёт</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="144" height="80" fill="#3fb950" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,197 112,204 148,215 184,226 220,232 256,222 292,209 328,198 364,193"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="226" r="5" fill="#3fb950" opacity="0.95"/>
+  <rect x="142" y="237" width="84" height="13" rx="3" fill="#3fb95022"/>
+  <text x="184" y="247" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ЛОНГ ВХОД ↑</text>
+  <circle cx="328" cy="198" r="4.5" fill="#3fb950" opacity="0.95"/>
+  <text x="336" y="193" fill="#3fb950" font-size="9" font-family="sans-serif">+P&amp;L ✓</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC упал с 100 до 82 пока ETH оставался у 97. Спред сузился, Z=-2.7. Купили BTC (лонг спред). BTC восстановился до 105 — продали с прибылью. <span style="color:#3fb950">ETH нога была почти нейтральна.</span></div>
+
+<p style="font-weight:600;color:#f85149;margin:16px 0 6px;">❌ Кейс 3 — Убыточный ШОРТ: BTC продолжил расти (тренд)</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Цены (норм. к 100)</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="364" y1="18" x2="364" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <!-- BTC keeps rising -->
+  <polyline points="40,100 76,97 112,91 148,82 184,73 220,66 256,61 292,64 328,67 364,72"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <!-- ETH rises slowly -->
+  <polyline points="40,100 76,99 112,97 148,94 184,93 220,91 256,90 292,88 328,88 364,88"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="73" r="3.5" fill="#f85149" opacity="0.9"/>
+  <circle cx="364" cy="72" r="3.5" fill="#f85149" opacity="0.9"/>
+  <!-- annotation: BTC at exit still above entry -->
+  <line x1="184" y1="73" x2="364" y2="72" stroke="#f85149" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/>
+  <text x="270" y="68" fill="#f85149" font-size="8" font-family="sans-serif" text-anchor="middle">BTC выше точки входа</text>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-счёт</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="180" height="80" fill="#f85149" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,188 112,181 148,170 184,160 220,152 256,148 292,159 328,174 364,188"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="160" r="5" fill="#f85149" opacity="0.95"/>
+  <rect x="142" y="148" width="84" height="13" rx="3" fill="#f8514922"/>
+  <text x="184" y="158" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ШОРТ ВХОД ↓</text>
+  <circle cx="364" cy="188" r="4.5" fill="#f85149" opacity="0.95"/>
+  <text x="325" y="205" fill="#f85149" font-size="9" font-family="sans-serif">−P&amp;L ✗</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC вырос с 100 до 126 (+26%), ETH за ним, но медленнее. Z достиг +3.3. Мы продали BTC при 118. BTC откатился до 119 — Z вернулся к +0.4 и мы закрылись, но <span style="color:#f85149">BTC по-прежнему выше цены нашей продажи → убыток.</span> Тренд оказался сильнее коинтеграции.</div>
+
+<p style="font-weight:600;color:#f85149;margin:16px 0 6px;">❌ Кейс 4 — Убыточный ЛОНГ: рынок падает синхронно</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Цены (норм. к 100)</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="328" y1="18" x2="328" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <!-- Both fall, BTC faster -->
+  <polyline points="40,100 76,101 112,105 148,111 184,118 220,123 256,126 292,128 328,126 364,125"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="40,100 76,101 112,104 148,108 184,114 220,119 256,122 292,123 328,122 364,122"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="118" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <circle cx="328" cy="126" r="3.5" fill="#f85149" opacity="0.9"/>
+  <text x="192" y="112" fill="#3fb950" font-size="8" font-family="sans-serif">купили BTC</text>
+  <text x="248" y="118" fill="#f85149" font-size="8" font-family="sans-serif">BTC ещё ниже</text>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-счёт</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="144" height="80" fill="#f85149" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,200 112,207 148,218 184,225 220,229 256,222 292,211 328,200 364,191"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="225" r="5" fill="#3fb950" opacity="0.95"/>
+  <rect x="142" y="237" width="84" height="13" rx="3" fill="#3fb95022"/>
+  <text x="184" y="247" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ЛОНГ ВХОД ↑</text>
+  <circle cx="328" cy="200" r="4.5" fill="#f85149" opacity="0.95"/>
+  <text x="336" y="197" fill="#f85149" font-size="9" font-family="sans-serif">−P&amp;L ✗</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC упал быстрее ETH — Z ушёл к −2.2, сигнал лонг. Мы купили BTC. Но затем <em>оба</em> актива продолжили падать пропорционально: скользящее среднее спреда сдвинулось вниз, Z вернулся к −0.3 и мы закрылись. <span style="color:#f85149">BTC при закрытии ниже цены покупки → убыток.</span></div>
+
+<div class="callout yellow" style="margin-top:4px;"><strong>Итог:</strong> убыточные сделки возникают когда (1) актив продолжает тренд после входа или (2) оба актива движутся синхронно без схождения. Именно поэтому нужна коинтеграция (p &lt; 0.05) и Hurst &lt; 0.5 — они показывают, насколько надёжен возврат к среднему.</div>
+<div class="callout" style="margin-top:8px;">💡 Win Rate 55–65% — хороший результат. 4 из 10 сделок могут быть убыточными и это нормально, если прибыльные перевешивают по размеру.</div>`,
       example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 600, zwindow: 20, entryZ: 2.0, exitZ: 0.5 }
     },
     {
       id: 'trading',
-      title: '7. Открытие сделок',
+      title: '8. Открытие сделок',
       content: `
 <h2>Как открывать и закрывать сделки</h2>
 <div class="callout red"><strong>Требуются API ключи Binance</strong> с правами Futures Trading. Введите ключи в раздел «API Ключи» в левой панели.</div>
@@ -1948,7 +2385,7 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     },
     {
       id: 'risk',
-      title: '8. Управление рисками',
+      title: '9. Управление рисками',
       content: `
 <h2>Управление рисками</h2>
 <div class="callout red"><strong>Парный трейдинг несёт риски.</strong> Коинтеграция может нарушиться. Всегда используйте ограничение размера позиции.</div>
@@ -1992,8 +2429,109 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
 <div class="callout yellow">The strategy only works when there is <strong>cointegration</strong> between the assets. Without it, mean reversion is not guaranteed.</div>`
     },
     {
+      id: 'theory',
+      title: '2. From Prices to Trade',
+      content: `
+<h2>From Prices to Trade: how it all works</h2>
+<p>Here is what happens behind the scenes — three steps that turn two price charts into a trading signal.</p>
+
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin:12px 0;">
+<svg viewBox="0 0 430 390" width="100%" style="display:block;border-radius:4px;overflow:visible;">
+  <!-- ===== PANEL 1: PRICES ===== -->
+  <rect x="0" y="0" width="430" height="118" fill="#0d1117"/>
+  <text x="12" y="13" fill="#8b949e" font-size="9" font-family="sans-serif" font-weight="600">STEP 1 — Asset prices (normalised to 100)</text>
+  <line x1="46" y1="28" x2="415" y2="28" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="55" x2="415" y2="55" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="82" x2="415" y2="82" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="108" x2="415" y2="108" stroke="#21262d" stroke-width="0.8"/>
+  <text x="42" y="31" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">118</text>
+  <text x="42" y="58" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">110</text>
+  <text x="42" y="85" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">103</text>
+  <text x="42" y="111" fill="#8b949e" font-size="8" font-family="monospace" text-anchor="end">100</text>
+  <polyline points="50,108 90,105 130,101 170,97 210,83 250,62 290,32 320,40 355,55 395,68 415,72"
+    fill="none" stroke="#58a6ff" stroke-width="2.2" stroke-linejoin="round"/>
+  <polyline points="50,108 90,106 130,102 170,101 210,96 250,90 290,84 320,88 355,93 395,98 415,100"
+    fill="none" stroke="#3fb950" stroke-width="2.2" stroke-linejoin="round"/>
+  <text x="418" y="75" fill="#58a6ff" font-size="9" font-family="sans-serif" font-weight="600">BTC</text>
+  <text x="418" y="103" fill="#3fb950" font-size="9" font-family="sans-serif" font-weight="600">ETH</text>
+  <line x1="250" y1="18" x2="250" y2="115" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.45"/>
+  <text x="255" y="22" fill="#8b949e" font-size="8" font-family="sans-serif">BTC surges, ETH lags behind</text>
+
+  <!-- ===== ARROW 1→2 ===== -->
+  <text x="202" y="133" fill="#8b949e" font-size="9" font-family="sans-serif" text-anchor="middle">Spread = log(BTC) − β × log(ETH)</text>
+  <line x1="202" y1="122" x2="202" y2="128" stroke="#8b949e" stroke-width="1"/>
+  <polygon points="199,130 202,136 205,130" fill="#8b949e" opacity="0.7"/>
+
+  <!-- ===== PANEL 2: SPREAD ===== -->
+  <rect x="0" y="138" width="430" height="100" fill="#0d1117"/>
+  <text x="12" y="151" fill="#8b949e" font-size="9" font-family="sans-serif" font-weight="600">STEP 2 — Spread (log-price difference)</text>
+  <line x1="46" y1="163" x2="415" y2="163" stroke="#21262d" stroke-width="0.8"/>
+  <line x1="46" y1="188" x2="415" y2="188" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="46" y1="213" x2="415" y2="213" stroke="#21262d" stroke-width="0.8"/>
+  <text x="42" y="166" fill="#58a6ff" font-size="8" font-family="monospace" text-anchor="end">high</text>
+  <text x="42" y="191" fill="#58a6ff" font-size="8" font-family="monospace" text-anchor="end">avg</text>
+  <text x="42" y="216" fill="#58a6ff" font-size="8" font-family="monospace" text-anchor="end">low</text>
+  <polyline points="50,188 90,187 130,185 170,183 210,176 250,164 290,152 320,158 355,170 395,181 415,183"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <text x="418" y="186" fill="#58a6ff" font-size="8.5" font-family="sans-serif">spread</text>
+  <text x="265" y="149" fill="#8b949e" font-size="8" font-family="sans-serif" text-anchor="middle">↑ spread rising</text>
+
+  <!-- ===== ARROW 2→3 ===== -->
+  <text x="202" y="254" fill="#8b949e" font-size="9" font-family="sans-serif" text-anchor="middle">Z = (Spread − Mean) / σ</text>
+  <line x1="202" y1="242" x2="202" y2="248" stroke="#8b949e" stroke-width="1"/>
+  <polygon points="199,250 202,256 205,250" fill="#8b949e" opacity="0.7"/>
+
+  <!-- ===== PANEL 3: Z-SCORE ===== -->
+  <rect x="0" y="260" width="430" height="130" fill="#0d1117" rx="0 0 4 4"/>
+  <text x="12" y="273" fill="#8b949e" font-size="9" font-family="sans-serif" font-weight="600">STEP 3 — Z-score and trading signals</text>
+  <line x1="46" y1="292" x2="415" y2="292" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.85"/>
+  <text x="418" y="295" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <line x1="46" y1="318" x2="415" y2="318" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="46" y1="332" x2="415" y2="332" stroke="#30363d" stroke-width="1.2"/>
+  <text x="418" y="335" fill="#e3b341" font-size="8" font-family="monospace">0</text>
+  <line x1="46" y1="346" x2="415" y2="346" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="46" y1="372" x2="415" y2="372" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.85"/>
+  <text x="418" y="375" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <polyline points="50,332 90,330 130,325 170,319 210,306 250,292 290,281 320,289 355,305 395,319 415,322"
+    fill="none" stroke="#e3b341" stroke-width="2.2" stroke-linejoin="round"/>
+  <circle cx="290" cy="281" r="5.5" fill="#f85149" opacity="0.9"/>
+  <line x1="290" y1="262" x2="290" y2="278" stroke="#f85149" stroke-width="1" stroke-dasharray="2,2" opacity="0.7"/>
+  <rect x="248" y="260" width="84" height="13" rx="3" fill="#f8514922"/>
+  <text x="290" y="270" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">SHORT ENTRY ↓</text>
+  <circle cx="395" cy="319" r="4.5" fill="#3fb950" opacity="0.9"/>
+  <rect x="338" y="305" width="64" height="13" rx="3" fill="#3fb95022"/>
+  <text x="370" y="315" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">EXIT ✓</text>
+  <rect x="290" y="280" width="105" height="52" fill="#3fb950" opacity="0.05" rx="2"/>
+  <text x="418" y="325" fill="#e3b341" font-size="8.5" font-family="sans-serif">Z</text>
+</svg>
+</div>
+
+<h3>What happens at each step</h3>
+<div class="callout">
+  <strong>Step 1 — Prices:</strong> BTC starts rising faster than ETH. Raw prices tell us nothing on their own — you can't compare $84,000 vs $2,000 directly.
+</div>
+<div class="callout" style="margin-top:8px;">
+  <strong>Step 2 — Spread:</strong> We compute <code>log(BTC) − β×log(ETH)</code>. Now the divergence is visible as a single rising line above its mean.
+</div>
+<div class="callout green" style="margin-top:8px;">
+  <strong>Step 3 — Z-score:</strong> We ask: "how unusual is this deviation?" Z=+2.3 means: this rarely happens, they will likely converge. <strong>That's the signal.</strong>
+</div>
+
+<h3>Concrete example: BTC/ETH</h3>
+<table>
+  <thead><tr><th>Moment</th><th>BTC</th><th>ETH</th><th>Spread</th><th>Z-score</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>Normal</td><td>84 000</td><td>2 000</td><td>4.89</td><td style="color:#e3b341">0.0</td><td style="color:#8b949e">—</td></tr>
+    <tr><td>Diverge</td><td>92 000</td><td>2 010</td><td>4.97</td><td style="color:#f85149">+2.4</td><td style="color:#f85149">SHORT SPREAD</td></tr>
+    <tr><td>Revert</td><td>87 000</td><td>2 050</td><td>4.90</td><td style="color:#3fb950">+0.4</td><td style="color:#3fb950">EXIT +P&L</td></tr>
+  </tbody>
+</table>
+
+<div class="callout yellow">Key idea: we are not trading "BTC goes up" — we are trading "BTC became expensive <em>relative to ETH</em>" and waiting for the relationship to restore.</div>`
+    },
+    {
       id: 'pair-selection',
-      title: '2. Selecting a Good Pair',
+      title: '3. Selecting a Good Pair',
       content: `
 <h2>Selecting a Good Pair</h2>
 <p>Not every pair of assets is suitable for pair trading. Use this checklist.</p>
@@ -2018,7 +2556,7 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     },
     {
       id: 'analysis',
-      title: '3. Running Analysis',
+      title: '4. Running Analysis',
       content: `
 <h2>How to Run Analysis</h2>
 <ol style="padding-left:18px;margin-bottom:12px;">
@@ -2034,7 +2572,7 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     },
     {
       id: 'zscore',
-      title: '4. Spread & Z-score',
+      title: '5. Spread & Z-score',
       content: `
 <h2>Reading the Spread Chart</h2>
 <p>The Spread Analysis tab shows <strong>two lines on one canvas</strong> with two Y-axes:</p>
@@ -2116,7 +2654,7 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     },
     {
       id: 'stats',
-      title: '5. Statistics Guide',
+      title: '6. Statistics Guide',
       content: `
 <h2>Understanding Each Metric</h2>
 <h3>Hedge Ratio (β)</h3>
@@ -2142,7 +2680,7 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     },
     {
       id: 'backtest',
-      title: '6. Backtesting',
+      title: '7. Backtesting',
       content: `
 <h2>How to Backtest</h2>
 <p>A backtest runs your strategy against <em>historical data</em> to see how it would have performed in the past.</p>
@@ -2229,12 +2767,181 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     <tr><td># Trades</td><td>Fewer than 10 is too few to draw conclusions</td><td class="pos">&gt; 20</td><td class="neg">&lt; 5</td></tr>
   </tbody>
 </table>
-<div class="callout yellow"><strong>Caution:</strong> a good backtest doesn't guarantee future profit. Always verify on recent data (last 1–3 months) — if both periods show profit, the strategy is robust.</div>`,
+<div class="callout yellow"><strong>Caution:</strong> a good backtest doesn't guarantee future profit. Always verify on recent data (last 1–3 months) — if both periods show profit, the strategy is robust.</div>
+
+<h3>Trade Scenarios</h3>
+<p>Each scenario shows <strong>two panels</strong>: both asset prices (normalised to 100) and the Z-score with entry/exit levels — so you can see what happened in the market and how it translated into a signal.</p>
+
+<p style="font-weight:600;color:#3fb950;margin:16px 0 6px;">✅ Case 1 — Profitable SHORT: BTC surged, ETH didn't follow</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Prices (normalised to 100)</text>
+  <text x="375" y="13" fill="#58a6ff" font-size="8" font-family="sans-serif" text-anchor="end">BTC</text>
+  <text x="390" y="13" fill="#3fb950" font-size="8" font-family="sans-serif" text-anchor="end">ETH</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="328" y1="18" x2="328" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <polyline points="40,100 76,99 112,94 148,87 184,76 220,73 256,78 292,85 328,94 364,99"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="40,100 76,100 112,99 148,99 184,97 220,97 256,97 292,96 328,97 364,99"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="76" r="3.5" fill="#f85149" opacity="0.9"/>
+  <circle cx="328" cy="94" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-score</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="144" height="80" fill="#3fb950" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,190 112,184 148,175 184,162 220,158 256,167 292,179 328,188 364,193"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="162" r="5" fill="#f85149" opacity="0.95"/>
+  <rect x="142" y="148" width="84" height="13" rx="3" fill="#f8514922"/>
+  <text x="184" y="158" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">SHORT ENTRY ↓</text>
+  <circle cx="328" cy="188" r="4.5" fill="#3fb950" opacity="0.95"/>
+  <rect x="286" y="237" width="76" height="13" rx="3" fill="#3fb95022"/>
+  <text x="324" y="247" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">EXIT +P&amp;L ✓</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC jumped from 100 to 118 while ETH stayed near 100. We shorted BTC at Z=+2.4. BTC pulled back to 104 — we bought it back cheaper. <span style="color:#3fb950">Profit = BTC entry price minus exit price.</span></div>
+
+<p style="font-weight:600;color:#3fb950;margin:16px 0 6px;">✅ Case 2 — Profitable LONG: BTC dipped, ETH held, BTC recovered</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Prices (normalised to 100)</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="328" y1="18" x2="328" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <polyline points="40,100 76,102 112,108 148,117 184,124 220,127 256,121 292,112 328,105 364,100"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="40,100 76,100 112,99 148,99 184,97 220,97 256,97 292,97 328,97 364,99"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="124" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <circle cx="328" cy="105" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-score</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="144" height="80" fill="#3fb950" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,197 112,204 148,215 184,226 220,232 256,222 292,209 328,198 364,193"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="226" r="5" fill="#3fb950" opacity="0.95"/>
+  <rect x="142" y="237" width="84" height="13" rx="3" fill="#3fb95022"/>
+  <text x="184" y="247" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">LONG ENTRY ↑</text>
+  <circle cx="328" cy="198" r="4.5" fill="#3fb950" opacity="0.95"/>
+  <text x="336" y="193" fill="#3fb950" font-size="9" font-family="sans-serif">+P&amp;L ✓</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC fell from 100 to 82 while ETH held near 97. Spread narrowed: Z=−2.7. We bought BTC (long spread). BTC recovered to 105 — sold at a profit. <span style="color:#3fb950">ETH leg was nearly neutral.</span></div>
+
+<p style="font-weight:600;color:#f85149;margin:16px 0 6px;">❌ Case 3 — Losing SHORT: BTC kept trending up</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Prices (normalised to 100)</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="364" y1="18" x2="364" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <polyline points="40,100 76,97 112,91 148,82 184,73 220,66 256,61 292,64 328,67 364,72"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="40,100 76,99 112,97 148,94 184,93 220,91 256,90 292,88 328,88 364,88"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="73" r="3.5" fill="#f85149" opacity="0.9"/>
+  <circle cx="364" cy="72" r="3.5" fill="#f85149" opacity="0.9"/>
+  <line x1="184" y1="73" x2="364" y2="72" stroke="#f85149" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/>
+  <text x="270" y="68" fill="#f85149" font-size="8" font-family="sans-serif" text-anchor="middle">BTC still above entry at exit</text>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-score</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="180" height="80" fill="#f85149" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,188 112,181 148,170 184,160 220,152 256,148 292,159 328,174 364,188"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="160" r="5" fill="#f85149" opacity="0.95"/>
+  <rect x="142" y="148" width="84" height="13" rx="3" fill="#f8514922"/>
+  <text x="184" y="158" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">SHORT ENTRY ↓</text>
+  <circle cx="364" cy="188" r="4.5" fill="#f85149" opacity="0.95"/>
+  <text x="325" y="205" fill="#f85149" font-size="9" font-family="sans-serif">−P&amp;L ✗</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC rose +26%, ETH followed but slower. Z hit +3.3. We shorted BTC at 118. BTC pulled back to 119 — Z returned to +0.4, exit triggered. But <span style="color:#f85149">BTC exit price (119) is still above entry (118) → loss.</span> The trend was stronger than the mean-reversion signal.</div>
+
+<p style="font-weight:600;color:#f85149;margin:16px 0 6px;">❌ Case 4 — Losing LONG: correlated crash, both assets fell</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:4px;">
+<svg viewBox="0 0 390 255" width="100%" style="display:block;">
+  <rect width="390" height="255" fill="#0d1117" rx="4"/>
+  <text x="12" y="13" fill="#8b949e" font-size="8.5" font-family="sans-serif">Prices (normalised to 100)</text>
+  <line x1="38" y1="25" x2="375" y2="25" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="60" x2="375" y2="60" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="95" x2="375" y2="95" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="38" y1="125" x2="375" y2="125" stroke="#21262d" stroke-width="0.7"/>
+  <line x1="184" y1="18" x2="184" y2="130" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <line x1="328" y1="18" x2="328" y2="130" stroke="#f85149" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+  <polyline points="40,100 76,101 112,105 148,111 184,118 220,123 256,126 292,128 328,126 364,125"
+    fill="none" stroke="#58a6ff" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="40,100 76,101 112,104 148,108 184,114 220,119 256,122 292,123 328,122 364,122"
+    fill="none" stroke="#3fb950" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="118" r="3.5" fill="#3fb950" opacity="0.9"/>
+  <circle cx="328" cy="126" r="3.5" fill="#f85149" opacity="0.9"/>
+  <text x="140" y="113" fill="#3fb950" font-size="8" font-family="sans-serif">bought BTC</text>
+  <text x="247" y="119" fill="#f85149" font-size="8" font-family="sans-serif">BTC still lower</text>
+  <line x1="0" y1="133" x2="390" y2="133" stroke="#30363d" stroke-width="1"/>
+  <text x="12" y="143" fill="#8b949e" font-size="8.5" font-family="sans-serif">Z-score</text>
+  <line x1="38" y1="166" x2="375" y2="166" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <line x1="38" y1="187" x2="375" y2="187" stroke="#f85149" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="194" x2="375" y2="194" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="38" y1="201" x2="375" y2="201" stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,4" opacity="0.4"/>
+  <line x1="38" y1="222" x2="375" y2="222" stroke="#3fb950" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+  <text x="378" y="169" fill="#f85149" font-size="8" font-family="monospace">+2σ</text>
+  <text x="378" y="197" fill="#8b949e" font-size="8" font-family="monospace">0</text>
+  <text x="378" y="225" fill="#3fb950" font-size="8" font-family="monospace">−2σ</text>
+  <rect x="184" y="148" width="144" height="80" fill="#f85149" opacity="0.05" rx="2"/>
+  <polyline points="40,194 76,200 112,207 148,218 184,225 220,229 256,222 292,211 328,200 364,191"
+    fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="184" cy="225" r="5" fill="#3fb950" opacity="0.95"/>
+  <rect x="142" y="237" width="84" height="13" rx="3" fill="#3fb95022"/>
+  <text x="184" y="247" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">LONG ENTRY ↑</text>
+  <circle cx="328" cy="200" r="4.5" fill="#f85149" opacity="0.95"/>
+  <text x="336" y="197" fill="#f85149" font-size="9" font-family="sans-serif">−P&amp;L ✗</text>
+</svg>
+</div>
+<div style="font-size:12px;color:#8b949e;margin:4px 0 14px;padding:0 2px;">BTC fell faster than ETH — Z dropped to −2.2, long signal triggered. We bought BTC. But <em>both</em> assets kept falling proportionally: the rolling spread mean shifted down, Z returned to −0.3 and we exited. <span style="color:#f85149">BTC at exit is still below our buy price → loss.</span></div>
+
+<div class="callout yellow" style="margin-top:4px;"><strong>Summary:</strong> losses happen when (1) an asset continues trending after entry or (2) both assets move in sync without convergence. This is why cointegration (p &lt; 0.05) and Hurst &lt; 0.5 matter — they measure how reliably the spread mean-reverts.</div>
+<div class="callout" style="margin-top:8px;">💡 Win Rate 55–65% is solid. 4 out of 10 trades may lose — that's fine as long as winners are larger on average.</div>`,
       example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 600, zwindow: 20, entryZ: 2.0, exitZ: 0.5 }
     },
     {
       id: 'trading',
-      title: '7. Executing Trades',
+      title: '8. Executing Trades',
       content: `
 <h2>How to Open & Close Trades</h2>
 <div class="callout red"><strong>Requires Binance API keys</strong> with Futures Trading permissions.</div>
@@ -2280,7 +2987,7 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
     },
     {
       id: 'risk',
-      title: '8. Risk Management',
+      title: '9. Risk Management',
       content: `
 <h2>Risk Management</h2>
 <div class="callout red"><strong>Pair trading carries real risks.</strong> Cointegration can break down. Always size positions conservatively.</div>

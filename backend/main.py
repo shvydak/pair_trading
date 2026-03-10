@@ -197,6 +197,18 @@ async def run_backtest(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/status")
+async def get_status():
+    """Check Binance API connection status."""
+    if not client.has_creds:
+        return {"connected": False, "reason": "no_keys"}
+    try:
+        balance = await client.get_balance()
+        return {"connected": True, "balance": _clean(balance)}
+    except Exception as e:
+        return {"connected": False, "reason": "auth_error", "message": str(e)}
+
+
 @app.get("/api/positions")
 async def get_positions():
     """Return open Binance futures positions."""

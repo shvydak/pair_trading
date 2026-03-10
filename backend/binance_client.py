@@ -12,12 +12,13 @@ class BinanceClient:
         self.api_key = os.getenv("BINANCE_API_KEY", "")
         self.secret = os.getenv("BINANCE_SECRET", "")
         # Only pass credentials if they look real (not placeholder values)
-        has_creds = (
+        has_creds = bool(
             self.api_key
             and self.secret
             and self.api_key != "your_api_key_here"
             and self.secret != "your_secret_here"
         )
+        self.has_creds = has_creds
         config = {
             "options": {"defaultType": "future"},
             "enableRateLimit": True,
