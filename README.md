@@ -1,66 +1,66 @@
 # Pair Trading Dashboard
 
-Дашборд для статистического арбитража (парного трейдинга) на фьючерсах Binance USDT-M.
+Statistical arbitrage dashboard for Binance USDT-M Futures.
 
-Анализирует спред между двумя коррелированными активами в реальном времени, строит бэктест и исполняет сделки через API Binance.
-
----
-
-## Что умеет
-
-- **Анализ пары** — коинтеграция, hedge ratio, half-life, показатель Хёрста, корреляция
-- **График спреда и Z-score** — с уровнями входа/выхода, реальтайм-обновление через WebSocket
-- **Нормализованный ценовой график** — как ведут себя активы относительно друг друга
-- **Бэктест** — кривая капитала, Sharpe, просадка, сделки
-- **Торговля** — Long/Short спред одной кнопкой через Binance Futures API
-- **Встроенное руководство** — выдвижная панель с 8 разделами, примерами и кнопкой «Попробовать»
-- **Русский и английский интерфейс** — переключатель EN / RU
+Monitors the spread between two correlated assets in real time, runs backtests, and executes trades via the Binance API.
 
 ---
 
-## Быстрый старт
+## Features
 
-### 1. Клонировать / скачать проект
+- **Pair analysis** — cointegration, hedge ratio, half-life, Hurst exponent, correlation
+- **Spread & Z-score chart** — with entry/exit threshold lines, real-time WebSocket updates
+- **Normalised price chart** — see how both assets move relative to each other
+- **Backtesting** — equity curve, Sharpe ratio, max drawdown, trade log
+- **Live trading** — Long/Short spread with one click via Binance Futures API
+- **Built-in guide** — slide-in panel with 8 sections, examples and "Try it" buttons
+- **EN / RU interface** — language toggle in the header
+
+---
+
+## Quick Start
+
+### 1. Clone / download the project
 
 ```bash
-cd /путь/к/pair_trading
+cd /path/to/pair_trading
 ```
 
-### 2. Создать виртуальное окружение и установить зависимости
+### 2. Create a virtual environment and install dependencies
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
 ```
 
-### 3. Настроить API ключи (опционально)
+### 3. Configure API keys (optional)
 
-Для анализа и бэктеста ключи **не нужны**. Они нужны только для просмотра позиций и торговли.
+API keys are **not required** for analysis and backtesting. They are only needed for the Positions tab and live trading.
 
 ```bash
 cp .env.example .env
-# Открыть .env и вставить ключи:
-# BINANCE_API_KEY=ваш_ключ
-# BINANCE_SECRET=ваш_секрет
+# Edit .env and fill in your keys:
+# BINANCE_API_KEY=your_key
+# BINANCE_SECRET=your_secret
 ```
 
-> Ключи Binance должны иметь права **Futures Trading**. IP-ограничение рекомендуется.
+> Binance keys must have **Futures Trading** permission enabled. IP restriction is recommended.
 
-### 4. Запустить бэкенд
+### 4. Start the backend
 
 ```bash
 cd backend
 ../.venv/bin/uvicorn main:app --reload --port 8000
 ```
 
-Или через скрипт (потребует `pip` в системе):
+Or via the launch script (requires `pip` on system PATH):
 ```bash
 ./start.sh
 ```
 
-### 5. Открыть интерфейс
+### 5. Open the UI
 
-Открыть файл `frontend/index.html` в браузере — дважды кликнуть или:
+Open `frontend/index.html` directly in your browser — double-click it or run:
 
 ```bash
 open frontend/index.html
@@ -68,109 +68,109 @@ open frontend/index.html
 
 ---
 
-## Как пользоваться
+## Usage
 
-### Анализ пары
+### Pair Analysis
 
-1. Введите два символа в поле **Символ 1** и **Символ 2**
-   Примеры: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`
-2. Выберите таймфрейм: `1h` / `4h` / `1d`
-3. Укажите глубину истории (свечей) и окно Z-score
-4. Нажмите **Анализировать пару**
+1. Enter two symbols in **Symbol 1** and **Symbol 2**
+   Examples: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`
+2. Select a timeframe: `1h` / `4h` / `1d`
+3. Set the lookback (candles) and Z-score window
+4. Click **Analyze Pair**
 
-### Показатели статистики
+### Statistics Reference
 
-| Показатель | Что означает | Хорошее значение |
+| Metric | Description | Good value |
 |---|---|---|
-| **Z-score** | Отклонение спреда от среднего в σ | \|Z\| > 2 — сигнал входа |
-| **Коэф. хеджа (β)** | Соотношение объёмов позиций | — |
-| **Полураспад** | Баров до возврата спреда к среднему | 5–50 баров |
-| **Показ. Хёрста** | Тип процесса спреда | H < 0.5 — возврат к среднему ✓ |
-| **Корреляция** | Связь лог-доходностей | ≥ 0.7 ✓ |
-| **Коинтегрированы** | Есть ли долгосрочное равновесие | Да (p < 0.05) ✓ |
+| **Z-score** | Spread deviation from rolling mean in σ | \|Z\| > 2 — entry signal |
+| **Hedge Ratio (β)** | Position size ratio between legs | — |
+| **Half-Life** | Bars for spread to revert halfway to mean | 5–50 bars |
+| **Hurst Exponent** | Nature of the spread process | H < 0.5 — mean reverting ✓ |
+| **Correlation** | Pearson correlation of log returns | ≥ 0.7 ✓ |
+| **Cointegrated** | Long-run equilibrium exists | Yes (p < 0.05) ✓ |
 
-### Бэктест
+### Backtesting
 
-1. Задайте **Z-score входа** (по умолчанию 2.0) и **Z-score выхода** (по умолчанию 0.5)
-2. Укажите **Размер позиции** в USD
-3. Нажмите **Запустить бэктест**
-4. Результаты: кривая капитала, Sharpe Ratio, максимальная просадка, процент прибыльных сделок
+1. Set **Entry Z-score** (default 2.0) and **Exit Z-score** (default 0.5)
+2. Set **Position Size** in USD
+3. Click **Run Backtest**
+4. Review: equity curve, Sharpe ratio, max drawdown, win rate, trade list
 
-### Торговля (требует API ключей)
+### Trading (requires API keys)
 
-- **Лонг Спред** — купить S1, продать S2 (когда Z-score < -2, S1 недооценён)
-- **Шорт Спред** — продать S1, купить S2 (когда Z-score > +2, S1 переоценён)
-- **Закрыть все** — закрывает обе ноги
+- **Long Spread** — buy S1, sell S2 (when Z-score < −2, S1 is undervalued)
+- **Short Spread** — sell S1, buy S2 (when Z-score > +2, S1 is overvalued)
+- **Close All** — closes both legs
 
-> Размер позиции делится между двумя ногами пропорционально hedge ratio.
-
----
-
-## Стратегия: как работает парный трейдинг
-
-```
-Спред  = log(Цена₁) − β × log(Цена₂)
-Z-score = (Спред − Среднее) / СКО
-
-Вход Long  спред: Z < −2  → S1 дёшев относительно S2
-Вход Short спред: Z > +2  → S1 дорог относительно S2
-Выход:           |Z| < 0.5 → спред вернулся к среднему
-```
-
-Стратегия работает при наличии **коинтеграции** между активами — то есть когда спред имеет тенденцию возвращаться к долгосрочному среднему.
+> Position size is split between the two legs proportionally to the hedge ratio.
 
 ---
 
-## Структура проекта
+## Strategy
+
+```
+Spread  = log(Price₁) − β × log(Price₂)
+Z-score = (Spread − Mean) / StdDev
+
+Enter Long  spread: Z < −2  → S1 cheap relative to S2
+Enter Short spread: Z > +2  → S1 expensive relative to S2
+Exit:              |Z| < 0.5 → spread reverted to mean
+```
+
+The strategy relies on **cointegration** — the spread must have a tendency to revert to a long-run equilibrium.
+
+---
+
+## Project Structure
 
 ```
 pair_trading/
 ├── backend/
 │   ├── main.py              # FastAPI: REST API + WebSocket
-│   ├── strategy.py          # Математика: коинтеграция, z-score, бэктест
-│   ├── binance_client.py    # Обёртка ccxt для Binance Futures
+│   ├── strategy.py          # Math: cointegration, z-score, backtest
+│   ├── binance_client.py    # ccxt wrapper for Binance Futures
 │   └── requirements.txt
 ├── frontend/
-│   └── index.html           # Весь UI в одном файле (без сборки)
-├── .env                     # Ваши API ключи (не коммитить!)
-├── .env.example             # Шаблон
-└── start.sh                 # Скрипт запуска
+│   └── index.html           # Full UI in a single file (no build step)
+├── .env                     # Your API keys (never commit!)
+├── .env.example             # Template
+└── start.sh                 # Launch script
 ```
 
 ---
 
-## Технологии
+## Tech Stack
 
-**Бэкенд**
+**Backend**
 - Python 3.10+
 - FastAPI + uvicorn
 - ccxt (Binance USDT-M Futures)
 - pandas, numpy, statsmodels, scipy
 
-**Фронтенд**
-- Vanilla JS (без фреймворков и сборки)
+**Frontend**
+- Vanilla JS (no framework, no build step)
 - Tailwind CSS (CDN)
 - Chart.js + chartjs-plugin-annotation (CDN)
-- Встроенное руководство — выдвижная панель (drawer) с 8 разделами на RU/EN
+- Built-in guide drawer — 8 sections, bilingual (EN / RU)
 
 ---
 
-## Часто задаваемые вопросы
+## FAQ
 
-**Нужны ли API ключи для просмотра графиков?**
-Нет. Ключи нужны только для вкладки «Позиции» и кнопок торговли.
+**Do I need API keys to view charts?**
+No. Keys are only required for the Positions tab and trading buttons.
 
-**Какой формат символов?**
-Используйте формат ccxt: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`. Можно ввести `BTCUSDT` — бэкенд автоматически преобразует.
+**What symbol format should I use?**
+Use ccxt unified format: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`. You can also type `BTCUSDT` — the backend converts it automatically.
 
-**Как выбрать хорошую пару?**
-Ищите пары с: коинтеграцией (p < 0.05), Хёрстом < 0.5, корреляцией > 0.7, полураспадом 10–50 баров.
+**How do I pick a good pair?**
+Look for: cointegration (p < 0.05), Hurst exponent < 0.5, correlation > 0.7, half-life between 10–50 bars.
 
-**WebSocket показывает "Отключён"?**
-Убедитесь, что бэкенд запущен на `localhost:8000`. Подключение устанавливается после нажатия «Анализировать пару».
+**WebSocket shows "Disconnected"?**
+Make sure the backend is running on `localhost:8000`. The connection is established after clicking **Analyze Pair**.
 
 ---
 
-## Риски
+## Disclaimer
 
-> Парный трейдинг не гарантирует прибыль. Коинтеграция может нарушаться. Используйте стоп-лоссы. Тестируйте на малых объёмах перед работой с реальными средствами.
+> Pair trading does not guarantee profit. Cointegration can break down. Always use stop-losses and test with small position sizes before trading real capital.
