@@ -50,10 +50,11 @@ cp .env.example .env
 
 ```bash
 cd backend
-../.venv/bin/uvicorn main:app --reload --port 8000
+../.venv/bin/uvicorn main:app --reload --port 8080
 ```
 
 Or via the launch script (requires `pip` on system PATH):
+
 ```bash
 ./start.sh
 ```
@@ -80,14 +81,14 @@ open frontend/index.html
 
 ### Statistics Reference
 
-| Metric | Description | Good value |
-|---|---|---|
-| **Z-score** | Spread deviation from rolling mean in σ | \|Z\| > 2 — entry signal |
-| **Hedge Ratio (β)** | Position size ratio between legs | — |
-| **Half-Life** | Bars for spread to revert halfway to mean | 5–50 bars |
-| **Hurst Exponent** | Nature of the spread process | H < 0.5 — mean reverting ✓ |
-| **Correlation** | Pearson correlation of log returns | ≥ 0.7 ✓ |
-| **Cointegrated** | Long-run equilibrium exists | Yes (p < 0.05) ✓ |
+| Metric              | Description                               | Good value                 |
+| ------------------- | ----------------------------------------- | -------------------------- |
+| **Z-score**         | Spread deviation from rolling mean in σ   | \|Z\| > 2 — entry signal   |
+| **Hedge Ratio (β)** | Position size ratio between legs          | —                          |
+| **Half-Life**       | Bars for spread to revert halfway to mean | 5–50 bars                  |
+| **Hurst Exponent**  | Nature of the spread process              | H < 0.5 — mean reverting ✓ |
+| **Correlation**     | Pearson correlation of log returns        | ≥ 0.7 ✓                    |
+| **Cointegrated**    | Long-run equilibrium exists               | Yes (p < 0.05) ✓           |
 
 ### Backtesting
 
@@ -142,12 +143,14 @@ pair_trading/
 ## Tech Stack
 
 **Backend**
+
 - Python 3.10+
 - FastAPI + uvicorn
 - ccxt (Binance USDT-M Futures)
 - pandas, numpy, statsmodels, scipy
 
 **Frontend**
+
 - Vanilla JS (no framework, no build step)
 - Tailwind CSS (CDN)
 - Chart.js + chartjs-plugin-annotation (CDN)
@@ -167,7 +170,7 @@ Use ccxt unified format: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`. You 
 Look for: cointegration (p < 0.05), Hurst exponent < 0.5, correlation > 0.7, half-life between 10–50 bars.
 
 **WebSocket shows "Disconnected"?**
-Make sure the backend is running on `localhost:8000`. The connection is established after clicking **Analyze Pair**.
+Make sure the backend is running on `localhost:8080`. The connection is established after clicking **Analyze Pair**.
 
 ---
 

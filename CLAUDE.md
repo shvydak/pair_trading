@@ -26,9 +26,9 @@ pair_trading/
 ### Backend
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/uvicorn backend/main:app --reload --port 8000
+.venv/bin/uvicorn backend/main:app --reload --port 8080
 # or from backend/ directory:
-cd backend && ../.venv/bin/uvicorn main:app --reload --port 8000
+cd backend && ../.venv/bin/uvicorn main:app --reload --port 8080
 ```
 
 ### Frontend
@@ -112,3 +112,10 @@ Private endpoints (positions, balance, trade) require valid keys.
 - Русский язык по умолчанию в UI
 - Dark theme only
 - No build tools — keep frontend as single HTML file
+
+## Guide Writing Rules
+- **Write for beginners first.** The target user may not know what OLS, ATR, cointegration, or hedge ratio mean. Every technical term must be explained in plain language before showing formulas.
+- **Explain the "why" before the "how".** Don't just show a formula — first explain what problem it solves in one sentence (e.g. "You can't buy equal dollars of both assets because they move with different force").
+- **Use concrete examples.** Every concept section must include a numerical example with realistic BTC/ETH prices and clear input/output.
+- **Avoid jargon without explanation.** If a technical term is unavoidable, immediately follow it with a plain-language parenthetical or sentence.
+- Each guide section should be readable by someone who has never traded before.

@@ -66,9 +66,9 @@ app = FastAPI(title="Pair Trading API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:8000",
+        "http://localhost:8080",
         "http://localhost:3000",
-        "http://127.0.0.1:8000",
+        "http://127.0.0.1:8080",
         "http://127.0.0.1:3000",
         "null",        # file:// origin
         "*",
@@ -118,6 +118,8 @@ async def get_history(
 
         # Align on common timestamps
         price1, price2 = price1.align(price2, join="inner")
+        df1 = df1.loc[price1.index]
+        df2 = df2.loc[price2.index]
 
         hedge_ratio = strategy.calculate_hedge_ratio(price1, price2)
         spread = strategy.calculate_spread(price1, price2, hedge_ratio)
@@ -126,6 +128,8 @@ async def get_history(
         half_life = strategy.calculate_half_life(spread)
         hurst = strategy.calculate_hurst_exponent(spread)
         correlation = strategy.calculate_correlation(price1, price2)
+        atr1 = strategy.calculate_atr(df1)
+        atr2 = strategy.calculate_atr(df2)
 
         timestamps = [str(ts) for ts in price1.index]
 
@@ -144,6 +148,9 @@ async def get_history(
                 "spread_mean": float(spread.mean()),
                 "spread_std": float(spread.std()),
                 "current_zscore": float(zscore.dropna().iloc[-1]) if not zscore.dropna().empty else None,
+                "atr1": atr1,
+                "atr2": atr2,
+                "atr_ratio": atr1 / atr2 if atr2 else None,
             },
         })
     except Exception as e:
@@ -213,10 +220,13 @@ async def get_balance():
 class TradeRequest(BaseModel):
     symbol1: str
     symbol2: str
-    action: str          # "open" | "close"
-    side: str            # "long_spread" | "short_spread"
+    action: str                    # "open" | "close"
+    side: str                      # "long_spread" | "short_spread"
     size_usd: float
     hedge_ratio: float
+    sizing_method: str = "ols"     # "ols" | "atr" | "equal"
+    atr1: Optional[float] = None
+    atr2: Optional[float] = None
 
 
 @app.post("/api/trade")
@@ -238,9 +248,17 @@ async def execute_trade(req: TradeRequest):
         price1 = ticker1["last"]
         price2 = ticker2["last"]
 
-        half_size = req.size_usd / 2.0
-        qty1 = half_size / price1
-        qty2 = (half_size * abs(req.hedge_ratio)) / price2
+        sizes = strategy.calculate_position_sizes(
+            price1=price1,
+            price2=price2,
+            size_usd=req.size_usd,
+            hedge_ratio=req.hedge_ratio,
+            atr1=req.atr1,
+            atr2=req.atr2,
+            method=req.sizing_method,
+        )
+        qty1 = sizes["qty1"]
+        qty2 = sizes["qty2"]
 
         if req.action == "open":
             if req.side == "long_spread":

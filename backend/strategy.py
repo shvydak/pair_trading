@@ -133,6 +133,72 @@ class PairTradingStrategy:
         return hurst
 
     @staticmethod
+    def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
+        """
+        Average True Range from OHLCV DataFrame.
+        Returns the ATR of the last `period` bars as a float price value.
+        """
+        high  = df["high"]
+        low   = df["low"]
+        close = df["close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean()
+        val = atr.dropna()
+        return float(val.iloc[-1]) if not val.empty else float("nan")
+
+    @staticmethod
+    def calculate_position_sizes(
+        price1: float,
+        price2: float,
+        size_usd: float,
+        hedge_ratio: float,
+        atr1: float = None,
+        atr2: float = None,
+        method: str = "ols",
+    ) -> dict:
+        """
+        Calculate position quantities for both legs.
+
+        method="ols"   — dollar-neutral adjusted by OLS hedge ratio β:
+                          qty1 = size_usd / price1
+                          qty2 = size_usd * |β| / price2
+                          → leg2 dollar exposure scales with β
+
+        method="atr"   — volatility parity (ATR-based):
+                          ratio = atr1 / atr2
+                          qty1 = size_usd / price1
+                          qty2 = qty1 * ratio
+                          → both legs contribute equal dollar volatility
+                            (qty1*ATR1 == qty2*ATR2)
+
+        method="equal" — equal dollar exposure on both legs:
+                          qty1 = size_usd / price1
+                          qty2 = size_usd / price2
+        """
+        if method == "atr" and atr1 and atr2 and atr2 > 0:
+            ratio = atr1 / atr2
+            qty1 = size_usd / price1
+            qty2 = qty1 * ratio
+        elif method == "equal":
+            qty1 = size_usd / price1
+            qty2 = size_usd / price2
+        else:  # ols (default)
+            qty1 = size_usd / price1
+            qty2 = (size_usd * abs(hedge_ratio)) / price2
+
+        return {
+            "qty1":   qty1,
+            "qty2":   qty2,
+            "value1": qty1 * price1,
+            "value2": qty2 * price2,
+        }
+
+    @staticmethod
     def calculate_correlation(price1: pd.Series, price2: pd.Series) -> float:
         """Pearson correlation of log returns."""
         ret1 = np.log(price1).diff().dropna()
@@ -248,11 +314,11 @@ class PairTradingStrategy:
                 exit_spread = np.log(exit_p1) - hedge_ratio * np.log(exit_p2)
                 spread_change = (exit_spread - entry_spread) * position
 
-                # Approximate dollar PnL:
-                # half_size on each leg (so total exposure = position_size_usd)
-                half_size = position_size_usd / 2.0
-                qty1 = (half_size / entry_p1) * position
-                qty2 = (half_size / entry_p2) * (-position * hedge_ratio / abs(hedge_ratio))
+                # Dollar PnL using OLS-β sizing:
+                # qty1 = size_usd / entry_p1  (long or short based on position)
+                # qty2 = size_usd * |β| / entry_p2  (opposite leg)
+                qty1 = (position_size_usd / entry_p1) * position
+                qty2 = (position_size_usd * abs(hedge_ratio) / entry_p2) * (-position)
 
                 pnl1 = qty1 * (exit_p1 - entry_p1)
                 pnl2 = qty2 * (exit_p2 - entry_p2)

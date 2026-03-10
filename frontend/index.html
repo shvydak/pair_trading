@@ -143,6 +143,8 @@
       strategy_params: 'Strategy Parameters',
       entry_z: 'Entry Z-score',
       exit_z: 'Exit Z-score',
+      tip_entry_z: '<strong>Entry Z-score</strong><br/>Sets the red dashed lines on the chart (±Nσ). A trade opens when the yellow Z-score line crosses these thresholds.<br/><br/>2.0 → standard. Lower = more signals, less reliable. Higher = fewer signals, more reliable.',
+      tip_exit_z: '<strong>Exit Z-score</strong><br/>Sets the thin dashed lines near the center (±Nσ). The trade closes when Z-score returns within these lines — meaning the spread is back to normal.<br/><br/>0.5 → standard. 0.0 = wait for full mean reversion. 1.0 = exit earlier with smaller profit.',
       pos_size: 'Position Size (USD)',
       backtest_btn: 'Run Backtest',
       running: 'Running…',
@@ -250,6 +252,9 @@
       confirm_short: 'SHORT spread: {s1}/{s2} for ${size}?',
 
       guide_btn: 'Guide',
+      sizing_method: 'Sizing Method',
+      sizing_preview: 'Position Preview',
+      sizing_ratio: 'Ratio S1/S2 $',
 
       // tooltips
       tip_zscore: '<strong>Z-Score</strong><br/>Standard deviations the spread is away from its rolling mean. |Z| &gt; 2 signals a trading opportunity. Positive Z → overvalued S1 vs S2 → short spread. Negative Z → undervalued S1 → long spread.',
@@ -278,6 +283,8 @@
       strategy_params: 'Параметры стратегии',
       entry_z: 'Z-score входа',
       exit_z: 'Z-score выхода',
+      tip_entry_z: '<strong>Z-score входа</strong><br/>Управляет красными пунктирными линиями на графике (±Nσ). Сделка открывается когда жёлтая линия Z-score пересекает эти уровни.<br/><br/>2.0 → стандарт. Меньше = больше сигналов, но слабее. Больше = меньше сигналов, но надёжнее.',
+      tip_exit_z: '<strong>Z-score выхода</strong><br/>Управляет тонкими пунктирными линиями ближе к центру (±Nσ). Сделка закрывается когда Z-score возвращается в этот диапазон — спред нормализовался.<br/><br/>0.5 → стандарт. 0.0 = ждать точного возврата к среднему. 1.0 = выходить раньше, с меньшей прибылью.',
       pos_size: 'Размер позиции (USD)',
       backtest_btn: 'Запустить бэктест',
       running: 'Выполняется…',
@@ -377,6 +384,9 @@
       confirm_short: 'ШОРТ спред: {s1}/{s2} на ${size}?',
 
       guide_btn: 'Руководство',
+      sizing_method: 'Метод сайзинга',
+      sizing_preview: 'Предпросмотр позиции',
+      sizing_ratio: 'Соотношение S1/S2 $',
 
       tip_zscore: '<strong>Z-счёт</strong><br/>Количество стандартных отклонений спреда от скользящего среднего. |Z| &gt; 2 — сигнал для входа. Положительный Z → S1 дорог → шорт спред. Отрицательный Z → S1 дёшев → лонг спред.',
       tip_hedge: '<strong>Коэффициент хеджирования (β)</strong><br/>Коэффициент OLS-регрессии: log(P1) = β·log(P2) + α. На каждую 1 единицу актива 2 держим β единиц актива 1 для построения стационарного спреда. Также это соотношение контрактов между двумя ногами.',
@@ -519,20 +529,26 @@
 
       <div class="flex flex-col gap-3">
         <div class="flex gap-2">
-          <div class="flex-1">
-            <label class="text-xs text-muted mb-1 block" data-i18n="entry_z">Entry Z-score</label>
+          <div class="flex-1 tooltip-container">
+            <label class="text-xs text-muted mb-1 flex items-center gap-1" data-i18n="entry_z">Entry Z-score
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            </label>
             <input id="entry-z-input" type="number" value="2.0" step="0.1" min="0.5" max="5"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+            <div class="tooltip-box" data-i18n-html="tip_entry_z"></div>
           </div>
-          <div class="flex-1">
-            <label class="text-xs text-muted mb-1 block" data-i18n="exit_z">Exit Z-score</label>
+          <div class="flex-1 tooltip-container">
+            <label class="text-xs text-muted mb-1 flex items-center gap-1" data-i18n="exit_z">Exit Z-score
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            </label>
             <input id="exit-z-input" type="number" value="0.5" step="0.1" min="0" max="3"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+            <div class="tooltip-box" data-i18n-html="tip_exit_z"></div>
           </div>
         </div>
         <div>
           <label class="text-xs text-muted mb-1 block" data-i18n="pos_size">Position Size (USD)</label>
-          <input id="pos-size-input" type="number" value="1000" step="100" min="100"
+          <input id="pos-size-input" type="number" value="1000" step="100" min="100" oninput="updateSizePreview()"
             class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
         </div>
         <button id="backtest-btn" onclick="runBacktest()"
@@ -545,6 +561,36 @@
     <!-- Trading -->
     <section class="bg-card rounded-lg p-4 border border-border">
       <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="trading">Trading</h3>
+
+      <!-- Sizing method -->
+      <div class="mb-3">
+        <label class="text-xs text-muted mb-1.5 block" data-i18n="sizing_method">Sizing Method</label>
+        <div class="flex gap-1" id="sizing-btns">
+          <button onclick="setSizingMethod('ols')"   data-method="ols"   class="sizing-btn flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">OLS β</button>
+          <button onclick="setSizingMethod('atr')"   data-method="atr"   class="sizing-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">ATR</button>
+          <button onclick="setSizingMethod('equal')" data-method="equal" class="sizing-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">Equal</button>
+        </div>
+      </div>
+
+      <!-- Position preview -->
+      <div id="size-preview" class="hidden mb-3 bg-surface rounded-md p-2.5 border border-border text-xs space-y-1.5">
+        <div class="text-muted font-semibold uppercase tracking-wider text-[10px]" data-i18n="sizing_preview">Position Preview</div>
+        <div class="flex justify-between">
+          <span id="preview-s1-label" class="text-muted">S1</span>
+          <span class="text-white font-mono" id="preview-qty1">–</span>
+          <span class="text-muted font-mono" id="preview-val1">–</span>
+        </div>
+        <div class="flex justify-between">
+          <span id="preview-s2-label" class="text-muted">S2</span>
+          <span class="text-white font-mono" id="preview-qty2">–</span>
+          <span class="text-muted font-mono" id="preview-val2">–</span>
+        </div>
+        <div class="flex justify-between border-t border-border pt-1.5 mt-0.5">
+          <span class="text-muted" data-i18n="sizing_ratio">Ratio S1/S2</span>
+          <span class="text-yellow-400 font-mono" id="preview-ratio">–</span>
+        </div>
+      </div>
+
       <div id="trade-info" class="text-xs text-muted mb-3" data-i18n="trade_hint">Run Analyze first to enable trading.</div>
       <div class="flex flex-col gap-2">
         <button id="long-btn" onclick="executeTrade('open','long_spread')" disabled
@@ -841,12 +887,14 @@
 <!--  JavaScript                                                         -->
 <!-- ================================================================== -->
 <script>
-const API = 'http://localhost:8000';
+const API = 'http://localhost:8080';
 let state = {
   timeframe: '1h',
   symbols: [],
   historyData: null,
   hedgeRatio: null,
+  atr1: null,
+  atr2: null,
   ws: null,
   spreadChart: null,
   priceChart: null,
@@ -944,6 +992,8 @@ async function runAnalyze() {
     const data = await res.json();
     state.historyData = data;
     state.hedgeRatio = data.hedge_ratio;
+    state.atr1 = data.stats?.atr1 ?? null;
+    state.atr2 = data.stats?.atr2 ?? null;
 
     renderStats(data);
     renderSpreadChart(data);
@@ -1254,6 +1304,64 @@ async function refreshPositions() {
 }
 
 // ------------------------------------------------------------------ //
+//  Sizing method
+// ------------------------------------------------------------------ //
+let sizingMethod = 'ols';
+
+function setSizingMethod(method) {
+  sizingMethod = method;
+  document.querySelectorAll('.sizing-btn').forEach(btn => {
+    const active = btn.dataset.method === method;
+    btn.classList.toggle('border-accent', active);
+    btn.classList.toggle('text-accent', active);
+    btn.classList.toggle('border-border', !active);
+    btn.classList.toggle('text-muted', !active);
+  });
+  updateSizePreview();
+}
+
+function updateSizePreview() {
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sizeUsd = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+  const preview = document.getElementById('size-preview');
+
+  if (!state.hedgeRatio || !state.historyData) { preview.classList.add('hidden'); return; }
+
+  const prices = state.historyData;
+  const p1 = prices.price1[prices.price1.length - 1];
+  const p2 = prices.price2[prices.price2.length - 1];
+  const beta = Math.abs(state.hedgeRatio);
+  const atr1 = state.atr1;
+  const atr2 = state.atr2;
+
+  let qty1, qty2;
+  if (sizingMethod === 'atr' && atr1 && atr2 && atr2 > 0) {
+    const ratio = atr1 / atr2;
+    qty1 = sizeUsd / p1;
+    qty2 = qty1 * ratio;
+  } else if (sizingMethod === 'equal') {
+    qty1 = sizeUsd / p1;
+    qty2 = sizeUsd / p2;
+  } else {
+    qty1 = sizeUsd / p1;
+    qty2 = (sizeUsd * beta) / p2;
+  }
+
+  const val1 = qty1 * p1;
+  const val2 = qty2 * p2;
+
+  document.getElementById('preview-s1-label').textContent = sym1;
+  document.getElementById('preview-s2-label').textContent = sym2;
+  document.getElementById('preview-qty1').textContent = qty1.toFixed(4);
+  document.getElementById('preview-qty2').textContent = qty2.toFixed(4);
+  document.getElementById('preview-val1').textContent = '$' + val1.toFixed(0);
+  document.getElementById('preview-val2').textContent = '$' + val2.toFixed(0);
+  document.getElementById('preview-ratio').textContent = (val1 / val2).toFixed(3);
+  preview.classList.remove('hidden');
+}
+
+// ------------------------------------------------------------------ //
 //  Trading
 // ------------------------------------------------------------------ //
 function enableTrading(yes, sym1, sym2) {
@@ -1266,6 +1374,7 @@ function enableTrading(yes, sym1, sym2) {
   if (yes) {
     document.getElementById('trade-info').innerHTML =
       `<span class="text-xs text-green-400">${t('trade_ready')}${sym1} / ${sym2}</span>`;
+    updateSizePreview();
   }
 }
 
@@ -1289,7 +1398,17 @@ async function executeTrade(action, side) {
     const res = await fetch(`${API}/api/trade`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol1: sym1, symbol2: sym2, action, side, size_usd: size, hedge_ratio: state.hedgeRatio })
+      body: JSON.stringify({
+        symbol1: sym1,
+        symbol2: sym2,
+        action,
+        side,
+        size_usd: size,
+        hedge_ratio: state.hedgeRatio,
+        sizing_method: sizingMethod,
+        atr1: state.atr1,
+        atr2: state.atr2,
+      })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Trade failed');
@@ -1474,7 +1593,7 @@ const GUIDE = {
   <li style="margin-bottom:6px;">Введите два символа в поля <strong>Символ 1</strong> и <strong>Символ 2</strong><br/><span style="color:#8b949e;font-size:12px;">Формат: <code style="background:#0f1117;padding:1px 4px;border-radius:3px;">BTC/USDT:USDT</code> или просто <code style="background:#0f1117;padding:1px 4px;border-radius:3px;">BTCUSDT</code></span></li>
   <li style="margin-bottom:6px;">Выберите таймфрейм — рекомендуем начать с <strong>4h</strong></li>
   <li style="margin-bottom:6px;">Укажите глубину истории: <strong>500–1000 свечей</strong> для надёжной статистики</li>
-  <li style="margin-bottom:6px;">Окно Z-score: <strong>20</strong> — стандартное значение</li>
+  <li style="margin-bottom:6px;"><strong>Окно Z-score: 20</strong> — по скольким последним свечам считать «норму» для спреда. Например, при значении 20 и таймфрейме 4h система смотрит на последние 20 четырёхчасовых баров (~3 дня) и считает: вот это — нормальный уровень спреда, а всё что отклонилось сильнее — сигнал. Меньше 20 — система реагирует быстрее, но даёт больше ложных сигналов. Больше 50 — реагирует медленнее, но стабильнее. Оставьте 20 для начала.</li>
   <li>Нажмите <strong>Анализировать пару</strong></li>
 </ol>
 <h3>Что смотреть в результатах</h3>
@@ -1639,26 +1758,118 @@ const GUIDE = {
       title: '6. Бэктест',
       content: `
 <h2>Как запустить и читать бэктест</h2>
-<h3>Параметры</h3>
-<ul>
-  <li><strong>Z-score входа</strong> (по умолч. 2.0) — чем выше, тем реже сделки, но точнее сигнал</li>
-  <li><strong>Z-score выхода</strong> (по умолч. 0.5) — выход при возврате к среднему</li>
-  <li><strong>Размер позиции</strong> — сумма в USD на каждую ногу</li>
-</ul>
+<p>Бэктест — это проверка стратегии на <em>исторических данных</em>: система смотрит, что было бы, если бы вы торговали по заданным правилам в прошлом.</p>
+
+<h3>Параметры — простыми словами</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #f85149;">
+  <div style="font-weight:600;color:#f85149;margin-bottom:6px;">Z-score входа (по умолч. 2.0) — «насколько сильно должно отклониться»</div>
+  <p style="margin:0 0 6px;">Система входит в сделку только когда Z-score выходит за ±2.0. Это значит: спред сейчас на 2 стандартных отклонения дальше нормы — статистически это «редкое» отклонение, которое скорее всего вернётся назад.</p>
+  <div style="color:#8b949e;font-size:12px;">Поставить 1.5 → больше сделок, но слабее сигналы. Поставить 2.5 → меньше сделок, но надёжнее.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #3fb950;">
+  <div style="font-weight:600;color:#3fb950;margin-bottom:6px;">Z-score выхода (по умолч. 0.5) — «когда считать что вернулось»</div>
+  <p style="margin:0 0 6px;">Система закрывает сделку, когда Z-score приблизился к нулю (в пределах ±0.5). Это значит: спред вернулся к норме, пора фиксировать прибыль.</p>
+  <div style="color:#8b949e;font-size:12px;">Поставить 0.0 → ждать точного возврата к среднему. Поставить 1.0 → выходить раньше, с меньшей прибылью но быстрее.</div>
+</div>
+
+<h3>Как это выглядит на графике</h3>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin:12px 0;">
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#e3b341" stroke-width="2.5"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#e3b341;">Жёлтая линия</strong> — Z-score</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#f85149;">Красный пунктир</strong> — вход (±2σ)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#3fb950;">Зелёный пунктир</strong> — выход (±0.5σ)</span>
+    </div>
+  </div>
+
+  <svg viewBox="0 0 420 185" width="100%" style="display:block;border-radius:6px;overflow:visible;">
+    <!-- background -->
+    <rect width="420" height="185" fill="#0d1117" rx="4"/>
+
+    <!-- grid lines -->
+    <line x1="40" y1="15" x2="405" y2="15" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="40" x2="405" y2="40" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="65" x2="405" y2="65" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="90" x2="405" y2="90" stroke="#30363d" stroke-width="1.5"/>
+    <line x1="40" y1="115" x2="405" y2="115" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="140" x2="405" y2="140" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="165" x2="405" y2="165" stroke="#21262d" stroke-width="1"/>
+
+    <!-- entry threshold +2 (red dashed) -->
+    <line x1="40" y1="40" x2="405" y2="40" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+    <!-- entry threshold -2 (red dashed) -->
+    <line x1="40" y1="140" x2="405" y2="140" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+    <!-- exit threshold +0.5 (green dashed) -->
+    <line x1="40" y1="78" x2="405" y2="78" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,4" opacity="0.7"/>
+    <!-- exit threshold -0.5 (green dashed) -->
+    <line x1="40" y1="103" x2="405" y2="103" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,4" opacity="0.7"/>
+
+    <!-- Trade 1 shaded region (short) -->
+    <rect x="112" y="15" width="72" height="150" fill="#f85149" opacity="0.06" rx="2"/>
+    <!-- Trade 2 shaded region (long) -->
+    <rect x="285" y="15" width="84" height="150" fill="#3fb950" opacity="0.06" rx="2"/>
+
+    <!-- Z-score line (yellow) -->
+    <polyline points="40,90 55,84 70,72 85,55 100,44 112,38 125,33 140,40 155,52 170,65 184,77 196,88 210,92 222,97 237,107 252,119 265,130 278,140 285,145 300,149 315,143 330,132 345,118 360,105 369,100 382,92 397,89 405,88"
+      fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+
+    <!-- Short entry: x=112, y=38 -->
+    <circle cx="112" cy="38" r="5" fill="#f85149" opacity="0.95"/>
+    <line x1="112" y1="16" x2="112" y2="36" stroke="#f85149" stroke-width="1" stroke-dasharray="2,2" opacity="0.7"/>
+    <rect x="70" y="3" width="84" height="14" rx="3" fill="#f8514922"/>
+    <text x="112" y="13" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ШОРТ ВХОД ↓</text>
+
+    <!-- Short exit: x=184, y=77 -->
+    <circle cx="184" cy="77" r="4" fill="#8b949e" opacity="0.9"/>
+    <text x="188" y="72" fill="#8b949e" font-size="8.5" font-family="sans-serif">выход</text>
+
+    <!-- Trade 1 profit label -->
+    <text x="148" y="110" fill="#3fb950" font-size="9.5" font-family="sans-serif" text-anchor="middle" font-weight="700" opacity="0.85">+P&amp;L ✓</text>
+
+    <!-- Long entry: x=285, y=145 -->
+    <circle cx="285" cy="145" r="5" fill="#3fb950" opacity="0.95"/>
+    <line x1="285" y1="151" x2="285" y2="169" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,2" opacity="0.7"/>
+    <rect x="243" y="170" width="84" height="14" rx="3" fill="#3fb95022"/>
+    <text x="285" y="180" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">ЛОНГ ВХОД ↑</text>
+
+    <!-- Long exit: x=369, y=100 -->
+    <circle cx="369" cy="100" r="4" fill="#8b949e" opacity="0.9"/>
+    <text x="372" y="95" fill="#8b949e" font-size="8.5" font-family="sans-serif">выход</text>
+
+    <!-- Trade 2 profit label -->
+    <text x="327" y="70" fill="#3fb950" font-size="9.5" font-family="sans-serif" text-anchor="middle" font-weight="700" opacity="0.85">+P&amp;L ✓</text>
+
+    <!-- Y axis labels -->
+    <text x="36" y="93" fill="#e3b341" font-size="9" font-family="monospace" text-anchor="end">0</text>
+    <text x="408" y="43" fill="#f85149" font-size="9" font-family="monospace" opacity="0.9">+2σ</text>
+    <text x="408" y="81" fill="#3fb950" font-size="9" font-family="monospace" opacity="0.8">+½σ</text>
+    <text x="408" y="93" fill="#e3b341" font-size="9" font-family="monospace" opacity="0.5">  0</text>
+    <text x="408" y="107" fill="#3fb950" font-size="9" font-family="monospace" opacity="0.8">−½σ</text>
+    <text x="408" y="143" fill="#f85149" font-size="9" font-family="monospace" opacity="0.9">−2σ</text>
+  </svg>
+</div>
+
 <h3>Метрики результатов</h3>
 <table>
-  <thead><tr><th>Метрика</th><th>Хорошо</th><th>Плохо</th></tr></thead>
+  <thead><tr><th>Метрика</th><th>Что значит</th><th>Хорошо</th><th>Плохо</th></tr></thead>
   <tbody>
-    <tr><td>Total PnL</td><td class="pos">&gt; 0</td><td class="neg">&lt; 0</td></tr>
-    <tr><td>Sharpe Ratio</td><td class="pos">&gt; 1.0</td><td class="neg">&lt; 0</td></tr>
-    <tr><td>Max Drawdown</td><td class="pos">&lt; 15%</td><td class="neg">&gt; 30%</td></tr>
-    <tr><td>Win Rate</td><td class="pos">&gt; 55%</td><td class="neg">&lt; 40%</td></tr>
-    <tr><td># Trades</td><td class="pos">&gt; 20</td><td class="neg">&lt; 5 (мало данных)</td></tr>
+    <tr><td>Total PnL</td><td>Суммарная прибыль/убыток</td><td class="pos">&gt; 0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Sharpe Ratio</td><td>Прибыль на единицу риска. 1.0 = хорошо, 2.0 = отлично</td><td class="pos">&gt; 1.0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Max Drawdown</td><td>Максимальная просадка от пика. 20% = в худший момент потеряли 20% от максимума</td><td class="pos">&lt; 15%</td><td class="neg">&gt; 30%</td></tr>
+    <tr><td>Win Rate</td><td>Доля прибыльных сделок</td><td class="pos">&gt; 55%</td><td class="neg">&lt; 40%</td></tr>
+    <tr><td># Trades</td><td>Количество сделок — меньше 10 это слишком мало для выводов</td><td class="pos">&gt; 20</td><td class="neg">&lt; 5</td></tr>
   </tbody>
 </table>
-<div class="callout yellow"><strong>Осторожно:</strong> хороший бэктест не гарантирует хорошую торговлю. Всегда проверяйте на актуальных данных (последние 1–3 месяца).</div>
-<h3>Подбор параметров</h3>
-<p>Рекомендуемый процесс: запустите бэктест на 500 свечах, затем проверьте на последних 100 (out-of-sample). Если обе части прибыльны — стратегия устойчива.</p>`,
+<div class="callout yellow"><strong>Осторожно:</strong> хороший бэктест не гарантирует прибыль в будущем. Всегда проверяйте на последних 1–3 месяцах данных — если там тоже плюс, стратегия устойчива.</div>`,
       example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 600, zwindow: 20, entryZ: 2.0, exitZ: 0.5 }
     },
     {
@@ -1667,19 +1878,54 @@ const GUIDE = {
       content: `
 <h2>Как открывать и закрывать сделки</h2>
 <div class="callout red"><strong>Требуются API ключи Binance</strong> с правами Futures Trading. Введите ключи в раздел «API Ключи» в левой панели.</div>
+
 <h3>Алгоритм действий</h3>
 <ol style="padding-left:18px;">
   <li style="margin-bottom:8px;">Запустите <strong>анализ пары</strong> — убедитесь, что статистика хорошая</li>
+  <li style="margin-bottom:8px;">Выберите <strong>метод сайзинга</strong> (см. ниже) — объёмы отобразятся в предпросмотре</li>
   <li style="margin-bottom:8px;">Проверьте текущий <strong>Z-score</strong>:<br/>
     <span style="color:#3fb950">Z &lt; −2</span> → нажмите <strong>Лонг Спред</strong> (купить S1, продать S2)<br/>
     <span style="color:#f85149">Z &gt; +2</span> → нажмите <strong>Шорт Спред</strong> (продать S1, купить S2)
   </li>
-  <li style="margin-bottom:8px;">Дождитесь, когда <strong>|Z-score| &lt; 0.5</strong> — нажмите <strong>Закрыть все</strong></li>
+  <li>Дождитесь, когда <strong>|Z-score| &lt; 0.5</strong> — нажмите <strong>Закрыть все</strong></li>
 </ol>
-<h3>Как рассчитывается объём</h3>
-<div class="formula">Объём S1 = size_usd / Цена_S1
-Объём S2 = (size_usd × β) / Цена_S2</div>
-<p>Где β — коэффициент хеджирования из анализа.</p>
+
+<h3>Методы расчёта объёмов позиций</h3>
+<p>В парном трейдинге нельзя просто купить на $400 BTC и продать на $400 ETH — активы движутся с разной силой. Нужно правильно подобрать <em>соотношение</em> объёмов, чтобы позиция была нейтральна к рынку.</p>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #58a6ff;">
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">OLS β — по умолчанию</div>
+  <p style="margin:0 0 6px;">Использует коэффициент β из анализа пары. Если β = 0.82, значит на $1000 в BTC нужно $820 в ETH — ровно столько, чтобы движения цен компенсировали друг друга согласно их исторической связи.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Хороший выбор для большинства пар. Начинайте с него.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #e3b341;">
+  <div style="font-weight:600;color:#e3b341;margin-bottom:6px;">ATR — по волатильности</div>
+  <p style="margin:0 0 6px;">ATR (Average True Range) — это средний дневной диапазон цены в долларах. Метод подбирает объёмы так, чтобы <em>риск в долларах</em> от обеих ног был одинаковым. BTC двигается на $2000/день, ETH — на $100/день, значит ETH нужно в 20 раз больше контрактов.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Используйте, если активы сильно различаются по волатильности.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #8b949e;">
+  <div style="font-weight:600;color:#8b949e;margin-bottom:6px;">Equal — равные доллары</div>
+  <p style="margin:0 0 6px;">Самый простой метод: на одинаковую сумму купить S1 и продать S2. Не учитывает ни коинтеграцию, ни волатильность — позиция может быть несбалансированной.</p>
+  <div style="color:#8b949e;font-size:12px;">⚠️ Подходит только для быстрых экспериментов.</div>
+</div>
+
+<h3>Пример: BTC/ETH, size = $1000</h3>
+<div class="formula">BTC = $65,000  |  ETH = $3,200  |  β = 0.82
+ATR_BTC = $1950/день  |  ATR_ETH = $96/день
+
+OLS β:  BTC = 0.0154 шт ($1000)  |  ETH = 0.256 шт ($820)
+        → вложено пропорционально β = 0.82
+
+ATR:    BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
+        → риск одинаков: 0.0154×$1950 = 0.313×$96 = $30/день
+
+Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
+        → по $1000 в каждую ногу, без учёта β</div>
+
+<div class="callout yellow">В секции «Торговля» есть <strong>Предпросмотр позиции</strong> — он показывает точные объёмы и долларовые суммы для текущих цен и выбранного метода.</div>
+
 <h3>Вкладка «Позиции»</h3>
 <p>После открытия сделки перейдите на вкладку <strong>Позиции</strong> — там отображаются все открытые позиции с нереализованным P&L и ценой ликвидации.</p>`
     },
@@ -1762,7 +2008,7 @@ const GUIDE = {
   <li style="margin-bottom:6px;">Enter two symbols in <strong>Symbol 1</strong> and <strong>Symbol 2</strong></li>
   <li style="margin-bottom:6px;">Choose a timeframe — start with <strong>4h</strong></li>
   <li style="margin-bottom:6px;">Set lookback to <strong>500–1000 candles</strong> for reliable statistics</li>
-  <li style="margin-bottom:6px;">Z-score window: <strong>20</strong> is standard</li>
+  <li style="margin-bottom:6px;"><strong>Z-score window: 20</strong> — how many recent candles define the "normal" spread level. With 20 and a 4h timeframe, the system looks at the last 20 bars (~3 days) and treats that as baseline. Anything that deviates strongly from it becomes a signal. Lower = reacts faster but more false signals. Higher = more stable but slower. Leave at 20 to start.</li>
   <li>Click <strong>Analyze Pair</strong></li>
 </ol>
 <div class="callout green">Cointegrated (p &lt; 0.05), H &lt; 0.5, correlation &gt; 0.7 → <strong>good pair</strong></div>
@@ -1882,22 +2128,91 @@ const GUIDE = {
       title: '6. Backtesting',
       content: `
 <h2>How to Backtest</h2>
-<h3>Parameters</h3>
-<ul>
-  <li><strong>Entry Z-score</strong> (default 2.0) — higher = fewer but more accurate signals</li>
-  <li><strong>Exit Z-score</strong> (default 0.5) — exit when spread reverts to mean</li>
-  <li><strong>Position Size</strong> — USD amount per leg</li>
-</ul>
+<p>A backtest runs your strategy against <em>historical data</em> to see how it would have performed in the past.</p>
+
+<h3>Parameters — in plain language</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #f85149;">
+  <div style="font-weight:600;color:#f85149;margin-bottom:6px;">Entry Z-score (default 2.0) — "how far must the spread drift before entering"</div>
+  <p style="margin:0 0 6px;">The system enters a trade only when Z-score crosses ±2.0. This means: the spread is 2 standard deviations away from normal — statistically unusual, and likely to snap back.</p>
+  <div style="color:#8b949e;font-size:12px;">Set 1.5 → more trades, weaker signals. Set 2.5 → fewer trades, stronger signals.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #3fb950;">
+  <div style="font-weight:600;color:#3fb950;margin-bottom:6px;">Exit Z-score (default 0.5) — "how close to normal before taking profit"</div>
+  <p style="margin:0 0 6px;">The system closes the trade when Z-score returns within ±0.5 of zero. This means: spread is back to normal, time to lock in profit.</p>
+  <div style="color:#8b949e;font-size:12px;">Set 0.0 → wait for exact mean reversion. Set 1.0 → exit earlier, smaller profit but faster.</div>
+</div>
+
+<h3>How it looks on the chart</h3>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:8px;padding:14px;margin:12px 0;">
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#e3b341" stroke-width="2.5"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#e3b341;">Yellow line</strong> — Z-score</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#f85149;">Red dashes</strong> — entry (±2σ)</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;">
+      <svg width="28" height="4"><line x1="0" y1="2" x2="28" y2="2" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+      <span style="font-size:12px;color:#c9d1d9;"><strong style="color:#3fb950;">Green dashes</strong> — exit (±0.5σ)</span>
+    </div>
+  </div>
+
+  <svg viewBox="0 0 420 185" width="100%" style="display:block;border-radius:6px;overflow:visible;">
+    <rect width="420" height="185" fill="#0d1117" rx="4"/>
+    <line x1="40" y1="15" x2="405" y2="15" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="40" x2="405" y2="40" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="65" x2="405" y2="65" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="90" x2="405" y2="90" stroke="#30363d" stroke-width="1.5"/>
+    <line x1="40" y1="115" x2="405" y2="115" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="140" x2="405" y2="140" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="165" x2="405" y2="165" stroke="#21262d" stroke-width="1"/>
+    <line x1="40" y1="40" x2="405" y2="40" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+    <line x1="40" y1="140" x2="405" y2="140" stroke="#f85149" stroke-width="1.2" stroke-dasharray="5,4" opacity="0.8"/>
+    <line x1="40" y1="78" x2="405" y2="78" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,4" opacity="0.7"/>
+    <line x1="40" y1="103" x2="405" y2="103" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,4" opacity="0.7"/>
+    <rect x="112" y="15" width="72" height="150" fill="#f85149" opacity="0.06" rx="2"/>
+    <rect x="285" y="15" width="84" height="150" fill="#3fb950" opacity="0.06" rx="2"/>
+    <polyline points="40,90 55,84 70,72 85,55 100,44 112,38 125,33 140,40 155,52 170,65 184,77 196,88 210,92 222,97 237,107 252,119 265,130 278,140 285,145 300,149 315,143 330,132 345,118 360,105 369,100 382,92 397,89 405,88"
+      fill="none" stroke="#e3b341" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="112" cy="38" r="5" fill="#f85149" opacity="0.95"/>
+    <line x1="112" y1="16" x2="112" y2="36" stroke="#f85149" stroke-width="1" stroke-dasharray="2,2" opacity="0.7"/>
+    <rect x="68" y="3" width="88" height="14" rx="3" fill="#f8514922"/>
+    <text x="112" y="13" fill="#f85149" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">SHORT ENTRY ↓</text>
+    <circle cx="184" cy="77" r="4" fill="#8b949e" opacity="0.9"/>
+    <text x="188" y="72" fill="#8b949e" font-size="8.5" font-family="sans-serif">exit</text>
+    <text x="148" y="110" fill="#3fb950" font-size="9.5" font-family="sans-serif" text-anchor="middle" font-weight="700" opacity="0.85">+P&amp;L ✓</text>
+    <circle cx="285" cy="145" r="5" fill="#3fb950" opacity="0.95"/>
+    <line x1="285" y1="151" x2="285" y2="169" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,2" opacity="0.7"/>
+    <rect x="243" y="170" width="84" height="14" rx="3" fill="#3fb95022"/>
+    <text x="285" y="180" fill="#3fb950" font-size="9" font-family="sans-serif" text-anchor="middle" font-weight="600">LONG ENTRY ↑</text>
+    <circle cx="369" cy="100" r="4" fill="#8b949e" opacity="0.9"/>
+    <text x="372" y="95" fill="#8b949e" font-size="8.5" font-family="sans-serif">exit</text>
+    <text x="327" y="70" fill="#3fb950" font-size="9.5" font-family="sans-serif" text-anchor="middle" font-weight="700" opacity="0.85">+P&amp;L ✓</text>
+    <text x="36" y="93" fill="#e3b341" font-size="9" font-family="monospace" text-anchor="end">0</text>
+    <text x="408" y="43" fill="#f85149" font-size="9" font-family="monospace" opacity="0.9">+2σ</text>
+    <text x="408" y="81" fill="#3fb950" font-size="9" font-family="monospace" opacity="0.8">+½σ</text>
+    <text x="408" y="93" fill="#e3b341" font-size="9" font-family="monospace" opacity="0.5">  0</text>
+    <text x="408" y="107" fill="#3fb950" font-size="9" font-family="monospace" opacity="0.8">−½σ</text>
+    <text x="408" y="143" fill="#f85149" font-size="9" font-family="monospace" opacity="0.9">−2σ</text>
+  </svg>
+</div>
+
 <h3>Result Metrics</h3>
 <table>
-  <thead><tr><th>Metric</th><th>Good</th><th>Bad</th></tr></thead>
+  <thead><tr><th>Metric</th><th>What it means</th><th>Good</th><th>Bad</th></tr></thead>
   <tbody>
-    <tr><td>Total PnL</td><td class="pos">&gt; 0</td><td class="neg">&lt; 0</td></tr>
-    <tr><td>Sharpe</td><td class="pos">&gt; 1.0</td><td class="neg">&lt; 0</td></tr>
-    <tr><td>Max Drawdown</td><td class="pos">&lt; 15%</td><td class="neg">&gt; 30%</td></tr>
-    <tr><td>Win Rate</td><td class="pos">&gt; 55%</td><td class="neg">&lt; 40%</td></tr>
+    <tr><td>Total PnL</td><td>Total profit/loss</td><td class="pos">&gt; 0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Sharpe</td><td>Profit per unit of risk. 1.0 = good, 2.0 = great</td><td class="pos">&gt; 1.0</td><td class="neg">&lt; 0</td></tr>
+    <tr><td>Max Drawdown</td><td>Worst peak-to-trough loss. 20% = at worst point, down 20% from peak</td><td class="pos">&lt; 15%</td><td class="neg">&gt; 30%</td></tr>
+    <tr><td>Win Rate</td><td>Share of profitable trades</td><td class="pos">&gt; 55%</td><td class="neg">&lt; 40%</td></tr>
+    <tr><td># Trades</td><td>Fewer than 10 is too few to draw conclusions</td><td class="pos">&gt; 20</td><td class="neg">&lt; 5</td></tr>
   </tbody>
-</table>`,
+</table>
+<div class="callout yellow"><strong>Caution:</strong> a good backtest doesn't guarantee future profit. Always verify on recent data (last 1–3 months) — if both periods show profit, the strategy is robust.</div>`,
       example: { sym1: 'BTC/USDT:USDT', sym2: 'ETH/USDT:USDT', tf: '4h', limit: 600, zwindow: 20, entryZ: 2.0, exitZ: 0.5 }
     },
     {
@@ -1913,7 +2228,38 @@ const GUIDE = {
     <span style="color:#f85149">Z &gt; +2</span> → click <strong>Short Spread</strong> (sell S1, buy S2)
   </li>
   <li>When <strong>|Z| &lt; 0.5</strong> → click <strong>Close All</strong></li>
-</ol>`
+</ol>
+<h3>Position Sizing Methods</h3>
+<p>You can't simply buy $400 of BTC and sell $400 of ETH — they move with different force. You need to balance the <em>number of contracts</em> so the position is market-neutral.</p>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #58a6ff;">
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">OLS β — default</div>
+  <p style="margin:0 0 6px;">Uses the β coefficient from pair analysis. If β = 0.82, for $1000 in BTC you put $820 in ETH — exactly enough so their price movements cancel each other based on historical relationship.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Good choice for most pairs. Start here.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #e3b341;">
+  <div style="font-weight:600;color:#e3b341;margin-bottom:6px;">ATR — volatility-based</div>
+  <p style="margin:0 0 6px;">ATR (Average True Range) is the average daily price move in dollars. This method sizes each leg so their <em>dollar risk is equal</em>. If BTC moves $2,000/day and ETH $100/day, you need 20× more ETH contracts.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Use when assets have very different volatility.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #8b949e;">
+  <div style="font-weight:600;color:#8b949e;margin-bottom:6px;">Equal $ — equal dollars</div>
+  <p style="margin:0 0 6px;">Simplest method: buy S1 and sell S2 for the same dollar amount. Ignores β and volatility — the position may be unbalanced.</p>
+  <div style="color:#8b949e;font-size:12px;">⚠️ Good only for quick experiments.</div>
+</div>
+
+<h3>Example: BTC/ETH, Size = $1,000</h3>
+<div style="background:#161b22;border-radius:6px;padding:12px;font-family:monospace;font-size:13px;margin:10px 0;">
+  <div>BTC = $65,000 | ETH = $3,200 | β = 0.82</div>
+  <div>ATR_BTC = $1,950/day | ATR_ETH = $96/day</div>
+  <br/>
+  <div style="color:#3fb950;"><strong>OLS β:</strong> BTC = 0.0154 ($1000) | ETH = 0.256 ($820) → sized by β</div>
+  <div style="color:#e3b341;"><strong>ATR:</strong> BTC = 0.0154 ($1000) | ETH = 0.313 ($1001) → equal risk: 0.0154×$1950 = 0.313×$96 = $30/day</div>
+  <div style="color:#8b949e;"><strong>Equal $:</strong> BTC = 0.0154 ($1000) | ETH = 0.313 ($1001) → same $ both legs</div>
+</div>
+<div class="callout">💡 <strong>Position Preview</strong> — before clicking Long/Short, the panel below shows exact quantities and dollar values for the selected method.</div>`
     },
     {
       id: 'risk',
