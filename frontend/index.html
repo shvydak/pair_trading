@@ -118,6 +118,48 @@
     .guide-content .formula { background: #0f1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 12px; color: #e3b341; margin: 10px 0; }
     .guide-content .callout { background: #1c2333; border-left: 3px solid #58a6ff; border-radius: 0 6px 6px 0; padding: 10px 14px; margin: 12px 0; }
     .guide-content .callout.green { border-left-color: #3fb950; }
+    .market-context {
+      background:
+        linear-gradient(135deg, rgba(88,166,255,0.14), rgba(15,17,23,0.1)),
+        #111722;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .market-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid #30363d;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(201, 209, 217, 0.04);
+      color: #c9d1d9;
+    }
+    .market-chip.active-usdt {
+      border-color: rgba(88, 166, 255, 0.55);
+      background: rgba(88, 166, 255, 0.12);
+      color: #9ecbff;
+    }
+    .market-chip.active-usdc {
+      border-color: rgba(63, 185, 80, 0.55);
+      background: rgba(63, 185, 80, 0.12);
+      color: #8de79d;
+    }
+    .market-chip.warning {
+      border-color: rgba(248, 81, 73, 0.5);
+      background: rgba(248, 81, 73, 0.1);
+      color: #ffb0ab;
+    }
+    .balance-card-active {
+      border-color: rgba(88, 166, 255, 0.7) !important;
+      box-shadow: inset 0 0 0 1px rgba(88, 166, 255, 0.18);
+      background: linear-gradient(180deg, rgba(88,166,255,0.1), rgba(28,35,51,0.75));
+    }
     .guide-content .callout.yellow { border-left-color: #d29922; }
     .guide-content .callout.red { border-left-color: #f85149; }
     .guide-content table { font-size: 12px; margin: 10px 0; }
@@ -235,6 +277,17 @@
       // positions
       usdt_balance: 'USDT Balance',
       total_prefix: 'Total:',
+      market_context: 'Market Context',
+      market_ready: 'Trading venue',
+      market_same_required: 'Use the same margin asset on both legs. Mixed USDT/USDC pairs can be analysed, but trading is disabled.',
+      market_detecting: 'Type symbols to detect whether the pair runs on USDT-M or USDC-M.',
+      market_filter: 'Market Filter',
+      market_filter_all: 'All',
+      market_filter_usdt: 'USDT-M',
+      market_filter_usdc: 'USDC-M',
+      market_balances: 'Futures Balances',
+      balance_total_label: 'Total',
+      balance_used_label: 'Used',
       refresh: 'Refresh',
       open_positions: 'Open Positions',
       th_symbol: 'Symbol',
@@ -261,6 +314,10 @@
       toast_trade_error: 'Trade error: ',
       toast_run_analyze: 'Run Analyze first',
       trade_ready: 'Ready: ',
+      trade_ready_market: 'Ready: {s1} / {s2} on {market}',
+      trade_mixed_assets: 'Trading disabled: both legs must use the same margin asset.',
+      pretrade_market_ok: 'Pair market: {market}',
+      pretrade_market_bad: 'Mixed market: {a1} + {a2}',
 
       confirm_close: 'Close all positions?',
       confirm_long: 'LONG spread: {s1}/{s2} for ${size}?',
@@ -397,6 +454,17 @@
 
       usdt_balance: 'Баланс USDT',
       total_prefix: 'Итого:',
+      market_context: 'Контекст рынка',
+      market_ready: 'Торговая площадка',
+      market_same_required: 'Для торговли обе ноги должны быть в одном margin asset. Смешанные пары USDT/USDC можно анализировать, но торговля будет отключена.',
+      market_detecting: 'Введите символы, чтобы определить, работает пара в USDT-M или USDC-M.',
+      market_filter: 'Фильтр рынка',
+      market_filter_all: 'Все',
+      market_filter_usdt: 'USDT-M',
+      market_filter_usdc: 'USDC-M',
+      market_balances: 'Futures-балансы',
+      balance_total_label: 'Итого',
+      balance_used_label: 'Исп.',
       refresh: 'Обновить',
       open_positions: 'Открытые позиции',
       th_symbol: 'Символ',
@@ -422,6 +490,10 @@
       toast_trade_error: 'Ошибка торговли: ',
       toast_run_analyze: 'Сначала запустите анализ',
       trade_ready: 'Готово: ',
+      trade_ready_market: 'Готово: {s1} / {s2} на {market}',
+      trade_mixed_assets: 'Торговля отключена: обе ноги должны использовать один margin asset.',
+      pretrade_market_ok: 'Рынок пары: {market}',
+      pretrade_market_bad: 'Смешанный рынок: {a1} + {a2}',
 
       confirm_close: 'Закрыть все позиции?',
       confirm_long: 'ЛОНГ спред: {s1}/{s2} на ${size}?',
@@ -494,6 +566,9 @@
       const connected = document.getElementById('ws-dot').classList.contains('bg-green-500');
       lbl.textContent = connected ? t('ws_live') : t('ws_disconnected');
     }
+    updatePairContext();
+    if (state.apiStatus) renderApiStatus(state.apiStatus);
+    if (state.balances) renderBalanceCards(state.balances);
   }
 
   function setLang(lang) {
@@ -556,6 +631,31 @@
           <input id="sym2-input" list="sym2-list" placeholder="ETHUSDT" value="ETHUSDT"
             class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
           <datalist id="sym2-list"></datalist>
+        </div>
+
+        <div class="market-context">
+          <div class="flex items-center justify-between gap-3">
+            <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted" data-i18n="market_context">Market Context</div>
+            <span id="pair-market-badge" class="market-chip">-</span>
+          </div>
+          <div id="pair-market-note" class="text-[11px] leading-relaxed text-muted mt-2" data-i18n="market_detecting">
+            Type symbols to detect whether the pair runs on USDT-M or USDC-M.
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs text-muted mb-1.5 block" data-i18n="market_filter">Market Filter</label>
+          <div class="flex gap-1" id="market-filter-btns">
+            <button onclick="setMarketFilter('ALL')" data-market-filter="ALL" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
+              <span data-i18n="market_filter_all">All</span>
+            </button>
+            <button onclick="setMarketFilter('USDT')" data-market-filter="USDT" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+              <span data-i18n="market_filter_usdt">USDT-M</span>
+            </button>
+            <button onclick="setMarketFilter('USDC')" data-market-filter="USDC" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+              <span data-i18n="market_filter_usdc">USDC-M</span>
+            </button>
+          </div>
         </div>
 
         <div>
@@ -949,11 +1049,21 @@
     <div id="pane-positions" class="tab-pane hidden p-6 flex-col gap-5">
 
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4">
-          <div class="bg-card rounded-lg px-4 py-3 border border-border">
-            <div class="text-xs text-muted mb-1" data-i18n="usdt_balance">USDT Balance</div>
-            <div id="balance-free" class="text-xl font-bold text-white">–</div>
-            <div id="balance-total" class="text-xs text-muted">–</div>
+        <div class="flex items-center gap-4 w-full">
+          <div class="w-full max-w-2xl">
+            <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted mb-2" data-i18n="market_balances">Futures Balances</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
+            <div id="balance-card-USDT" class="bg-card rounded-lg px-4 py-3 border border-border">
+              <div class="text-xs text-muted mb-1">USDT-M</div>
+              <div id="balance-free-USDT" class="text-xl font-bold text-white">–</div>
+              <div id="balance-meta-USDT" class="text-xs text-muted">–</div>
+            </div>
+            <div id="balance-card-USDC" class="bg-card rounded-lg px-4 py-3 border border-border">
+              <div class="text-xs text-muted mb-1">USDC-M</div>
+              <div id="balance-free-USDC" class="text-xl font-bold text-white">–</div>
+              <div id="balance-meta-USDC" class="text-xs text-muted">–</div>
+            </div>
+            </div>
           </div>
         </div>
         <button onclick="refreshPositions()"
@@ -1030,10 +1140,15 @@ const API = 'http://localhost:8080';
 let state = {
   timeframe: '1h',
   symbols: [],
+  markets: [],
+  marketFilter: 'ALL',
   historyData: null,
   hedgeRatio: null,
   atr1: null,
   atr2: null,
+  pairMeta: null,
+  balances: null,
+  apiStatus: null,
   ws: null,
   spreadChart: null,
   priceChart: null,
@@ -1046,10 +1161,96 @@ let state = {
 window.addEventListener('DOMContentLoaded', () => {
   fetchSymbols();
   setTimeframe('1h');
+  setMarketFilter(state.marketFilter);
   applyLocale();
+  ['sym1-input', 'sym2-input'].forEach(id => {
+    document.getElementById(id).addEventListener('input', handleSymbolInputChange);
+  });
+  updatePairContext();
   checkApiStatus();
   initTooltips();
 });
+
+function inferMarginAsset(symbol) {
+  const value = String(symbol || '').trim().toUpperCase();
+  if (!value) return null;
+  for (const asset of ['USDT', 'USDC']) {
+    if (value.endsWith(`:${asset}`) || value.includes(`/${asset}`) || value.endsWith(asset)) {
+      return asset;
+    }
+  }
+  return null;
+}
+
+function getCurrentPairMeta() {
+  if (state.pairMeta) return state.pairMeta;
+  const asset1 = inferMarginAsset(document.getElementById('sym1-input')?.value);
+  const asset2 = inferMarginAsset(document.getElementById('sym2-input')?.value);
+  const shared = asset1 && asset1 === asset2 ? asset1 : null;
+  return {
+    margin_asset1: asset1,
+    margin_asset2: asset2,
+    shared_margin_asset: shared,
+    tradeable: Boolean(shared && ['USDT', 'USDC'].includes(shared)),
+  };
+}
+
+function formatMarketLabel(asset) {
+  return asset ? `${asset}-M` : '—';
+}
+
+function formatAssetAmount(value, asset) {
+  return `${fmt(value, 2)} ${asset || 'USD'}`;
+}
+
+function handleSymbolInputChange() {
+  state.pairMeta = null;
+  state.historyData = null;
+  state.hedgeRatio = null;
+  state.atr1 = null;
+  state.atr2 = null;
+  if (state.ws) {
+    state.ws.close();
+    state.ws = null;
+    setWsStatus(false);
+  }
+  enableTrading(false);
+  updateSizePreview();
+  updatePairContext();
+  if (state.apiStatus) renderApiStatus(state.apiStatus);
+  if (state.balances) renderBalanceCards(state.balances);
+}
+
+function updatePairContext(meta = null) {
+  if (meta) state.pairMeta = meta;
+  const pair = getCurrentPairMeta();
+  const badge = document.getElementById('pair-market-badge');
+  const note = document.getElementById('pair-market-note');
+  if (!badge || !note) return;
+  const shared = pair.shared_margin_asset;
+
+  badge.className = 'market-chip';
+  if (shared === 'USDT') {
+    badge.classList.add('active-usdt');
+    badge.textContent = 'USDT-M';
+    note.textContent = `${t('market_ready')}: USDT-M`;
+    note.className = 'text-[11px] leading-relaxed text-muted mt-2';
+  } else if (shared === 'USDC') {
+    badge.classList.add('active-usdc');
+    badge.textContent = 'USDC-M';
+    note.textContent = `${t('market_ready')}: USDC-M`;
+    note.className = 'text-[11px] leading-relaxed text-muted mt-2';
+  } else if (pair.margin_asset1 || pair.margin_asset2) {
+    badge.classList.add('warning');
+    badge.textContent = `${pair.margin_asset1 || '?'} / ${pair.margin_asset2 || '?'}`;
+    note.textContent = t('market_same_required');
+    note.className = 'text-[11px] leading-relaxed text-red-300 mt-2';
+  } else {
+    badge.textContent = '—';
+    note.textContent = t('market_detecting');
+    note.className = 'text-[11px] leading-relaxed text-muted mt-2';
+  }
+}
 
 function initTooltips() {
   document.querySelectorAll('.tooltip-container').forEach(container => {
@@ -1108,12 +1309,38 @@ async function fetchSymbols() {
   try {
     const res = await fetch(`${API}/api/symbols`);
     const data = await res.json();
-    state.symbols = data.symbols || [];
-    populateDatalist('sym1-list', state.symbols);
-    populateDatalist('sym2-list', state.symbols);
+    state.markets = data.markets || (data.symbols || []).map(id => ({ id, margin_asset: inferMarginAsset(id) }));
+    state.symbols = state.markets.map(m => m.id);
+    refreshSymbolPickers();
   } catch(e) {
     showToast(t('toast_symbols_fail') + e.message, 'error');
   }
+}
+
+function getFilteredSymbols() {
+  const filter = state.marketFilter || 'ALL';
+  if (filter === 'ALL') return state.markets.map(m => m.id);
+  return state.markets
+    .filter(m => (m.margin_asset || inferMarginAsset(m.id)) === filter)
+    .map(m => m.id);
+}
+
+function refreshSymbolPickers() {
+  const symbols = getFilteredSymbols();
+  populateDatalist('sym1-list', symbols);
+  populateDatalist('sym2-list', symbols);
+}
+
+function setMarketFilter(filter) {
+  state.marketFilter = filter;
+  document.querySelectorAll('.market-filter-btn').forEach(btn => {
+    const active = btn.dataset.marketFilter === filter;
+    btn.classList.toggle('border-accent', active);
+    btn.classList.toggle('text-accent', active);
+    btn.classList.toggle('border-border', !active);
+    btn.classList.toggle('text-muted', !active);
+  });
+  refreshSymbolPickers();
 }
 
 function populateDatalist(id, symbols) {
@@ -1184,6 +1411,10 @@ async function runAnalyze() {
     state.hedgeRatio = data.hedge_ratio;
     state.atr1 = data.stats?.atr1 ?? null;
     state.atr2 = data.stats?.atr2 ?? null;
+    state.pairMeta = data.pair || null;
+    updatePairContext(state.pairMeta);
+    if (state.apiStatus) renderApiStatus(state.apiStatus);
+    if (state.balances) renderBalanceCards(state.balances);
 
     renderStats(data);
     renderSpreadChart(data);
@@ -1194,6 +1425,7 @@ async function runAnalyze() {
     showToast(t('toast_analyze_done'), 'success');
     switchTab('spread');
   } catch(e) {
+    enableTrading(false);
     showToast(t('toast_error') + e.message, 'error');
   } finally {
     setLoading(btn, false, t('analyze_btn'));
@@ -1478,9 +1710,8 @@ async function refreshPositions() {
     ]);
     const posData = await posRes.json();
     const balData = await balRes.json();
-
-    document.getElementById('balance-free').textContent = '$' + fmt(balData.free, 2);
-    document.getElementById('balance-total').textContent = t('total_prefix') + ' $' + fmt(balData.total, 2);
+    state.balances = balData.assets || null;
+    renderBalanceCards(state.balances);
 
     const tbody = document.getElementById('positions-body');
     const positions = posData.positions || [];
@@ -1491,14 +1722,15 @@ async function refreshPositions() {
     tbody.innerHTML = positions.map(p => {
       const pnlClass  = (p.unrealized_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400';
       const sideClass = p.side === 'long' ? 'text-green-400' : 'text-red-400';
+      const asset = inferMarginAsset(p.symbol);
       return `<tr>
         <td class="font-medium text-white">${p.symbol}</td>
         <td class="${sideClass} font-semibold">${p.side?.toUpperCase()}</td>
         <td>${fmt(p.size, 4)}</td>
         <td>${fmt(p.entry_price, 4)}</td>
         <td>${fmt(p.mark_price, 4)}</td>
-        <td>$${fmt(p.notional, 2)}</td>
-        <td class="${pnlClass}">$${fmt(p.unrealized_pnl, 4)}</td>
+        <td>${formatAssetAmount(p.notional, asset)}</td>
+        <td class="${pnlClass}">${formatAssetAmount(p.unrealized_pnl, asset)}</td>
         <td>${p.leverage}x</td>
         <td class="text-muted">${p.liquidation_price ? fmt(p.liquidation_price, 4) : '–'}</td>
       </tr>`;
@@ -1506,6 +1738,25 @@ async function refreshPositions() {
   } catch(e) {
     showToast(t('toast_positions_fail') + e.message, 'error');
   }
+}
+
+function renderBalanceCards(assets = {}) {
+  ['USDT', 'USDC'].forEach(asset => {
+    const card = document.getElementById(`balance-card-${asset}`);
+    const freeEl = document.getElementById(`balance-free-${asset}`);
+    const metaEl = document.getElementById(`balance-meta-${asset}`);
+    const data = assets?.[asset] || {};
+    if (!card || !freeEl || !metaEl) return;
+    freeEl.textContent = '$' + fmt(data.free, 2);
+    metaEl.textContent = `${t('balance_total_label')}: $${fmt(data.total, 2)} · ${t('balance_used_label')}: $${fmt(data.used, 2)}`;
+  });
+
+  const activeAsset = getCurrentPairMeta().shared_margin_asset;
+  ['USDT', 'USDC'].forEach(asset => {
+    const card = document.getElementById(`balance-card-${asset}`);
+    if (!card) return;
+    card.classList.toggle('balance-card-active', asset === activeAsset);
+  });
 }
 
 // ------------------------------------------------------------------ //
@@ -1590,16 +1841,30 @@ function updateSizePreview() {
 //  Trading
 // ------------------------------------------------------------------ //
 function enableTrading(yes, sym1, sym2) {
+  const pair = getCurrentPairMeta();
+  const canTrade = yes && !!pair.tradeable;
   ['long-btn','short-btn','close-btn'].forEach(id => {
     const btn = document.getElementById(id);
-    btn.disabled = !yes;
-    btn.classList.toggle('opacity-40', !yes);
-    btn.classList.toggle('cursor-not-allowed', !yes);
+    btn.disabled = !canTrade;
+    btn.classList.toggle('opacity-40', !canTrade);
+    btn.classList.toggle('cursor-not-allowed', !canTrade);
   });
   if (yes) {
-    document.getElementById('trade-info').innerHTML =
-      `<span class="text-xs text-green-400">${t('trade_ready')}${sym1} / ${sym2}</span>`;
+    const info = document.getElementById('trade-info');
+    if (pair.tradeable) {
+      info.innerHTML = `<span class="text-xs text-green-400">${
+        t('trade_ready_market')
+          .replace('{s1}', sym1)
+          .replace('{s2}', sym2)
+          .replace('{market}', formatMarketLabel(pair.shared_margin_asset))
+      }</span>`;
+    } else {
+      info.innerHTML = `<span class="text-xs text-red-300">${t('trade_mixed_assets')}</span>`;
+    }
     updateSizePreview();
+  } else {
+    document.getElementById('trade-info').innerHTML =
+      `<span class="text-xs text-muted">${t('trade_hint')}</span>`;
   }
 }
 
@@ -1705,19 +1970,45 @@ function renderPreTrade(data) {
   const results = document.getElementById('pretrade-results');
   const allOk = data.ok;
   let html = '';
+  const pair = data.pair || {};
+  const formatCheckName = (name) => {
+    if (name === 'margin_asset') return t('market_context');
+    if (name === 'balance') return currentLang === 'ru' ? 'Баланс' : 'Balance';
+    if (name === 'lot_size') return currentLang === 'ru' ? 'Лот / округление' : 'Lot / rounding';
+    if (name === 'leverage') return t('leverage_label');
+    if (name.startsWith('min_notional_')) {
+      const symbol = name.replace('min_notional_', '');
+      return `${currentLang === 'ru' ? 'Мин. номинал' : 'Min notional'} ${symbol}`;
+    }
+    return name;
+  };
+
+  if (pair.shared_margin_asset) {
+    html += `<div class="flex items-center justify-between border border-border rounded-md px-2.5 py-2 bg-card/40">
+      <span class="text-muted text-[10px] uppercase tracking-[0.14em]">${t('pretrade_market_ok').replace('{market}', formatMarketLabel(pair.shared_margin_asset))}</span>
+      <span class="market-chip ${pair.shared_margin_asset === 'USDC' ? 'active-usdc' : 'active-usdt'}">${formatMarketLabel(pair.shared_margin_asset)}</span>
+    </div>`;
+  } else if (pair.margin_asset1 || pair.margin_asset2) {
+    html += `<div class="flex items-center justify-between border border-red/30 rounded-md px-2.5 py-2 bg-red-500/5">
+      <span class="text-red-300 text-[10px] uppercase tracking-[0.14em]">${t('pretrade_market_bad').replace('{a1}', pair.margin_asset1 || '?').replace('{a2}', pair.margin_asset2 || '?')}</span>
+      <span class="market-chip warning">${(pair.margin_asset1 || '?')} / ${(pair.margin_asset2 || '?')}</span>
+    </div>`;
+  }
 
   for (const c of (data.checks || [])) {
     const icon = c.ok === true ? '✓' : c.ok === false ? '✗' : '?';
     const color = c.ok === true ? 'text-green-400' : c.ok === false ? 'text-red-400' : 'text-yellow-400';
     html += `<div class="flex gap-1.5"><span class="${color} font-bold w-3 flex-shrink-0">${icon}</span>
-      <div><div class="text-white font-medium">${c.name}</div><div class="text-muted text-[10px]">${c.detail}</div></div></div>`;
+      <div><div class="text-white font-medium">${formatCheckName(c.name)}</div><div class="text-muted text-[10px]">${c.detail}</div></div></div>`;
   }
 
   if (data.sizes) {
     const s = data.sizes;
+    const asset1 = pair.margin_asset1 || inferMarginAsset(document.getElementById('sym1-input')?.value);
+    const asset2 = pair.margin_asset2 || inferMarginAsset(document.getElementById('sym2-input')?.value);
     html += `<div class="border-t border-border pt-1.5 mt-1 text-muted font-mono text-[10px] space-y-0.5">
-      <div>S1: <span class="text-white">${Number(s.rounded_qty1).toFixed(6)}</span> × $${Number(data.prices?.price1 || 0).toFixed(2)} = <span class="text-yellow-300">$${Number(s.notional1).toFixed(2)}</span></div>
-      <div>S2: <span class="text-white">${Number(s.rounded_qty2).toFixed(6)}</span> × $${Number(data.prices?.price2 || 0).toFixed(2)} = <span class="text-yellow-300">$${Number(s.notional2).toFixed(2)}</span></div>
+      <div>S1: <span class="text-white">${Number(s.rounded_qty1).toFixed(6)}</span> × $${Number(data.prices?.price1 || 0).toFixed(2)} = <span class="text-yellow-300">${formatAssetAmount(Number(s.notional1), asset1)}</span></div>
+      <div>S2: <span class="text-white">${Number(s.rounded_qty2).toFixed(6)}</span> × $${Number(data.prices?.price2 || 0).toFixed(2)} = <span class="text-yellow-300">${formatAssetAmount(Number(s.notional2), asset2)}</span></div>
     </div>`;
   }
 
@@ -1894,9 +2185,15 @@ async function checkApiStatus() {
   try {
     const res = await fetch(`${API}/api/status`);
     const data = await res.json();
+    state.apiStatus = data;
+    if (data.connected && data.balances) {
+      state.balances = data.balances;
+      renderBalanceCards(state.balances);
+    }
     renderApiStatus(data);
   } catch(e) {
-    renderApiStatus({ connected: false, reason: 'network_error' });
+    state.apiStatus = { connected: false, reason: 'network_error' };
+    renderApiStatus(state.apiStatus);
   } finally {
     btn.classList.remove('animate-spin');
   }
@@ -1904,20 +2201,39 @@ async function checkApiStatus() {
 
 function renderApiStatus(data) {
   const el = document.getElementById('api-status-content');
+  const pair = getCurrentPairMeta();
+  const activeAsset = pair.shared_margin_asset;
+  const renderBalanceRow = (asset, balance = {}) => {
+    const isActive = asset === activeAsset;
+    const chipClass = isActive
+      ? (asset === 'USDC' ? 'market-chip active-usdc' : 'market-chip active-usdt')
+      : 'market-chip';
+    return `<div class="rounded-md border border-border px-2.5 py-2 ${isActive ? 'bg-surface/80' : 'bg-surface/40'}">
+      <div class="flex items-center justify-between mb-1.5">
+        <span class="${chipClass}">${asset}-M</span>
+        <span class="text-[10px] ${isActive ? 'text-accent' : 'text-muted'}">${isActive ? t('market_ready') : '&nbsp;'}</span>
+      </div>
+      <div class="flex justify-between text-[11px] mb-1">
+        <span class="text-muted">${t('api_free')}</span>
+        <span class="text-white font-mono">$${fmt(balance.free, 2)}</span>
+      </div>
+      <div class="flex justify-between text-[10px]">
+        <span class="text-muted">${t('balance_total_label')}</span>
+        <span class="text-muted font-mono">$${fmt(balance.total, 2)}</span>
+      </div>
+    </div>`;
+  };
+
   if (data.connected) {
-    const b = data.balance || {};
+    const balances = data.balances || {};
     el.innerHTML = `
       <div class="flex items-center gap-1.5 mb-2.5">
         <span class="w-2 h-2 rounded-full bg-green-400 shrink-0"></span>
         <span class="text-green-400 font-medium">${t('api_connected')}</span>
       </div>
-      <div class="flex justify-between mb-1">
-        <span class="text-muted">${t('api_free')}</span>
-        <span class="text-white font-mono">$${fmt(b.free, 2)}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-muted">${t('api_used')}</span>
-        <span class="text-muted font-mono">$${fmt(b.used, 2)}</span>
+      <div class="grid grid-cols-1 gap-2">
+        ${renderBalanceRow('USDT', balances.USDT)}
+        ${renderBalanceRow('USDC', balances.USDC)}
       </div>`;
   } else if (data.reason === 'no_keys') {
     el.innerHTML = `
@@ -2679,7 +2995,7 @@ const GUIDE = {
 <h3>Проверка перед сделкой</h3>
 <p>Кнопка <strong>«Проверка перед сделкой»</strong> запрашивает у бэкенда актуальные данные и показывает:</p>
 <ul style="font-size:13px;line-height:2;">
-  <li>✓/✗ <strong>Баланс</strong> — достаточно ли свободных USDT для маржи</li>
+  <li>✓/✗ <strong>Баланс</strong> — достаточно ли свободных USDT или USDC для маржи выбранного рынка</li>
   <li>✓/✗ <strong>Минимальный номинал</strong> — проходит ли каждая нога через минимальный порог биржи (~5 USDT)</li>
   <li>✓/✗ <strong>Округление лотов</strong> — показывает точные объёмы после округления до stepSize</li>
   <li>✓/✗ <strong>Плечо</strong> — в допустимом диапазоне</li>
@@ -2755,7 +3071,7 @@ const GUIDE = {
 <div class="callout green"><strong>Что делает система:</strong> перед отправкой бэкенд автоматически округляет количество. Вам ничего делать не нужно — точное значение видно в «Проверке перед сделкой».</div>
 
 <h3>Минимальный размер ордера</h3>
-<p>Binance устанавливает минимальный номинал (~5–10 USDT на ногу). Если ваш расчётный объём меньше, сделка будет заблокирована до отправки с понятным сообщением.</p>
+<p>Binance устанавливает минимальный номинал отдельно для каждого фьючерса и рынка (<code>USDT-M</code> или <code>USDC-M</code>). Если ваш расчётный объём ниже порога после округления количества, сделка будет заблокирована до отправки с понятным сообщением.</p>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:10px 0;border-left:3px solid #f85149;">
   <div style="font-family:monospace;font-size:12px;color:#c9d1d9;">ETH/USDT: notional $3.20 is below exchange minimum $5.00</div>
@@ -3382,7 +3698,7 @@ const GUIDE = {
 <h3>Pre-Trade Check</h3>
 <p>Click <strong>"Pre-Trade Check"</strong> before opening — the backend validates in real time:</p>
 <ul style="font-size:13px;line-height:2;">
-  <li>✓/✗ <strong>Balance</strong> — enough free USDT for margin</li>
+  <li>✓/✗ <strong>Balance</strong> — enough free USDT or USDC for the selected futures market</li>
   <li>✓/✗ <strong>Min notional</strong> — each leg exceeds Binance's minimum order size (~5 USDT)</li>
   <li>✓/✗ <strong>Lot rounding</strong> — shows exact quantities after rounding to exchange stepSize</li>
   <li>✓/✗ <strong>Leverage</strong> — within the allowed range</li>
@@ -3448,7 +3764,7 @@ const GUIDE = {
 <div class="callout green"><strong>What the system does:</strong> before submitting each order, the backend automatically rounds to the exchange's step. The exact rounded value is shown in Pre-Trade Check.</div>
 
 <h3>Minimum Order Size</h3>
-<p>Binance requires a minimum notional (~5–10 USDT per leg). If your calculated size is below this, the trade is blocked before submission with a clear error message.</p>
+<p>Binance sets a minimum notional per futures contract and margin market (<code>USDT-M</code> or <code>USDC-M</code>). If your calculated size is below the threshold after quantity rounding, the trade is blocked before submission with a clear error message.</p>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:10px 0;border-left:3px solid #f85149;">
   <div style="font-family:monospace;font-size:12px;color:#c9d1d9;">ETH/USDT: notional $3.20 is below exchange minimum $5.00</div>
@@ -3553,6 +3869,8 @@ function renderGuide(idx) {
 function applyGuideExample(ex) {
   if (ex.sym1) document.getElementById('sym1-input').value = ex.sym1;
   if (ex.sym2) document.getElementById('sym2-input').value = ex.sym2;
+  state.pairMeta = null;
+  updatePairContext();
   if (ex.tf)   setTimeframe(ex.tf);
   if (ex.limit)   document.getElementById('limit-input').value = ex.limit;
   if (ex.zwindow) document.getElementById('zwindow-input').value = ex.zwindow;

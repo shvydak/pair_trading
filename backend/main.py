@@ -62,6 +62,56 @@ strategy = PairTradingStrategy()
 # active smart executions: exec_id -> ExecContext
 active_executions: dict = {}
 
+SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
+
+
+def _pair_meta(meta1: dict, meta2: dict) -> dict:
+    asset1 = meta1.get("margin_asset")
+    asset2 = meta2.get("margin_asset")
+    shared_asset = asset1 if asset1 == asset2 else None
+    return {
+        "symbol1": meta1.get("symbol"),
+        "symbol2": meta2.get("symbol"),
+        "id1": meta1.get("id"),
+        "id2": meta2.get("id"),
+        "margin_asset1": asset1,
+        "margin_asset2": asset2,
+        "shared_margin_asset": shared_asset,
+        "tradeable": bool(shared_asset and shared_asset in SUPPORTED_MARGIN_ASSETS),
+    }
+
+
+async def _resolve_pair(symbol1: str, symbol2: str) -> tuple[dict, dict]:
+    raw1 = _normalise_symbol(symbol1)
+    raw2 = _normalise_symbol(symbol2)
+    meta1, meta2 = await asyncio.gather(
+        client.get_market_info(raw1),
+        client.get_market_info(raw2),
+    )
+    return meta1, meta2
+
+
+def _shared_margin_asset(meta1: dict, meta2: dict) -> Optional[str]:
+    asset1 = meta1.get("margin_asset")
+    asset2 = meta2.get("margin_asset")
+    if asset1 == asset2 and asset1 in SUPPORTED_MARGIN_ASSETS:
+        return asset1
+    return None
+
+
+def _require_tradeable_pair(meta1: dict, meta2: dict) -> str:
+    margin_asset = _shared_margin_asset(meta1, meta2)
+    if margin_asset:
+        return margin_asset
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Trading requires both legs to use the same supported margin asset. "
+            f"{meta1.get('id')} settles in {meta1.get('margin_asset')}, "
+            f"{meta2.get('id')} settles in {meta2.get('margin_asset')}."
+        ),
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -96,12 +146,13 @@ app.add_middleware(
 
 @app.get("/api/symbols")
 async def get_symbols():
-    """Return list of available USDT-M perpetual futures symbols."""
+    """Return list of available USDT-M and USDC-M perpetual futures symbols."""
     try:
-        symbols = await client.get_available_futures()
-        # Return short names (e.g. BTC/USDT -> BTCUSDT) for convenience
-        short = [s.replace("/", "") for s in symbols]
-        return {"symbols": short}
+        markets = await client.get_available_futures_meta()
+        return {
+            "symbols": [item["id"] for item in markets],
+            "markets": markets,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -116,8 +167,9 @@ async def get_history(
 ):
     """Return OHLCV history, spread, z-score and pair statistics."""
     try:
-        sym1 = _normalise_symbol(symbol1)
-        sym2 = _normalise_symbol(symbol2)
+        meta1, meta2 = await _resolve_pair(symbol1, symbol2)
+        sym1 = meta1["symbol"]
+        sym2 = meta2["symbol"]
 
         df1, df2 = await asyncio.gather(
             client.fetch_ohlcv(sym1, timeframe, limit),
@@ -145,6 +197,7 @@ async def get_history(
         timestamps = [str(ts) for ts in price1.index]
 
         return _clean({
+            "pair": _pair_meta(meta1, meta2),
             "timestamps": timestamps,
             "price1": price1.tolist(),
             "price2": price2.tolist(),
@@ -181,8 +234,9 @@ async def run_backtest(
 ):
     """Run a backtest and return results."""
     try:
-        sym1 = _normalise_symbol(symbol1)
-        sym2 = _normalise_symbol(symbol2)
+        meta1, meta2 = await _resolve_pair(symbol1, symbol2)
+        sym1 = meta1["symbol"]
+        sym2 = meta2["symbol"]
 
         df1, df2 = await asyncio.gather(
             client.fetch_ohlcv(sym1, timeframe, limit),
@@ -214,8 +268,8 @@ async def get_status():
     if not client.has_creds:
         return {"connected": False, "reason": "no_keys"}
     try:
-        balance = await client.get_balance()
-        return {"connected": True, "balance": _clean(balance)}
+        balances = await client.get_all_balances()
+        return {"connected": True, "balances": _clean(balances)}
     except Exception as e:
         return {"connected": False, "reason": "auth_error", "message": str(e)}
 
@@ -231,11 +285,14 @@ async def get_positions():
 
 
 @app.get("/api/balance")
-async def get_balance():
-    """Return USDT balance."""
+async def get_balance(asset: Optional[str] = Query(None)):
+    """Return futures balance for a specific asset or all supported assets."""
     try:
-        balance = await client.get_balance()
-        return _clean(balance)
+        if asset:
+            balance = await client.get_balance(asset)
+            return _clean(balance)
+        balances = await client.get_all_balances()
+        return _clean({"assets": balances})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -300,8 +357,11 @@ async def pre_trade_check(
     Returns checks: balance, min_notional, lot_size, leverage.
     """
     try:
-        sym1 = _normalise_symbol(symbol1)
-        sym2 = _normalise_symbol(symbol2)
+        meta1, meta2 = await _resolve_pair(symbol1, symbol2)
+        sym1 = meta1["symbol"]
+        sym2 = meta2["symbol"]
+        pair = _pair_meta(meta1, meta2)
+        margin_asset = _shared_margin_asset(meta1, meta2)
 
         ticker1, ticker2 = await asyncio.gather(
             client.fetch_ticker(sym1),
@@ -324,20 +384,47 @@ async def pre_trade_check(
 
         checks = []
 
+        checks.append({
+            "name": "margin_asset",
+            "ok": bool(margin_asset),
+            "detail": (
+                f"Shared margin asset: {margin_asset}"
+                if margin_asset
+                else (
+                    "Trading requires both legs to use the same margin asset. "
+                    f"{meta1['id']} uses {meta1.get('margin_asset')}, "
+                    f"{meta2['id']} uses {meta2.get('margin_asset')}."
+                )
+            ),
+        })
+
         # Balance check
-        if client.has_creds:
+        if client.has_creds and margin_asset:
             try:
-                balance = await client.get_balance()
+                balance = await client.get_balance(margin_asset)
                 free = balance.get("free", 0)
                 checks.append({
                     "name": "balance",
                     "ok": free >= size_usd * 0.5,  # rough margin estimate
-                    "detail": f"Free USDT: {free:.2f}, required ~{size_usd * 0.5:.2f} (margin)",
+                    "detail": (
+                        f"Free {margin_asset}: {free:.2f}, "
+                        f"required ~{size_usd * 0.5:.2f} ({margin_asset} margin)"
+                    ),
                 })
             except Exception as e:
                 checks.append({"name": "balance", "ok": False, "detail": str(e)})
+        elif margin_asset:
+            checks.append({
+                "name": "balance",
+                "ok": None,
+                "detail": f"No API keys — cannot check {margin_asset} balance",
+            })
         else:
-            checks.append({"name": "balance", "ok": None, "detail": "No API keys — cannot check balance"})
+            checks.append({
+                "name": "balance",
+                "ok": False,
+                "detail": "Balance check skipped because the pair mixes different margin assets",
+            })
 
         # Min notional checks
         ok1, notional1, min1 = await client.check_min_notional(sym1, qty1, price1)
@@ -376,6 +463,8 @@ async def pre_trade_check(
 
         return _clean({
             "ok": all_ok,
+            "pair": pair,
+            "margin_asset": margin_asset,
             "checks": checks,
             "sizes": {
                 "qty1": qty1,
@@ -398,8 +487,10 @@ async def start_smart_trade(req: SmartTradeRequest):
     Returns exec_id for polling via GET /api/execution/{exec_id}.
     """
     try:
-        sym1 = _normalise_symbol(req.symbol1)
-        sym2 = _normalise_symbol(req.symbol2)
+        meta1, meta2 = await _resolve_pair(req.symbol1, req.symbol2)
+        _require_tradeable_pair(meta1, meta2)
+        sym1 = meta1["symbol"]
+        sym2 = meta2["symbol"]
 
         ticker1, ticker2 = await asyncio.gather(
             client.fetch_ticker(sym1),
@@ -499,8 +590,10 @@ async def execute_trade(req: TradeRequest):
     action=close -> flatten both legs
     """
     try:
-        sym1 = _normalise_symbol(req.symbol1)
-        sym2 = _normalise_symbol(req.symbol2)
+        meta1, meta2 = await _resolve_pair(req.symbol1, req.symbol2)
+        _require_tradeable_pair(meta1, meta2)
+        sym1 = meta1["symbol"]
+        sym2 = meta2["symbol"]
 
         ticker1, ticker2 = await asyncio.gather(
             client.fetch_ticker(sym1),
@@ -640,8 +733,12 @@ async def websocket_stream(websocket: WebSocket):
     try:
         data = await websocket.receive_text()
         params = json.loads(data)
-        symbol1 = _normalise_symbol(params.get("symbol1", "BTC/USDT"))
-        symbol2 = _normalise_symbol(params.get("symbol2", "ETH/USDT"))
+        meta1, meta2 = await _resolve_pair(
+            params.get("symbol1", "BTC/USDT:USDT"),
+            params.get("symbol2", "ETH/USDT:USDT"),
+        )
+        symbol1 = meta1["symbol"]
+        symbol2 = meta2["symbol"]
         timeframe = params.get("timeframe", "1h")
         zscore_window = int(params.get("zscore_window", 20))
 
@@ -689,11 +786,12 @@ async def websocket_stream(websocket: WebSocket):
 # ---------------------------------------------------------------------------
 
 def _normalise_symbol(symbol: str) -> str:
-    """Convert BTCUSDT -> BTC/USDT for ccxt."""
+    """Convert BTCUSDT/BTCUSDC -> BTC/USDT or BTC/USDC for ccxt."""
     symbol = symbol.upper().strip()
+    if ":" in symbol:
+        return symbol
     if "/" not in symbol:
-        if symbol.endswith("USDT"):
-            return symbol[:-4] + "/USDT"
-        if symbol.endswith("BUSD"):
-            return symbol[:-4] + "/BUSD"
+        for quote in ("USDT", "USDC", "BUSD"):
+            if symbol.endswith(quote):
+                return symbol[:-len(quote)] + "/" + quote
     return symbol

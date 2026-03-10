@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+SUPPORTED_MARGIN_ASSETS = ("USDT", "USDC")
+
 
 class BinanceClient:
     def __init__(self):
@@ -57,18 +59,45 @@ class BinanceClient:
             raise RuntimeError(f"Failed to fetch ticker for {symbol}: {e}")
 
     async def get_available_futures(self) -> list[str]:
-        """Return list of USDT-M futures symbols."""
+        """Return list of active USDT-M and USDC-M perpetual futures ids."""
+        try:
+            meta = await self.get_available_futures_meta()
+            symbols = [item["id"] for item in meta]
+            return sorted(set(symbols))
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch futures symbols: {e}")
+
+    async def get_available_futures_meta(self) -> list[dict]:
+        """Return active USDT-M and USDC-M perpetual futures with metadata."""
         try:
             markets = await self.exchange.load_markets()
-            symbols = [
-                symbol for symbol, market in markets.items()
-                if market.get("quote") == "USDT"
-                and market.get("type") in ("swap", "future")
-                and market.get("active", False)
-                and market.get("linear", True)
-                and not market.get("expiry")  # perpetual only
-            ]
-            return sorted(symbols)
+            items = []
+            for symbol, market in markets.items():
+                if market.get("quote") not in SUPPORTED_MARGIN_ASSETS:
+                    continue
+                if market.get("type") not in ("swap", "future"):
+                    continue
+                if not market.get("active", False):
+                    continue
+                if not market.get("linear", True):
+                    continue
+                if market.get("expiry"):
+                    continue
+
+                margin_asset = (
+                    market.get("settle")
+                    or market.get("quote")
+                    or (market.get("info") or {}).get("marginAsset")
+                )
+                items.append({
+                    "id": market.get("id") or symbol,
+                    "symbol": market.get("symbol") or symbol,
+                    "base": market.get("base"),
+                    "quote": market.get("quote"),
+                    "margin_asset": margin_asset,
+                })
+            items.sort(key=lambda item: item["id"])
+            return items
         except Exception as e:
             raise RuntimeError(f"Failed to fetch futures symbols: {e}")
 
@@ -76,6 +105,30 @@ class BinanceClient:
         """Load markets if not yet cached."""
         if not self.exchange.markets:
             await self.exchange.load_markets()
+
+    async def get_market_info(self, symbol: str) -> dict:
+        """Resolve user input to canonical ccxt market metadata."""
+        await self._ensure_markets()
+        try:
+            market = self.exchange.market(symbol)
+        except Exception as e:
+            raise RuntimeError(f"Unknown futures symbol {symbol}: {e}")
+
+        margin_asset = (
+            market.get("settle")
+            or market.get("quote")
+            or (market.get("info") or {}).get("marginAsset")
+        )
+        return {
+            "symbol": market.get("symbol", symbol),
+            "id": market.get("id", symbol),
+            "quote": market.get("quote"),
+            "settle": market.get("settle"),
+            "margin_asset": margin_asset,
+            "base": market.get("base"),
+            "maker": market.get("maker"),
+            "taker": market.get("taker"),
+        }
 
     async def round_amount(self, symbol: str, amount: float) -> float:
         """Round amount to exchange lot-size (stepSize) precision."""
@@ -105,6 +158,12 @@ class BinanceClient:
             market = self.exchange.market(symbol)  # resolves BTC/USDT → BTC/USDT:USDT
         except Exception:
             market = {}
+        try:
+            rounded_amount = float(
+                self.exchange.amount_to_precision(market.get("symbol", symbol), amount)
+            )
+        except Exception:
+            rounded_amount = float(amount or 0.0)
         min_notional = (market.get("limits") or {}).get("cost", {}).get("min")
         # Fall back to raw Binance filter array
         if not min_notional:
@@ -113,7 +172,7 @@ class BinanceClient:
                     min_notional = float(f.get("notional") or 0)
                     break
         min_notional = float(min_notional or 0.0)
-        actual_notional = amount * price
+        actual_notional = rounded_amount * price
         return actual_notional >= min_notional, actual_notional, min_notional
 
     async def place_order(
@@ -160,15 +219,34 @@ class BinanceClient:
         except Exception as e:
             raise RuntimeError(f"Failed to fetch positions: {e}")
 
-    async def get_balance(self) -> dict:
-        """Return USDT balance."""
+    async def get_all_balances(self) -> dict:
+        """Return supported futures balances keyed by margin asset."""
         try:
             balance = await self.exchange.fetch_balance()
-            usdt = balance.get("USDT", {})
+            balances = {}
+            for asset in SUPPORTED_MARGIN_ASSETS:
+                bucket = balance.get(asset, {})
+                balances[asset] = {
+                    "total": bucket.get("total", 0.0),
+                    "free": bucket.get("free", 0.0),
+                    "used": bucket.get("used", 0.0),
+                }
+            return balances
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch balances: {e}")
+
+    async def get_balance(self, asset: str = "USDT") -> dict:
+        """Return a specific futures balance plus all supported balances."""
+        asset = (asset or "USDT").upper()
+        try:
+            balances = await self.get_all_balances()
+            selected = balances.get(asset, {"total": 0.0, "free": 0.0, "used": 0.0})
             return {
-                "total": usdt.get("total", 0.0),
-                "free": usdt.get("free", 0.0),
-                "used": usdt.get("used", 0.0),
+                "asset": asset,
+                "total": selected.get("total", 0.0),
+                "free": selected.get("free", 0.0),
+                "used": selected.get("used", 0.0),
+                "assets": balances,
             }
         except Exception as e:
             raise RuntimeError(f"Failed to fetch balance: {e}")

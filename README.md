@@ -1,6 +1,6 @@
 # Pair Trading Dashboard
 
-Statistical arbitrage dashboard for Binance USDT-M Futures.
+Statistical arbitrage dashboard for Binance Futures with support for both USDT-M and USDC-M perpetuals.
 
 Monitors the spread between two correlated assets in real time, runs backtests, and executes trades via the Binance API.
 
@@ -76,7 +76,7 @@ open frontend/index.html
 ### Pair Analysis
 
 1. Enter two symbols in **Symbol 1** and **Symbol 2**
-   Examples: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`
+   Examples: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `BTC/USDC:USDC`, `ETHUSDC`
 2. Select a timeframe: `1h` / `4h` / `1d`
 3. Set the lookback (candles) and Z-score window
 4. Click **Analyze Pair**
@@ -113,7 +113,7 @@ open frontend/index.html
 | **ATR** | `qty1 = size/P1`, `qty2 = qty1×(ATR1/ATR2)` | Equal dollar-volatility per leg |
 | **Equal $** | `qty1 = size/P1`, `qty2 = size/P2` | Equal dollar exposure |
 
-> The **Position Preview** panel shows exact quantities and dollar values before you click Long/Short.
+> The **Position Preview** panel shows exact quantities and values before you click Long/Short. Live trading requires both legs to use the same margin market, e.g. both `USDT-M` or both `USDC-M`.
 
 ---
 
@@ -156,7 +156,7 @@ pair_trading/
 
 - Python 3.10+
 - FastAPI + uvicorn
-- ccxt (Binance USDT-M Futures)
+- ccxt (Binance Futures: USDT-M + USDC-M)
 - pandas, numpy, statsmodels, scipy
 
 **Frontend**
@@ -174,7 +174,7 @@ pair_trading/
 No. Keys are only required for the Positions tab and trading buttons.
 
 **What symbol format should I use?**
-Use ccxt unified format: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`. You can also type `BTCUSDT` — the backend converts it automatically.
+Use ccxt unified format like `BTC/USDT:USDT` or `BTC/USDC:USDC`. You can also type short symbols like `BTCUSDT` or `BTCUSDC` — the backend converts them automatically.
 
 **How do I pick a good pair?**
 Look for: cointegration (p < 0.05), Hurst exponent < 0.5, correlation > 0.7, half-life between 10–50 bars.

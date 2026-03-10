@@ -5,7 +5,7 @@
 История изменений: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Project Overview
-Statistical arbitrage (pair trading) dashboard for Binance USDT-M Futures.
+Statistical arbitrage (pair trading) dashboard for Binance Futures with support for both USDT-M and USDC-M perpetuals.
 Monitors spread between two correlated assets, calculates cointegration statistics,
 runs backtests, and executes live trades via Binance API.
 
@@ -15,7 +15,7 @@ pair_trading/
 ├── backend/
 │   ├── main.py              # FastAPI app — REST endpoints + WebSocket
 │   ├── strategy.py          # Pair trading math (cointegration, z-score, backtest)
-│   ├── binance_client.py    # ccxt async wrapper for Binance USDT-M Futures
+│   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
 │   ├── db.py                # SQLite persistence — open_positions + closed_trades
 │   ├── logger.py            # RotatingFileHandler setup → logs/pair_trading.log
@@ -56,12 +56,12 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 ## API Endpoints
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/symbols` | List all active USDT-M perpetual futures |
+| GET | `/api/symbols` | List all active USDT-M and USDC-M perpetual futures |
 | GET | `/api/history` | OHLCV + spread/z-score + stats for a pair |
 | GET | `/api/backtest` | Full backtest with equity curve and trades |
-| GET | `/api/status` | Binance connection status + USDT balance (no keys → `no_keys`, bad keys → `auth_error`) |
+| GET | `/api/status` | Binance connection status + supported futures balances (USDT + USDC) |
 | GET | `/api/positions` | Open positions from Binance (requires API keys) |
-| GET | `/api/balance` | USDT balance (requires API keys) |
+| GET | `/api/balance` | Futures balances (all supported assets, or `?asset=USDT|USDC`) |
 | GET | `/api/pre_trade_check` | Validate balance, min notional, lot sizes, leverage before trade |
 | POST | `/api/trade` | Place market order pair trade (instant, no retry) |
 | POST | `/api/trade/smart` | Start smart limit-order execution in background; returns `exec_id` |
@@ -98,7 +98,7 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 | `allow_market` | bool | `true` | Use market order as final fallback |
 
 ## Key Parameters for `/api/history`
-- `symbol1`, `symbol2` — ccxt format, e.g. `BTC/USDT:USDT`
+- `symbol1`, `symbol2` — ccxt format, e.g. `BTC/USDT:USDT` or `BTC/USDC:USDC`
 - `timeframe` — `1h`, `4h`, `1d`
 - `limit` — number of candles (default 500, max 1500)
 - `zscore_window` — rolling window for z-score (default 20)
@@ -120,10 +120,12 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 
 ## Binance Client Notes (`binance_client.py`)
 - Uses `ccxt.async_support.binanceusdm` (not `binance`)
-- Symbol format: `BTC/USDT:USDT` (ccxt unified format, NOT `BTCUSDT`)
-- The UI sends `BTCUSDT` → backend normalizes via `_normalise_symbol()`
+- Symbol format: `BTC/USDT:USDT` or `BTC/USDC:USDC` (ccxt unified format)
+- The UI can send `BTCUSDT` / `BTCUSDC` → backend normalizes via `_normalise_symbol()`
 - API keys are only injected into ccxt config if they are non-empty and non-placeholder
 - `self.has_creds: bool` — exposed for use in `/api/status`
+- `get_available_futures_meta()` → list[dict] — returns market metadata for the UI symbol filter (`ALL` / `USDT-M` / `USDC-M`)
+- `get_balance(asset)` / `get_all_balances()` — return futures balances by margin asset
 - Market type filter: `type in ("swap", "future")` — Binance perpetuals show as `swap`
 - `_ensure_markets()` — loads market data if not yet cached (called before any precision/order op)
 - `round_amount(symbol, amount)` → float — rounds to exchange stepSize via `amount_to_precision`
@@ -141,10 +143,12 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 - i18n: `I18N` object with `en`/`ru` keys, `t(key)` function, `applyLocale()` on load and lang switch
 - Language stored in `localStorage` key `pt_lang`, default `ru`
 - Tooltips: `position: fixed` with JS positioning — handles viewport clipping above/below
-- **Binance status section** in sidebar — `checkApiStatus()` calls `/api/status` on page load and on refresh button click; `renderApiStatus(data)` renders colored dot + balance or error message; states: `no_keys` (grey) / connected (green) / `auth_error` (red) / network error (yellow)
+- **Market filter** in pair config — `setMarketFilter('ALL'|'USDT'|'USDC')` filters symbol suggestions for `Symbol 1/2`
+- **Market context** card in pair config — auto-detects whether the current pair is `USDT-M`, `USDC-M`, or mixed; mixed pairs can be analysed but live trading is blocked
+- **Binance status section** in sidebar — `checkApiStatus()` calls `/api/status` on page load and on refresh button click; `renderApiStatus(data)` renders supported futures balances and highlights the active market asset; states: `no_keys` (grey) / connected (green) / `auth_error` (red) / network error (yellow)
 - **Live threshold lines**: `updateThresholdLines()` — called `oninput` on entry/exit Z-score fields; updates chart annotations immediately via `chart.update('none')` without re-fetching data
 - **Position sizing**: `sizingMethod` global (`ols`/`atr`/`equal`), `updateSizePreview()` computes qty/value client-side from `state.historyData` prices + ATR
-- **state** includes: `historyData`, `hedgeRatio`, `atr1`, `atr2`, `spreadChart`, `priceChart`, `ws`
+- **state** includes: `historyData`, `hedgeRatio`, `atr1`, `atr2`, `pairMeta`, `balances`, `markets`, `marketFilter`, `spreadChart`, `priceChart`, `ws`
 - **Tooltips with i18n**: tooltip HTML is stored in `I18N.en.tip_*` / `I18N.ru.tip_*` keys; `tooltip-box` div uses `data-i18n-html` attribute; `applyLocale()` sets `innerHTML` for these. Existing tooltip keys: `tip_entry_z`, `tip_exit_z`, `tip_zwindow`
 - **Trades table**: colored rows (green/red bg tint), `+/-` PnL signs, legs column showing ▲/▼ per symbol, cumulative PnL column. Populated in `runBacktest()` from `data.trades`
 - **Guide nav**: redesigned as sidebar-style list on left of drawer (not a cramped top bar); numbered sections with readable text
@@ -154,6 +158,7 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 - **Execution mode toggle**: `setExecMode('market'|'smart')` — globals `execMode`, updates button styles and shows/hides smart settings
 - **Smart settings panel** (`#smart-settings`): shown only in smart mode; inputs `#passive-s-input`, `#aggressive-s-input`, `#allow-market-input`
 - **Pre-trade check**: `fetchPreTradeCheck()` → GET `/api/pre_trade_check` → `renderPreTrade(data)` renders ✓/✗ per check + rounded quantities in `#pretrade-results`
+- **Pre-trade market validation**: shared margin asset is required for live trading; `renderPreTrade(data)` shows `USDT-M` / `USDC-M` context and blocks mixed-asset pairs
 - **Execution monitor** (`#exec-monitor`): shown during/after smart execution; status badge, per-leg fill %, event log; `cancelCurrentExecution()` sends DELETE
 - **Smart execution globals**: `execMode`, `currentExecId`, `execPollTimer`
 - **Smart execution flow**: `executeTrade()` routes to `startSmartExecution(side)` in smart mode → POST `/api/trade/smart` → starts `setInterval(pollExecution, 2000)` → `renderExecution(data)` → stops on terminal status
@@ -218,7 +223,8 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **CORS errors**: backend has CORS middleware allowing all origins including `file://`
 - **NaN/Inf in JSON**: `_clean()` helper in `main.py` recursively strips non-serializable floats
 - **Port 5000 on macOS**: reserved by AirPlay Receiver (Control Center) — use port 8080 instead
-- **HTTP 400 "notional below minimum"**: position `size_usd` is too small — increase it (Binance minimum is ~5 USDT per leg)
+- **HTTP 400 "notional below minimum"**: position `size_usd` is too small — increase it; minimum depends on the exact contract and margin market (`USDT-M` / `USDC-M`)
+- **Mixed pair won't trade**: if one leg is `USDT-M` and the other is `USDC-M`, analysis still works but live trading is rejected until both legs use the same margin asset
 - **Leverage set error (warning, not fatal)**: if a position already exists on Binance, `set_leverage` fails — logged as WARNING, trade still proceeds with current exchange leverage
 - **`amount_to_precision` KeyError**: markets not loaded — fixed by `_ensure_markets()` guard in `place_order`
 - **Smart execution stuck in PASSIVE**: passive_s too long, or orders not visible in `fetch_order` — check log events in execution monitor
