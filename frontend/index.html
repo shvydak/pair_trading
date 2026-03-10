@@ -278,6 +278,26 @@
       tip_hurst: '<strong>Hurst Exponent (H)</strong><br/>Nature of the spread process — mean-reverting, random, or trending.<svg viewBox="0 0 212 36" width="100%" style="display:block;margin:6px 0 4px"><rect x="10" y="11" width="96" height="8" fill="#3fb950" opacity="0.35" rx="1"/><rect x="106" y="11" width="19" height="8" fill="#d29922" opacity="0.4" rx="1"/><rect x="125" y="11" width="77" height="8" fill="#f85149" opacity="0.35" rx="1"/><line x1="10" y1="15" x2="202" y2="15" stroke="#3a4050" stroke-width="1"/><line x1="106" y1="10" x2="106" y2="20" stroke="#d29922" stroke-width="1.5"/><text x="10" y="28" text-anchor="start" font-size="9" fill="#3fb950">0 mean-rev. ✓</text><text x="106" y="28" text-anchor="middle" font-size="9" fill="#d29922">0.5</text><text x="202" y="28" text-anchor="end" font-size="9" fill="#f85149">1 trend ✗</text><text x="58" y="36" text-anchor="middle" font-size="8" fill="#3fb950">ideal zone</text><text x="163" y="36" text-anchor="middle" font-size="8" fill="#f85149">avoid</text></svg>H &lt; 0.5 → mean-reverting ✓ &nbsp; H &gt; 0.5 → trending ✗<br/>Pair trading works best when H is clearly below 0.5.',
       tip_corr: '<strong>Pearson Correlation</strong><br/>How synchronised the log-returns of both assets are.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">ρ = 0.9 ✓</text><polyline points="10,24 22,20 34,26 46,22 58,28 70,23 82,26 96,24" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="10,25 22,21 34,27 46,23 58,29 70,24 82,27 96,25" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">ρ = 0.3 ✗</text><polyline points="116,26 128,22 140,28 152,24 164,20 176,26 188,22 202,26" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="116,28 128,34 140,26 152,36 164,28 176,34 188,24 202,32" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="53" y="45" text-anchor="middle" font-size="8" fill="#8b949e">move together</text><text x="159" y="45" text-anchor="middle" font-size="8" fill="#8b949e">diverge often</text></svg>≥ 0.7 preferred. High correlation ≠ cointegration — spread can still drift.',
       tip_coint: '<strong>Cointegration (Engle–Granger)</strong><br/>Does a long-run equilibrium exist? If yes, the spread always returns to its mean.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">Cointegrated ✓</text><line x1="10" y1="30" x2="96" y2="30" stroke="#3fb950" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="10,30 20,24 30,32 40,24 50,34 60,26 70,32 80,24 96,30" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">Not cointegrated ✗</text><line x1="116" y1="30" x2="202" y2="30" stroke="#f85149" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="116,30 126,28 136,26 146,22 156,18 166,14 176,12 188,10 202,8" fill="none" stroke="#f85149" stroke-width="1.5"/><text x="53" y="46" text-anchor="middle" font-size="8" fill="#8b949e">spread bounded</text><text x="159" y="46" text-anchor="middle" font-size="8" fill="#8b949e">spread drifts away</text></svg>p &lt; 0.05 → cointegrated ✓ (safe to trade)<br/>p ≥ 0.05 → unreliable — spread may drift permanently',
+
+      // execution
+      leverage_label: 'Leverage',
+      exec_mode: 'Execution Mode',
+      exec_market: 'Market',
+      exec_smart: 'Smart Limit',
+      smart_settings: 'Smart Settings',
+      passive_timeout: 'Passive timeout (s)',
+      aggressive_timeout: 'Aggressive timeout (s)',
+      allow_market_fallback: 'Market fallback',
+      pretrade_check: 'Pre-Trade Check',
+      pretrade_checking: 'Checking…',
+      pretrade_ok: '✓ All checks passed',
+      pretrade_fail: '✗ Checks failed',
+      exec_monitor: 'Execution Monitor',
+      exec_cancel: 'Cancel',
+      exec_cancel_confirm: 'Cancel this execution?',
+      toast_smart_started: 'Smart execution started: ',
+      toast_smart_error: 'Execution error: ',
+      leg_label: 'Leg',
     },
     ru: {
       title: 'Дашборд Парного Трейдинга',
@@ -418,6 +438,26 @@
       tip_hurst: '<strong>Показатель Хёрста (H)</strong><br/>Характер временного ряда спреда — возвратный, случайный или трендовый.<svg viewBox="0 0 212 36" width="100%" style="display:block;margin:6px 0 4px"><rect x="10" y="11" width="96" height="8" fill="#3fb950" opacity="0.35" rx="1"/><rect x="106" y="11" width="19" height="8" fill="#d29922" opacity="0.4" rx="1"/><rect x="125" y="11" width="77" height="8" fill="#f85149" opacity="0.35" rx="1"/><line x1="10" y1="15" x2="202" y2="15" stroke="#3a4050" stroke-width="1"/><line x1="106" y1="10" x2="106" y2="20" stroke="#d29922" stroke-width="1.5"/><text x="10" y="28" text-anchor="start" font-size="9" fill="#3fb950">0 возврат ✓</text><text x="106" y="28" text-anchor="middle" font-size="9" fill="#d29922">0.5</text><text x="202" y="28" text-anchor="end" font-size="9" fill="#f85149">1 тренд ✗</text><text x="58" y="36" text-anchor="middle" font-size="8" fill="#3fb950">идеальная зона</text><text x="163" y="36" text-anchor="middle" font-size="8" fill="#f85149">опасно</text></svg>H &lt; 0.5 → возврат к среднему ✓ &nbsp; H &gt; 0.5 → тренд ✗<br/>Стратегия лучше всего работает при H явно ниже 0.5.',
       tip_corr: '<strong>Корреляция Пирсона</strong><br/>Насколько синхронны лог-доходности двух активов.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">ρ = 0.9 ✓</text><polyline points="10,24 22,20 34,26 46,22 58,28 70,23 82,26 96,24" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="10,25 22,21 34,27 46,23 58,29 70,24 82,27 96,25" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">ρ = 0.3 ✗</text><polyline points="116,26 128,22 140,28 152,24 164,20 176,26 188,22 202,26" fill="none" stroke="#58a6ff" stroke-width="1.5"/><polyline points="116,28 128,34 140,26 152,36 164,28 176,34 188,24 202,32" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="53" y="45" text-anchor="middle" font-size="8" fill="#8b949e">движутся вместе</text><text x="159" y="45" text-anchor="middle" font-size="8" fill="#8b949e">расходятся</text></svg>≥ 0.7 хорошо. Высокая корреляция ≠ коинтеграция — спред всё равно может дрейфовать.',
       tip_coint: '<strong>Коинтеграция (Энгл-Грэнджер)</strong><br/>Есть ли долгосрочное равновесие? Если да — спред всегда возвращается к среднему.<svg viewBox="0 0 212 50" width="100%" style="display:block;margin:6px 0 4px"><text x="53" y="9" text-anchor="middle" font-size="8" fill="#3fb950">Коинтегр. ✓</text><line x1="10" y1="30" x2="96" y2="30" stroke="#3fb950" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="10,30 20,24 30,32 40,24 50,34 60,26 70,32 80,24 96,30" fill="none" stroke="#3fb950" stroke-width="1.5"/><line x1="106" y1="4" x2="106" y2="50" stroke="#3a4050" stroke-width="0.8" stroke-dasharray="2,3"/><text x="159" y="9" text-anchor="middle" font-size="8" fill="#f85149">Не коинтегр. ✗</text><line x1="116" y1="30" x2="202" y2="30" stroke="#f85149" stroke-width="0.7" stroke-dasharray="3,3"/><polyline points="116,30 126,28 136,26 146,22 156,18 166,14 176,12 188,10 202,8" fill="none" stroke="#f85149" stroke-width="1.5"/><text x="53" y="46" text-anchor="middle" font-size="8" fill="#8b949e">спред у среднего</text><text x="159" y="46" text-anchor="middle" font-size="8" fill="#8b949e">спред дрейфует</text></svg>p &lt; 0.05 → коинтегрированы ✓ (безопасно торговать)<br/>p ≥ 0.05 → ненадёжно — спред может уйти навсегда',
+
+      // execution
+      leverage_label: 'Плечо',
+      exec_mode: 'Режим исполнения',
+      exec_market: 'Маркет',
+      exec_smart: 'Умный лимит',
+      smart_settings: 'Настройки лимит-входа',
+      passive_timeout: 'Пассивный таймаут (с)',
+      aggressive_timeout: 'Агрессивный таймаут (с)',
+      allow_market_fallback: 'Откат на маркет',
+      pretrade_check: 'Проверка перед сделкой',
+      pretrade_checking: 'Проверяем…',
+      pretrade_ok: '✓ Все проверки пройдены',
+      pretrade_fail: '✗ Проверки не пройдены',
+      exec_monitor: 'Монитор исполнения',
+      exec_cancel: 'Отменить',
+      exec_cancel_confirm: 'Отменить это исполнение?',
+      toast_smart_started: 'Умное исполнение запущено: ',
+      toast_smart_error: 'Ошибка исполнения: ',
+      leg_label: 'Нога',
     }
   };
 
@@ -618,6 +658,59 @@
         </div>
       </div>
 
+      <!-- Leverage -->
+      <div class="mb-3">
+        <label class="text-xs text-muted mb-1.5 block" data-i18n="leverage_label">Leverage</label>
+        <div class="flex items-center gap-2">
+          <input id="leverage-input" type="number" value="1" min="1" max="20" step="1"
+            class="w-16 bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:border-accent focus:outline-none">
+          <span class="text-xs text-muted">x &nbsp;(1–20)</span>
+        </div>
+      </div>
+
+      <!-- Execution mode -->
+      <div class="mb-3">
+        <label class="text-xs text-muted mb-1.5 block" data-i18n="exec_mode">Execution Mode</label>
+        <div class="flex gap-1">
+          <button onclick="setExecMode('market')" id="exec-market-btn"
+            class="flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
+            <span data-i18n="exec_market">Market</span>
+          </button>
+          <button onclick="setExecMode('smart')" id="exec-smart-btn"
+            class="flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+            <span data-i18n="exec_smart">Smart Limit</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Smart settings (shown only in smart mode) -->
+      <div id="smart-settings" class="hidden mb-3 bg-surface rounded-md p-2.5 border border-border text-xs space-y-2">
+        <div class="text-muted font-semibold uppercase tracking-wider text-[10px]" data-i18n="smart_settings">Smart Settings</div>
+        <div class="flex items-center justify-between">
+          <label class="text-muted" data-i18n="passive_timeout">Passive timeout (s)</label>
+          <input id="passive-s-input" type="number" value="10" min="1" max="300"
+            class="w-14 bg-panel border border-border rounded px-1.5 py-0.5 text-white text-right text-xs focus:border-accent focus:outline-none">
+        </div>
+        <div class="flex items-center justify-between">
+          <label class="text-muted" data-i18n="aggressive_timeout">Aggressive timeout (s)</label>
+          <input id="aggressive-s-input" type="number" value="20" min="1" max="300"
+            class="w-14 bg-panel border border-border rounded px-1.5 py-0.5 text-white text-right text-xs focus:border-accent focus:outline-none">
+        </div>
+        <div class="flex items-center justify-between">
+          <label class="text-muted" data-i18n="allow_market_fallback">Market fallback</label>
+          <input id="allow-market-input" type="checkbox" checked class="accent-[#58a6ff]">
+        </div>
+      </div>
+
+      <!-- Pre-trade check -->
+      <div class="mb-3">
+        <button onclick="fetchPreTradeCheck()" id="pretrade-btn"
+          class="w-full py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:border-accent hover:text-accent transition">
+          <span data-i18n="pretrade_check">Pre-Trade Check</span>
+        </button>
+        <div id="pretrade-results" class="hidden mt-2 bg-surface rounded-md p-2.5 border border-border text-xs space-y-1.5"></div>
+      </div>
+
       <div id="trade-info" class="text-xs text-muted mb-3" data-i18n="trade_hint">Run Analyze first to enable trading.</div>
       <div class="flex flex-col gap-2">
         <button id="long-btn" onclick="executeTrade('open','long_spread')" disabled
@@ -634,6 +727,20 @@
           class="w-full py-2 rounded-md text-sm font-semibold border border-border text-muted hover:border-accent hover:text-accent transition opacity-40">
           <span data-i18n="close_all">Close All Positions</span>
         </button>
+      </div>
+
+      <!-- Execution monitor (appears during smart execution) -->
+      <div id="exec-monitor" class="hidden mt-3 bg-surface rounded-md p-3 border border-border text-xs">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-muted font-semibold uppercase tracking-wider text-[10px]" data-i18n="exec_monitor">Execution Monitor</span>
+          <button onclick="cancelCurrentExecution()" class="text-red-400 hover:text-red-300 text-[10px] uppercase tracking-wide transition" data-i18n="exec_cancel">Cancel</button>
+        </div>
+        <div class="flex items-center gap-2 mb-2">
+          <span id="exec-status-badge" class="px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-900 text-yellow-300">PLACING</span>
+          <span id="exec-id-label" class="text-[10px] text-muted font-mono"></span>
+        </div>
+        <div id="exec-legs" class="space-y-1 mb-2 font-mono text-[11px]"></div>
+        <div id="exec-events" class="space-y-0.5 max-h-28 overflow-y-auto text-[10px] text-muted font-mono border-t border-border pt-1.5"></div>
       </div>
     </section>
 
@@ -1422,6 +1529,9 @@ function updateThresholdLines() {
 //  Sizing method
 // ------------------------------------------------------------------ //
 let sizingMethod = 'ols';
+let execMode = 'market';
+let currentExecId = null;
+let execPollTimer = null;
 
 function setSizingMethod(method) {
   sizingMethod = method;
@@ -1497,8 +1607,18 @@ async function executeTrade(action, side) {
   const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
   const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
   const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+  const leverage = parseInt(document.getElementById('leverage-input').value) || 1;
 
   if (!state.hedgeRatio) { showToast(t('toast_run_analyze'), 'warn'); return; }
+
+  // Route to smart execution for open trades in smart mode
+  if (action === 'open' && execMode === 'smart') {
+    const tpl = side === 'long_spread' ? t('confirm_long') : t('confirm_short');
+    const msg = tpl.replace('{s1}', sym1).replace('{s2}', sym2).replace('{size}', size);
+    if (!window.confirm(msg)) return;
+    await startSmartExecution(side);
+    return;
+  }
 
   let confirmMsg;
   if (action === 'close') {
@@ -1523,6 +1643,8 @@ async function executeTrade(action, side) {
         sizing_method: sizingMethod,
         atr1: state.atr1,
         atr2: state.atr2,
+        leverage,
+        entry_zscore: state.historyData?.stats?.current_zscore ?? null,
       })
     });
     const data = await res.json();
@@ -1530,6 +1652,188 @@ async function executeTrade(action, side) {
     showToast(t('toast_trade_done') + (data.status || 'ok'), 'success');
   } catch(e) {
     showToast(t('toast_trade_error') + e.message, 'error');
+  }
+}
+
+function setExecMode(mode) {
+  execMode = mode;
+  const marketBtn = document.getElementById('exec-market-btn');
+  const smartBtn  = document.getElementById('exec-smart-btn');
+  const smartSettings = document.getElementById('smart-settings');
+  if (mode === 'market') {
+    marketBtn.className = marketBtn.className.replace('border-border bg-surface text-muted hover:border-accent hover:text-accent', 'border-accent bg-surface text-accent');
+    smartBtn.className  = smartBtn.className.replace('border-accent bg-surface text-accent', 'border-border bg-surface text-muted hover:border-accent hover:text-accent');
+    smartSettings.classList.add('hidden');
+  } else {
+    smartBtn.className  = smartBtn.className.replace('border-border bg-surface text-muted hover:border-accent hover:text-accent', 'border-accent bg-surface text-accent');
+    marketBtn.className = marketBtn.className.replace('border-accent bg-surface text-accent', 'border-border bg-surface text-muted hover:border-accent hover:text-accent');
+    smartSettings.classList.remove('hidden');
+  }
+}
+
+async function fetchPreTradeCheck() {
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+  const leverage = parseInt(document.getElementById('leverage-input').value) || 1;
+  const results = document.getElementById('pretrade-results');
+
+  if (!sym1 || !sym2) { showToast(t('toast_enter_symbols'), 'warn'); return; }
+  if (!state.hedgeRatio) { showToast(t('toast_run_analyze'), 'warn'); return; }
+
+  results.classList.remove('hidden');
+  results.innerHTML = `<div class="text-muted animate-pulse">${t('pretrade_checking')}</div>`;
+
+  try {
+    const params = new URLSearchParams({
+      symbol1: sym1, symbol2: sym2, size_usd: size,
+      hedge_ratio: state.hedgeRatio, sizing_method: sizingMethod,
+      leverage,
+      ...(state.atr1 ? { atr1: state.atr1 } : {}),
+      ...(state.atr2 ? { atr2: state.atr2 } : {}),
+    });
+    const res = await fetch(`${API}/api/pre_trade_check?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Check failed');
+    renderPreTrade(data);
+  } catch(e) {
+    results.innerHTML = `<div class="text-red-400">${e.message}</div>`;
+  }
+}
+
+function renderPreTrade(data) {
+  const results = document.getElementById('pretrade-results');
+  const allOk = data.ok;
+  let html = '';
+
+  for (const c of (data.checks || [])) {
+    const icon = c.ok === true ? '✓' : c.ok === false ? '✗' : '?';
+    const color = c.ok === true ? 'text-green-400' : c.ok === false ? 'text-red-400' : 'text-yellow-400';
+    html += `<div class="flex gap-1.5"><span class="${color} font-bold w-3 flex-shrink-0">${icon}</span>
+      <div><div class="text-white font-medium">${c.name}</div><div class="text-muted text-[10px]">${c.detail}</div></div></div>`;
+  }
+
+  if (data.sizes) {
+    const s = data.sizes;
+    html += `<div class="border-t border-border pt-1.5 mt-1 text-muted font-mono text-[10px] space-y-0.5">
+      <div>S1: <span class="text-white">${Number(s.rounded_qty1).toFixed(6)}</span> × $${Number(data.prices?.price1 || 0).toFixed(2)} = <span class="text-yellow-300">$${Number(s.notional1).toFixed(2)}</span></div>
+      <div>S2: <span class="text-white">${Number(s.rounded_qty2).toFixed(6)}</span> × $${Number(data.prices?.price2 || 0).toFixed(2)} = <span class="text-yellow-300">$${Number(s.notional2).toFixed(2)}</span></div>
+    </div>`;
+  }
+
+  const summary = allOk
+    ? `<div class="text-green-400 font-semibold pt-1">${t('pretrade_ok')}</div>`
+    : `<div class="text-red-400 font-semibold pt-1">${t('pretrade_fail')}</div>`;
+
+  results.innerHTML = html + summary;
+}
+
+async function startSmartExecution(side) {
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+  const leverage = parseInt(document.getElementById('leverage-input').value) || 1;
+  const passiveS = parseFloat(document.getElementById('passive-s-input').value) || 10;
+  const aggressiveS = parseFloat(document.getElementById('aggressive-s-input').value) || 20;
+  const allowMarket = document.getElementById('allow-market-input').checked;
+
+  try {
+    const res = await fetch(`${API}/api/trade/smart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol1: sym1,
+        symbol2: sym2,
+        side,
+        size_usd: size,
+        hedge_ratio: state.hedgeRatio,
+        sizing_method: sizingMethod,
+        atr1: state.atr1,
+        atr2: state.atr2,
+        leverage,
+        entry_zscore: state.historyData?.stats?.current_zscore ?? null,
+        passive_s: passiveS,
+        aggressive_s: aggressiveS,
+        allow_market: allowMarket,
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Smart trade failed');
+
+    currentExecId = data.exec_id;
+    showToast(t('toast_smart_started') + currentExecId, 'success');
+    document.getElementById('exec-monitor').classList.remove('hidden');
+    document.getElementById('exec-id-label').textContent = `#${currentExecId}`;
+    if (execPollTimer) clearInterval(execPollTimer);
+    execPollTimer = setInterval(() => pollExecution(currentExecId), 2000);
+  } catch(e) {
+    showToast(t('toast_smart_error') + e.message, 'error');
+  }
+}
+
+async function pollExecution(execId) {
+  try {
+    const res = await fetch(`${API}/api/execution/${execId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderExecution(data);
+    // Stop polling when terminal
+    const terminal = ['open', 'done', 'cancelled', 'failed'];
+    if (terminal.includes(data.status)) {
+      clearInterval(execPollTimer);
+      execPollTimer = null;
+      if (data.status === 'open') showToast('Position OPEN — ' + execId, 'success');
+      else if (data.status === 'done') showToast('Execution done (rollback) — ' + execId, 'warn');
+      else if (data.status === 'failed') showToast('Execution FAILED — ' + execId, 'error');
+    }
+  } catch {}
+}
+
+function renderExecution(data) {
+  const badgeEl = document.getElementById('exec-status-badge');
+  const legsEl  = document.getElementById('exec-legs');
+  const eventsEl = document.getElementById('exec-events');
+
+  const statusColors = {
+    placing:    'bg-yellow-900 text-yellow-300',
+    passive:    'bg-blue-900 text-blue-300',
+    aggressive: 'bg-orange-900 text-orange-300',
+    forcing:    'bg-red-900 text-red-300',
+    open:       'bg-green-900 text-green-300',
+    rollback:   'bg-red-900 text-red-300',
+    done:       'bg-surface text-muted',
+    cancelled:  'bg-surface text-muted',
+    failed:     'bg-red-900 text-red-400',
+  };
+  const cls = statusColors[data.status] || 'bg-surface text-muted';
+  badgeEl.className = `px-2 py-0.5 rounded text-[10px] font-bold ${cls}`;
+  badgeEl.textContent = data.status.toUpperCase();
+
+  const legHtml = (leg, n) => {
+    const pct = leg.qty > 0 ? Math.round(leg.filled / leg.qty * 100) : 0;
+    const statusColor = leg.status === 'filled' ? 'text-green-400' : leg.status === 'failed' ? 'text-red-400' : 'text-yellow-300';
+    return `<div class="flex justify-between items-center">
+      <span class="text-muted">${t('leg_label')} ${n}: <span class="text-white">${leg.symbol.replace('/USDT:USDT','').replace('/USDC:USDC','')}</span> ${leg.side}</span>
+      <span class="${statusColor}">${pct}% ${leg.status}</span>
+    </div>`;
+  };
+  legsEl.innerHTML = legHtml(data.leg1, 1) + legHtml(data.leg2, 2);
+
+  const recentEvents = (data.events || []).slice(-12);
+  eventsEl.innerHTML = recentEvents
+    .map(e => `<div class="text-[10px] text-muted">${e}</div>`)
+    .join('');
+  eventsEl.scrollTop = eventsEl.scrollHeight;
+}
+
+async function cancelCurrentExecution() {
+  if (!currentExecId) return;
+  if (!window.confirm(t('exec_cancel_confirm'))) return;
+  try {
+    await fetch(`${API}/api/execution/${currentExecId}`, { method: 'DELETE' });
+    showToast('Cancel requested for ' + currentExecId, 'warn');
+  } catch(e) {
+    showToast('Cancel error: ' + e.message, 'error');
   }
 }
 
@@ -2331,12 +2635,13 @@ const GUIDE = {
       title: '8. Открытие сделок',
       content: `
 <h2>Как открывать и закрывать сделки</h2>
-<div class="callout red"><strong>Требуются API ключи Binance</strong> с правами Futures Trading. Введите ключи в раздел «API Ключи» в левой панели.</div>
+<div class="callout red"><strong>Требуются API ключи Binance</strong> с правами Futures Trading.</div>
 
 <h3>Алгоритм действий</h3>
 <ol style="padding-left:18px;">
   <li style="margin-bottom:8px;">Запустите <strong>анализ пары</strong> — убедитесь, что статистика хорошая</li>
-  <li style="margin-bottom:8px;">Выберите <strong>метод сайзинга</strong> (см. ниже) — объёмы отобразятся в предпросмотре</li>
+  <li style="margin-bottom:8px;">Задайте <strong>Плечо</strong> (1–20×) и выберите <strong>Режим исполнения</strong></li>
+  <li style="margin-bottom:8px;">Нажмите <strong>Проверка перед сделкой</strong> — убедитесь, что все пункты зелёные</li>
   <li style="margin-bottom:8px;">Проверьте текущий <strong>Z-score</strong>:<br/>
     <span style="color:#3fb950">Z &lt; −2</span> → нажмите <strong>Лонг Спред</strong> (купить S1, продать S2)<br/>
     <span style="color:#f85149">Z &gt; +2</span> → нажмите <strong>Шорт Спред</strong> (продать S1, купить S2)
@@ -2344,44 +2649,74 @@ const GUIDE = {
   <li>Дождитесь, когда <strong>|Z-score| &lt; 0.5</strong> — нажмите <strong>Закрыть все</strong></li>
 </ol>
 
+<h3>Два режима исполнения</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #f85149;">
+  <div style="font-weight:600;color:#f85149;margin-bottom:6px;">Маркет — мгновенно</div>
+  <p style="margin:0 0 4px;">Ордера отправляются по рыночной цене. Исполнение гарантировано, но вы всегда платите спред и комиссию тейкера (~0.05%).</p>
+  <div style="color:#8b949e;font-size:12px;">Используйте когда важна скорость и сигнал сильный.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #3fb950;">
+  <div style="font-weight:600;color:#3fb950;margin-bottom:6px;">Умный лимит — экономия на комиссии</div>
+  <p style="margin:0 0 6px;">Система последовательно пробует три фазы:</p>
+  <div style="font-size:12px;line-height:2.1;padding-left:8px;">
+    <div><span style="color:#58a6ff;font-weight:600;">1. Пассивная фаза</span> — оба лимитных ордера выставляются в лучшей цене стакана (покупка по <em>bid</em>, продажа по <em>ask</em>). Вы не пересекаете спред → комиссия мейкера (0% на USDC-M фьючерсах).</div>
+    <div><span style="color:#e3b341;font-weight:600;">2. Агрессивная фаза</span> — если за N секунд ордер не исполнился, он переставляется на другую сторону стакана (покупка по <em>ask</em>, продажа по <em>bid</em>). Вы пересекаете спред и исполняетесь быстрее.</div>
+    <div><span style="color:#f85149;font-weight:600;">3. Маркет-фолбэк</span> — если агрессивная фаза тоже не сработала, отправляется рыночный ордер. Можно отключить в настройках.</div>
+  </div>
+  <div style="color:#8b949e;font-size:12px;margin-top:8px;">Оптимально для USDC-M фьючерсов: пассивное исполнение экономит ~0.05% на каждой ноге.</div>
+</div>
+
+<h3>Настройки умного лимита</h3>
+<p>Появляются под переключателем режима:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li><strong>Пассивный таймаут</strong> — сколько секунд ждать исполнения по bid/ask. По умолчанию: 10с.</li>
+  <li><strong>Агрессивный таймаут</strong> — сколько секунд ждать после переставления. По умолчанию: 20с.</li>
+  <li><strong>Откат на маркет</strong> — разрешить рыночный ордер как последний шаг. Рекомендуется оставить включённым.</li>
+</ul>
+
+<h3>Проверка перед сделкой</h3>
+<p>Кнопка <strong>«Проверка перед сделкой»</strong> запрашивает у бэкенда актуальные данные и показывает:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li>✓/✗ <strong>Баланс</strong> — достаточно ли свободных USDT для маржи</li>
+  <li>✓/✗ <strong>Минимальный номинал</strong> — проходит ли каждая нога через минимальный порог биржи (~5 USDT)</li>
+  <li>✓/✗ <strong>Округление лотов</strong> — показывает точные объёмы после округления до stepSize</li>
+  <li>✓/✗ <strong>Плечо</strong> — в допустимом диапазоне</li>
+</ul>
+<div class="callout green">Если все пункты зелёные — ваша сделка пройдёт без ошибок. Если красные — исправьте (обычно достаточно увеличить размер позиции).</div>
+
+<h3>Монитор исполнения</h3>
+<p>После нажатия кнопки в режиме «Умный лимит» внизу секции торговли появляется панель монитора. Она обновляется каждые 2 секунды и показывает:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li><strong>Статус</strong> (PLACING / PASSIVE / AGGRESSIVE / FORCING / OPEN)</li>
+  <li><strong>Нога 1 и Нога 2</strong> — процент исполнения и текущий статус</li>
+  <li><strong>Лог событий</strong> — хронология: цены стакана, переставление ордеров, заполнение</li>
+</ul>
+<p>Кнопка <strong>«Отменить»</strong> запрашивает отмену — незаполненные ордера будут сняты.</p>
+
 <h3>Методы расчёта объёмов позиций</h3>
-<p>В парном трейдинге нельзя просто купить на $400 BTC и продать на $400 ETH — активы движутся с разной силой. Нужно правильно подобрать <em>соотношение</em> объёмов, чтобы позиция была нейтральна к рынку.</p>
+<p>В парном трейдинге нельзя просто купить на $400 BTC и продать на $400 ETH — активы движутся с разной силой. Нужно правильно подобрать соотношение объёмов, чтобы позиция была рыночно-нейтральной.</p>
 
-<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #58a6ff;">
-  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">OLS β — по умолчанию</div>
-  <p style="margin:0 0 6px;">Использует коэффициент β из анализа пары. Если β = 0.82, значит на $1000 в BTC нужно $820 в ETH — ровно столько, чтобы движения цен компенсировали друг друга согласно их исторической связи.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Хороший выбор для большинства пар. Начинайте с него.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #58a6ff;">
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:4px;">OLS β — по умолчанию</div>
+  <p style="margin:0 0 4px;font-size:13px;">Если β = 0.82, значит на $1000 в BTC нужно $820 в ETH — ровно столько, чтобы движения компенсировали друг друга.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Начинайте с него.</div>
 </div>
 
-<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #e3b341;">
-  <div style="font-weight:600;color:#e3b341;margin-bottom:6px;">ATR — по волатильности</div>
-  <p style="margin:0 0 6px;">ATR (Average True Range) — это средний дневной диапазон цены в долларах. Метод подбирает объёмы так, чтобы <em>риск в долларах</em> от обеих ног был одинаковым. BTC двигается на $2000/день, ETH — на $100/день, значит ETH нужно в 20 раз больше контрактов.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Используйте, если активы сильно различаются по волатильности.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #e3b341;">
+  <div style="font-weight:600;color:#e3b341;margin-bottom:4px;">ATR — по волатильности</div>
+  <p style="margin:0 0 4px;font-size:13px;">Объёмы подбираются так, чтобы дневной риск в долларах был одинаковым для обеих ног.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Когда активы сильно различаются по волатильности.</div>
 </div>
 
-<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #8b949e;">
-  <div style="font-weight:600;color:#8b949e;margin-bottom:6px;">Equal — равные доллары</div>
-  <p style="margin:0 0 6px;">Самый простой метод: на одинаковую сумму купить S1 и продать S2. Не учитывает ни коинтеграцию, ни волатильность — позиция может быть несбалансированной.</p>
-  <div style="color:#8b949e;font-size:12px;">⚠️ Подходит только для быстрых экспериментов.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #8b949e;">
+  <div style="font-weight:600;color:#8b949e;margin-bottom:4px;">Equal — равные доллары</div>
+  <p style="margin:0 0 4px;font-size:13px;">Одинаковая сумма в обе ноги. Не учитывает β и волатильность.</p>
+  <div style="color:#8b949e;font-size:12px;">⚠️ Только для экспериментов.</div>
 </div>
 
-<h3>Пример: BTC/ETH, size = $1000</h3>
-<div class="formula">BTC = $65,000  |  ETH = $3,200  |  β = 0.82
-ATR_BTC = $1950/день  |  ATR_ETH = $96/день
-
-OLS β:  BTC = 0.0154 шт ($1000)  |  ETH = 0.256 шт ($820)
-        → вложено пропорционально β = 0.82
-
-ATR:    BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
-        → риск одинаков: 0.0154×$1950 = 0.313×$96 = $30/день
-
-Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
-        → по $1000 в каждую ногу, без учёта β</div>
-
-<div class="callout yellow">В секции «Торговля» есть <strong>Предпросмотр позиции</strong> — он показывает точные объёмы и долларовые суммы для текущих цен и выбранного метода.</div>
-
-<h3>Вкладка «Позиции»</h3>
-<p>После открытия сделки перейдите на вкладку <strong>Позиции</strong> — там отображаются все открытые позиции с нереализованным P&L и ценой ликвидации.</p>`
+<div class="callout yellow"><strong>Предпросмотр позиции</strong> в секции «Торговля» показывает точные объёмы и долларовые суммы для текущих цен и выбранного метода — до отправки ордера.</div>`
     },
     {
       id: 'risk',
@@ -2408,6 +2743,65 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
 <div class="formula">f = (Win Rate × Avg Win − Loss Rate × Avg Loss) / Avg Win</div>
 <p>Используйте <strong>1/4 Kelly</strong> для консервативного управления капиталом.</p>
 <div class="callout green">Начинайте с минимальных позиций ($100–200) пока не убедитесь в стабильности стратегии на реальном рынке.</div>`
+    },
+    {
+      id: 'trade-safety',
+      title: '10. Защита ордеров и история',
+      content: `
+<h2>Как система защищает ваши ордера</h2>
+
+<h3>Автоматическое округление размера позиции</h3>
+<p>Каждая биржа требует, чтобы количество контрактов было кратно <em>stepSize</em>. Например, BTC — кратно 0.001, SOL — кратно 0.1. Неправильное число → Binance отклонит ордер.</p>
+<div class="callout green"><strong>Что делает система:</strong> перед отправкой бэкенд автоматически округляет количество. Вам ничего делать не нужно — точное значение видно в «Проверке перед сделкой».</div>
+
+<h3>Минимальный размер ордера</h3>
+<p>Binance устанавливает минимальный номинал (~5–10 USDT на ногу). Если ваш расчётный объём меньше, сделка будет заблокирована до отправки с понятным сообщением.</p>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:10px 0;border-left:3px solid #f85149;">
+  <div style="font-family:monospace;font-size:12px;color:#c9d1d9;">ETH/USDT: notional $3.20 is below exchange minimum $5.00</div>
+  <div style="margin-top:6px;color:#8b949e;font-size:12px;"><strong>Решение:</strong> увеличьте «Размер позиции» (например с $50 до $200).</div>
+</div>
+
+<h3>Защита от частичного исполнения (Rollback)</h3>
+<p>В режиме «Умный лимит» система одновременно размещает обе ноги. Может случиться так, что <strong>нога A исполнилась, а нога B — нет</strong> (отказ биржи, таймаут, ошибка сети). Без защиты вы остаётесь с открытой односторонней позицией — это не арбитраж, а чистый направленный риск.</p>
+<div class="callout red"><strong>Что делает система в этом случае:</strong> автоматически закрывает исполненную ногу рыночным ордером (rollback). Позиция нейтрализуется. В мониторе исполнения появится статус <strong>ROLLBACK → DONE</strong>.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:10px 0;font-size:12px;line-height:1.9;">
+  <div><span style="color:#8b949e;">Нормальный исход:</span> PLACING → PASSIVE → <span style="color:#3fb950;font-weight:600;">OPEN</span></div>
+  <div><span style="color:#8b949e;">Откат (rollback):</span> PLACING → PASSIVE → FORCING → <span style="color:#f85149;font-weight:600;">ROLLBACK → DONE</span></div>
+  <div><span style="color:#8b949e;">Отмена пользователем:</span> → <span style="color:#8b949e;font-weight:600;">CANCELLED</span></div>
+</div>
+<p>Маркетный режим таким механизмом не оснащён — обе ноги отправляются одновременно через <code>asyncio.gather</code>, что само по себе уже безопаснее последовательной отправки.</p>
+
+<h3>Журнал сделок</h3>
+<p>Каждая успешно открытая позиция записывается в <code>pair_trading.db</code>. При закрытии фиксируется P&amp;L.</p>
+<table>
+  <thead><tr><th>Поле</th><th>Описание</th></tr></thead>
+  <tbody>
+    <tr><td>symbol1 / symbol2</td><td>Торгуемая пара</td></tr>
+    <tr><td>side</td><td>long_spread или short_spread</td></tr>
+    <tr><td>qty1 / qty2</td><td>Объёмы в контрактах</td></tr>
+    <tr><td>hedge_ratio</td><td>β на момент открытия</td></tr>
+    <tr><td>entry/exit zscore</td><td>Z-score при входе и выходе</td></tr>
+    <tr><td>entry/exit price</td><td>Цены при входе и выходе</td></tr>
+    <tr><td>pnl</td><td>Реализованная прибыль/убыток (USDT)</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  Открытые позиции: <code>GET http://localhost:8080/api/db/positions</code><br/>
+  История сделок: <code>GET http://localhost:8080/api/db/history?limit=50</code>
+</div>
+<div class="callout yellow" style="margin-top:8px;">История сохраняется при перезапуске бэкенда. Файл: <code>pair_trading.db</code> в корне проекта.</div>
+
+<h3>Лог-файл</h3>
+<p>Все действия записываются в <code>logs/pair_trading.log</code> — поможет разобраться что произошло при ошибке.</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:6px;padding:10px 14px;font-family:monospace;font-size:11px;color:#8b949e;margin:10px 0;line-height:1.9;">
+  [INFO] order_manager: [a1b2c3d4] Placing passive limits: BTC@84012.0 | ETH@2001.5<br/>
+  [INFO] order_manager: [a1b2c3d4] &nbsp;BTC/USDT: waiting → partial (filled=0.001 rem=0.002)<br/>
+  [INFO] order_manager: [a1b2c3d4] Passive timeout — switching to aggressive<br/>
+  [INFO] order_manager: [a1b2c3d4] <span style="color:#3fb950;">OPEN BTC/USDT@84032.1 | ETH/USDT@2004.8</span>
+</div>
+<div class="callout green">Лог ротируется автоматически: 10 МБ × 5 файлов. Место на диске не переполнится.</div>`
     }
   ],
   en: [
@@ -2945,45 +3339,87 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
       content: `
 <h2>How to Open & Close Trades</h2>
 <div class="callout red"><strong>Requires Binance API keys</strong> with Futures Trading permissions.</div>
+
+<h3>Step by step</h3>
 <ol style="padding-left:18px;">
-  <li style="margin-bottom:8px;">Run <strong>analysis</strong> first</li>
+  <li style="margin-bottom:8px;">Run <strong>Analyze Pair</strong> — confirm the statistics look good</li>
+  <li style="margin-bottom:8px;">Set <strong>Leverage</strong> (1–20×) and choose your <strong>Execution Mode</strong></li>
+  <li style="margin-bottom:8px;">Click <strong>Pre-Trade Check</strong> — make sure all items are green</li>
   <li style="margin-bottom:8px;">Check current <strong>Z-score</strong>:<br/>
     <span style="color:#3fb950">Z &lt; −2</span> → click <strong>Long Spread</strong> (buy S1, sell S2)<br/>
     <span style="color:#f85149">Z &gt; +2</span> → click <strong>Short Spread</strong> (sell S1, buy S2)
   </li>
   <li>When <strong>|Z| &lt; 0.5</strong> → click <strong>Close All</strong></li>
 </ol>
+
+<h3>Two Execution Modes</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #f85149;">
+  <div style="font-weight:600;color:#f85149;margin-bottom:6px;">Market — instant</div>
+  <p style="margin:0 0 4px;">Orders go in at the current market price. Execution is guaranteed but you always pay the spread and taker fee (~0.05%).</p>
+  <div style="color:#8b949e;font-size:12px;">Use when speed matters and the signal is strong.</div>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #3fb950;">
+  <div style="font-weight:600;color:#3fb950;margin-bottom:6px;">Smart Limit — save on fees</div>
+  <p style="margin:0 0 6px;">The system tries three phases automatically:</p>
+  <div style="font-size:12px;line-height:2.1;padding-left:8px;">
+    <div><span style="color:#58a6ff;font-weight:600;">1. Passive phase</span> — both limit orders sit at the best price (buy at <em>bid</em>, sell at <em>ask</em>). You don't cross the spread → maker fee (0% on USDC-M futures).</div>
+    <div><span style="color:#e3b341;font-weight:600;">2. Aggressive phase</span> — if the order isn't filled after N seconds, it moves to the other side (buy at <em>ask</em>, sell at <em>bid</em>) to get filled faster.</div>
+    <div><span style="color:#f85149;font-weight:600;">3. Market fallback</span> — if aggressive phase also times out, a market order is sent. Can be disabled in settings.</div>
+  </div>
+  <div style="color:#8b949e;font-size:12px;margin-top:8px;">Optimal for USDC-M futures: passive fills save ~0.05% on each leg.</div>
+</div>
+
+<h3>Smart Limit Settings</h3>
+<p>Appear under the mode toggle when Smart Limit is selected:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li><strong>Passive timeout</strong> — seconds to wait at bid/ask before chasing. Default: 10s.</li>
+  <li><strong>Aggressive timeout</strong> — seconds to wait after repricing. Default: 20s.</li>
+  <li><strong>Market fallback</strong> — allow a market order as the final resort. Recommended: on.</li>
+</ul>
+
+<h3>Pre-Trade Check</h3>
+<p>Click <strong>"Pre-Trade Check"</strong> before opening — the backend validates in real time:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li>✓/✗ <strong>Balance</strong> — enough free USDT for margin</li>
+  <li>✓/✗ <strong>Min notional</strong> — each leg exceeds Binance's minimum order size (~5 USDT)</li>
+  <li>✓/✗ <strong>Lot rounding</strong> — shows exact quantities after rounding to exchange stepSize</li>
+  <li>✓/✗ <strong>Leverage</strong> — within the allowed range</li>
+</ul>
+<div class="callout green">If all items are green, your trade will go through without errors. If red, fix the issue — usually just increase Position Size.</div>
+
+<h3>Execution Monitor</h3>
+<p>After clicking Long/Short in Smart Limit mode, a monitor panel appears at the bottom of the Trading section. It updates every 2 seconds and shows:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li><strong>Status badge</strong> — PLACING / PASSIVE / AGGRESSIVE / FORCING / OPEN</li>
+  <li><strong>Leg 1 & Leg 2</strong> — fill percentage and current status</li>
+  <li><strong>Event log</strong> — timestamped chronicle: orderbook prices, order repricings, fills</li>
+</ul>
+<p>The <strong>Cancel</strong> button requests cancellation — any unfilled orders will be withdrawn.</p>
+
 <h3>Position Sizing Methods</h3>
-<p>You can't simply buy $400 of BTC and sell $400 of ETH — they move with different force. You need to balance the <em>number of contracts</em> so the position is market-neutral.</p>
+<p>You can't simply buy $400 of BTC and sell $400 of ETH — they move with different force. You need to balance the number of contracts so the position is market-neutral.</p>
 
-<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #58a6ff;">
-  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">OLS β — default</div>
-  <p style="margin:0 0 6px;">Uses the β coefficient from pair analysis. If β = 0.82, for $1000 in BTC you put $820 in ETH — exactly enough so their price movements cancel each other based on historical relationship.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Good choice for most pairs. Start here.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #58a6ff;">
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:4px;">OLS β — default</div>
+  <p style="margin:0 0 4px;font-size:13px;">If β = 0.82, for $1000 in BTC you put $820 in ETH — their price moves offset each other.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ Start here.</div>
 </div>
 
-<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #e3b341;">
-  <div style="font-weight:600;color:#e3b341;margin-bottom:6px;">ATR — volatility-based</div>
-  <p style="margin:0 0 6px;">ATR (Average True Range) is the average daily price move in dollars. This method sizes each leg so their <em>dollar risk is equal</em>. If BTC moves $2,000/day and ETH $100/day, you need 20× more ETH contracts.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Use when assets have very different volatility.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #e3b341;">
+  <div style="font-weight:600;color:#e3b341;margin-bottom:4px;">ATR — volatility-based</div>
+  <p style="margin:0 0 4px;font-size:13px;">Sizes each leg so their daily dollar risk is equal.</p>
+  <div style="color:#8b949e;font-size:12px;">✅ When assets have very different volatility.</div>
 </div>
 
-<div style="background:#161b22;border-radius:8px;padding:14px;margin:10px 0;border-left:3px solid #8b949e;">
-  <div style="font-weight:600;color:#8b949e;margin-bottom:6px;">Equal $ — equal dollars</div>
-  <p style="margin:0 0 6px;">Simplest method: buy S1 and sell S2 for the same dollar amount. Ignores β and volatility — the position may be unbalanced.</p>
-  <div style="color:#8b949e;font-size:12px;">⚠️ Good only for quick experiments.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #8b949e;">
+  <div style="font-weight:600;color:#8b949e;margin-bottom:4px;">Equal $ — equal dollars</div>
+  <p style="margin:0 0 4px;font-size:13px;">Same dollar amount in both legs. Ignores β and volatility.</p>
+  <div style="color:#8b949e;font-size:12px;">⚠️ Quick experiments only.</div>
 </div>
 
-<h3>Example: BTC/ETH, Size = $1,000</h3>
-<div style="background:#161b22;border-radius:6px;padding:12px;font-family:monospace;font-size:13px;margin:10px 0;">
-  <div>BTC = $65,000 | ETH = $3,200 | β = 0.82</div>
-  <div>ATR_BTC = $1,950/day | ATR_ETH = $96/day</div>
-  <br/>
-  <div style="color:#3fb950;"><strong>OLS β:</strong> BTC = 0.0154 ($1000) | ETH = 0.256 ($820) → sized by β</div>
-  <div style="color:#e3b341;"><strong>ATR:</strong> BTC = 0.0154 ($1000) | ETH = 0.313 ($1001) → equal risk: 0.0154×$1950 = 0.313×$96 = $30/day</div>
-  <div style="color:#8b949e;"><strong>Equal $:</strong> BTC = 0.0154 ($1000) | ETH = 0.313 ($1001) → same $ both legs</div>
-</div>
-<div class="callout">💡 <strong>Position Preview</strong> — before clicking Long/Short, the panel below shows exact quantities and dollar values for the selected method.</div>`
+<div class="callout yellow"><strong>Position Preview</strong> in the Trading section shows exact quantities and dollar values for the selected method — before you place any order.</div>`
     },
     {
       id: 'risk',
@@ -3000,6 +3436,65 @@ Equal:  BTC = 0.0154 шт ($1000)  |  ETH = 0.313 шт ($1001)
   <li>Use minimal leverage — ideally <strong>1×–3×</strong></li>
 </ul>
 <div class="callout green">Start with minimum positions ($100–200) until you verify the strategy performs on live markets.</div>`
+    },
+    {
+      id: 'trade-safety',
+      title: '10. Order Safety & History',
+      content: `
+<h2>How the System Protects Your Orders</h2>
+
+<h3>Automatic Lot Size Rounding</h3>
+<p>Every exchange requires quantities to be a multiple of a fixed step — the <em>stepSize</em>. For example, BTC in multiples of 0.001, SOL in multiples of 0.1. An "awkward" number (0.00312853 BTC) will be rejected by Binance.</p>
+<div class="callout green"><strong>What the system does:</strong> before submitting each order, the backend automatically rounds to the exchange's step. The exact rounded value is shown in Pre-Trade Check.</div>
+
+<h3>Minimum Order Size</h3>
+<p>Binance requires a minimum notional (~5–10 USDT per leg). If your calculated size is below this, the trade is blocked before submission with a clear error message.</p>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:10px 0;border-left:3px solid #f85149;">
+  <div style="font-family:monospace;font-size:12px;color:#c9d1d9;">ETH/USDT: notional $3.20 is below exchange minimum $5.00</div>
+  <div style="margin-top:6px;color:#8b949e;font-size:12px;"><strong>Fix:</strong> increase Position Size (e.g. from $50 to $200).</div>
+</div>
+
+<h3>Partial Fill Protection (Rollback)</h3>
+<p>In Smart Limit mode, both legs are placed simultaneously. It's possible that <strong>leg A fills but leg B doesn't</strong> (exchange rejection, timeout, network error). Without protection you'd be left with a naked directional position — not arbitrage at all.</p>
+<div class="callout red"><strong>What the system does:</strong> it automatically closes the filled leg at market (rollback) to neutralise exposure. The execution monitor shows <strong>ROLLBACK → DONE</strong>.</div>
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:10px 0;font-size:12px;line-height:1.9;">
+  <div><span style="color:#8b949e;">Normal outcome:</span> PLACING → PASSIVE → <span style="color:#3fb950;font-weight:600;">OPEN</span></div>
+  <div><span style="color:#8b949e;">Rollback:</span> PLACING → PASSIVE → FORCING → <span style="color:#f85149;font-weight:600;">ROLLBACK → DONE</span></div>
+  <div><span style="color:#8b949e;">User cancel:</span> → <span style="color:#8b949e;font-weight:600;">CANCELLED</span></div>
+</div>
+<p>Market mode does not have a rollback — both legs are sent simultaneously via a parallel async call, which is already safer than sequential submission.</p>
+
+<h3>Trade Journal</h3>
+<p>Every successfully opened position is saved to <code>pair_trading.db</code>. P&amp;L is recorded on close.</p>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>symbol1 / symbol2</td><td>The traded pair</td></tr>
+    <tr><td>side</td><td>long_spread or short_spread</td></tr>
+    <tr><td>qty1 / qty2</td><td>Contract quantities</td></tr>
+    <tr><td>hedge_ratio</td><td>β at time of entry</td></tr>
+    <tr><td>entry/exit zscore</td><td>Z-score at entry and exit</td></tr>
+    <tr><td>entry/exit price</td><td>Both asset prices at entry and exit</td></tr>
+    <tr><td>pnl</td><td>Realised profit/loss in USDT</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  Open positions: <code>GET http://localhost:8080/api/db/positions</code><br/>
+  Trade history: <code>GET http://localhost:8080/api/db/history?limit=50</code>
+</div>
+<div class="callout yellow" style="margin-top:8px;">History persists across restarts. File: <code>pair_trading.db</code> in the project root.</div>
+
+<h3>Log File</h3>
+<p>All activity is written to <code>logs/pair_trading.log</code> — useful if a trade failed or behaved unexpectedly.</p>
+<div style="background:#0f1117;border:1px solid #30363d;border-radius:6px;padding:10px 14px;font-family:monospace;font-size:11px;color:#8b949e;margin:10px 0;line-height:1.9;">
+  [INFO] order_manager: [a1b2c3d4] Placing passive limits: BTC@84012.0 | ETH@2001.5<br/>
+  [INFO] order_manager: [a1b2c3d4] &nbsp;BTC/USDT: waiting → partial (filled=0.001 rem=0.002)<br/>
+  [INFO] order_manager: [a1b2c3d4] Passive timeout — switching to aggressive<br/>
+  [INFO] order_manager: [a1b2c3d4] <span style="color:#3fb950;">OPEN BTC/USDT@84032.1 | ETH/USDT@2004.8</span>
+</div>
+<div class="callout green">Log rotates automatically: 10 MB × 5 files. Your disk won't fill up.</div>`
     }
   ]
 };

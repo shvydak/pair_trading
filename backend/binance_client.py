@@ -72,6 +72,50 @@ class BinanceClient:
         except Exception as e:
             raise RuntimeError(f"Failed to fetch futures symbols: {e}")
 
+    async def _ensure_markets(self) -> None:
+        """Load markets if not yet cached."""
+        if not self.exchange.markets:
+            await self.exchange.load_markets()
+
+    async def round_amount(self, symbol: str, amount: float) -> float:
+        """Round amount to exchange lot-size (stepSize) precision."""
+        await self._ensure_markets()
+        try:
+            return float(self.exchange.amount_to_precision(symbol, amount))
+        except Exception:
+            return amount  # fallback: return as-is
+
+    async def set_leverage(self, symbol: str, leverage: int) -> dict:
+        """Set cross-margin leverage for a futures symbol."""
+        try:
+            result = await self.exchange.set_leverage(leverage, symbol)
+            return result
+        except Exception as e:
+            raise RuntimeError(f"Failed to set leverage for {symbol}: {e}")
+
+    async def check_min_notional(
+        self, symbol: str, amount: float, price: float
+    ) -> tuple[bool, float, float]:
+        """
+        Check whether the order meets the minimum notional requirement.
+        Returns (ok, actual_notional, min_notional).
+        """
+        await self._ensure_markets()
+        try:
+            market = self.exchange.market(symbol)  # resolves BTC/USDT → BTC/USDT:USDT
+        except Exception:
+            market = {}
+        min_notional = (market.get("limits") or {}).get("cost", {}).get("min")
+        # Fall back to raw Binance filter array
+        if not min_notional:
+            for f in (market.get("info") or {}).get("filters", []):
+                if f.get("filterType") == "MIN_NOTIONAL":
+                    min_notional = float(f.get("notional") or 0)
+                    break
+        min_notional = float(min_notional or 0.0)
+        actual_notional = amount * price
+        return actual_notional >= min_notional, actual_notional, min_notional
+
     async def place_order(
         self,
         symbol: str,
@@ -79,13 +123,15 @@ class BinanceClient:
         amount: float,
         order_type: str = "market",
     ) -> dict:
-        """Place a market order. side: 'buy' or 'sell'."""
+        """Place a market order. Rounds amount to exchange lot-size before submitting."""
         try:
+            await self._ensure_markets()
+            rounded = self.exchange.amount_to_precision(symbol, amount)
             order = await self.exchange.create_order(
                 symbol=symbol,
                 type=order_type,
                 side=side,
-                amount=amount,
+                amount=rounded,
             )
             return order
         except Exception as e:
@@ -126,3 +172,47 @@ class BinanceClient:
             }
         except Exception as e:
             raise RuntimeError(f"Failed to fetch balance: {e}")
+
+    async def fetch_order_book(self, symbol: str, limit: int = 5) -> dict:
+        """Fetch top-of-book and return {bid, ask, spread_pct}."""
+        try:
+            ob = await self.exchange.fetch_order_book(symbol, limit=limit)
+            bid = ob["bids"][0][0] if ob["bids"] else None
+            ask = ob["asks"][0][0] if ob["asks"] else None
+            spread_pct = ((ask - bid) / bid * 100) if (bid and ask) else 0.0
+            return {"bid": bid, "ask": ask, "spread_pct": spread_pct}
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch order book for {symbol}: {e}")
+
+    async def place_limit_order(
+        self, symbol: str, side: str, amount: float, price: float
+    ) -> dict:
+        """Place a limit order. Rounds amount and price to exchange precision."""
+        try:
+            await self._ensure_markets()
+            rounded = self.exchange.amount_to_precision(symbol, amount)
+            price_str = self.exchange.price_to_precision(symbol, price)
+            order = await self.exchange.create_order(
+                symbol=symbol,
+                type="limit",
+                side=side,
+                amount=rounded,
+                price=price_str,
+            )
+            return order
+        except Exception as e:
+            raise RuntimeError(f"Failed to place limit order for {symbol}: {e}")
+
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Cancel an open order by id."""
+        try:
+            return await self.exchange.cancel_order(order_id, symbol)
+        except Exception as e:
+            raise RuntimeError(f"Failed to cancel order {order_id} for {symbol}: {e}")
+
+    async def fetch_order(self, symbol: str, order_id: str) -> dict:
+        """Fetch a single order by id."""
+        try:
+            return await self.exchange.fetch_order(order_id, symbol)
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch order {order_id} for {symbol}: {e}")
