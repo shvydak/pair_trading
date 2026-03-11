@@ -303,6 +303,61 @@ async def get_db_positions():
     return {"positions": _clean(db.get_open_positions())}
 
 
+@app.get("/api/db/positions/enriched")
+async def get_db_positions_enriched():
+    """
+    Return open DB positions enriched with live Binance mark prices and
+    unrealised PnL calculated from entry prices.
+    """
+    db_positions = db.get_open_positions()
+    if not db_positions:
+        return {"positions": []}
+
+    try:
+        live_positions = await client.get_positions()
+        live_map = {p["symbol"]: p for p in live_positions}
+    except Exception:
+        live_map = {}
+
+    enriched = []
+    for pos in db_positions:
+        sym1, sym2 = pos["symbol1"], pos["symbol2"]
+        live1 = live_map.get(sym1, {})
+        live2 = live_map.get(sym2, {})
+
+        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
+        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
+
+        pnl = None
+        if (mark_price1 and pos.get("entry_price1")
+                and mark_price2 and pos.get("entry_price2")):
+            sign = 1 if pos["side"] == "long_spread" else -1
+            p1 = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
+            p2 = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
+            pnl = round(p1 + p2, 4)
+
+        enriched.append({
+            **pos,
+            "mark_price1": mark_price1,
+            "mark_price2": mark_price2,
+            "unrealized_pnl": pnl,
+            "liq_price1": live1.get("liquidation_price"),
+            "liq_price2": live2.get("liquidation_price"),
+        })
+
+    return {"positions": _clean(enriched)}
+
+
+@app.delete("/api/db/positions/{position_id}")
+async def delete_db_position(position_id: int):
+    """Delete an open position DB record (does NOT close exchange positions)."""
+    deleted = db.delete_open_position(position_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Position {position_id} not found")
+    log.warning(f"DB position {position_id} deleted manually (no exchange action)")
+    return {"deleted": True, "id": position_id}
+
+
 @app.get("/api/db/history")
 async def get_db_history(limit: int = Query(100)):
     """Return closed trade history."""
@@ -327,6 +382,7 @@ class TradeRequest(BaseModel):
 class SmartTradeRequest(BaseModel):
     symbol1: str
     symbol2: str
+    action: str = "open"              # "open" | "close"
     side: str                         # "long_spread" | "short_spread"
     size_usd: float
     hedge_ratio: float
@@ -335,6 +391,7 @@ class SmartTradeRequest(BaseModel):
     atr2: Optional[float] = None
     leverage: int = 1
     entry_zscore: Optional[float] = None
+    exit_zscore: Optional[float] = None
     # Execution parameters
     passive_s: float = 10.0
     aggressive_s: float = 20.0
@@ -492,42 +549,6 @@ async def start_smart_trade(req: SmartTradeRequest):
         sym1 = meta1["symbol"]
         sym2 = meta2["symbol"]
 
-        ticker1, ticker2 = await asyncio.gather(
-            client.fetch_ticker(sym1),
-            client.fetch_ticker(sym2),
-        )
-        price1 = ticker1["last"]
-        price2 = ticker2["last"]
-
-        sizes = strategy.calculate_position_sizes(
-            price1=price1,
-            price2=price2,
-            size_usd=req.size_usd,
-            hedge_ratio=req.hedge_ratio,
-            atr1=req.atr1,
-            atr2=req.atr2,
-            method=req.sizing_method,
-        )
-        qty1 = sizes["qty1"]
-        qty2 = sizes["qty2"]
-
-        # Validate min notional
-        ok1, notional1, min1 = await client.check_min_notional(sym1, qty1, price1)
-        ok2, notional2, min2 = await client.check_min_notional(sym2, qty2, price2)
-        if not ok1:
-            raise HTTPException(400, f"{sym1}: notional ${notional1:.2f} < min ${min1:.2f}")
-        if not ok2:
-            raise HTTPException(400, f"{sym2}: notional ${notional2:.2f} < min ${min2:.2f}")
-
-        # Set leverage (best-effort)
-        for sym in (sym1, sym2):
-            try:
-                await client.set_leverage(sym, req.leverage)
-            except Exception as lev_err:
-                log.warning(f"Could not set leverage for {sym}: {lev_err}")
-
-        side1, side2 = ("buy", "sell") if req.side == "long_spread" else ("sell", "buy")
-
         import uuid
         exec_id = str(uuid.uuid4())[:8]
 
@@ -536,24 +557,103 @@ async def start_smart_trade(req: SmartTradeRequest):
             aggressive_s=req.aggressive_s,
             allow_market=req.allow_market,
         )
-        ctx = ExecContext(
-            exec_id=exec_id,
-            leg1=LegState(symbol=sym1, side=side1, qty=qty1),
-            leg2=LegState(symbol=sym2, side=side2, qty=qty2),
-            config=cfg,
-            spread_side=req.side,
-            hedge_ratio=req.hedge_ratio,
-            entry_zscore=req.entry_zscore,
-            size_usd=req.size_usd,
-            sizing_method=req.sizing_method,
-            leverage=req.leverage,
-        )
+
+        if req.action == "close":
+            # ── Close existing position ────────────────────────────────────
+            db_pos = db.find_open_position(sym1, sym2)
+            if not db_pos:
+                raise HTTPException(404, f"No open DB position found for {sym1}/{sym2}")
+
+            # Use actual exchange qty; fall back to DB qty
+            try:
+                live_positions = await client.get_positions()
+                pos_map = {p["symbol"]: p for p in live_positions}
+            except Exception:
+                pos_map = {}
+            p1 = pos_map.get(sym1)
+            p2 = pos_map.get(sym2)
+            close_qty1 = abs(p1["size"]) if p1 else db_pos["qty1"]
+            close_qty2 = abs(p2["size"]) if p2 else db_pos["qty2"]
+
+            # Reverse the spread direction
+            if db_pos["side"] == "long_spread":
+                side1, side2 = "sell", "buy"
+            else:
+                side1, side2 = "buy", "sell"
+
+            ctx = ExecContext(
+                exec_id=exec_id,
+                leg1=LegState(symbol=sym1, side=side1, qty=close_qty1),
+                leg2=LegState(symbol=sym2, side=side2, qty=close_qty2),
+                config=cfg,
+                spread_side=db_pos["side"],
+                is_close=True,
+                close_db_id=db_pos["id"],
+                entry_price1=db_pos.get("entry_price1"),
+                entry_price2=db_pos.get("entry_price2"),
+                exit_zscore=req.exit_zscore,
+                size_usd=db_pos.get("size_usd"),
+                sizing_method=db_pos.get("sizing_method"),
+                leverage=db_pos.get("leverage") or 1,
+            )
+            log.info(f"Smart close started: {exec_id} | {sym1}/{sym2} | {db_pos['side']}")
+
+        else:
+            # ── Open new position ──────────────────────────────────────────
+            ticker1, ticker2 = await asyncio.gather(
+                client.fetch_ticker(sym1),
+                client.fetch_ticker(sym2),
+            )
+            price1 = ticker1["last"]
+            price2 = ticker2["last"]
+
+            sizes = strategy.calculate_position_sizes(
+                price1=price1,
+                price2=price2,
+                size_usd=req.size_usd,
+                hedge_ratio=req.hedge_ratio,
+                atr1=req.atr1,
+                atr2=req.atr2,
+                method=req.sizing_method,
+            )
+            qty1 = sizes["qty1"]
+            qty2 = sizes["qty2"]
+
+            # Validate min notional
+            ok1, notional1, min1 = await client.check_min_notional(sym1, qty1, price1)
+            ok2, notional2, min2 = await client.check_min_notional(sym2, qty2, price2)
+            if not ok1:
+                raise HTTPException(400, f"{sym1}: notional ${notional1:.2f} < min ${min1:.2f}")
+            if not ok2:
+                raise HTTPException(400, f"{sym2}: notional ${notional2:.2f} < min ${min2:.2f}")
+
+            # Set leverage (best-effort)
+            for sym in (sym1, sym2):
+                try:
+                    await client.set_leverage(sym, req.leverage)
+                except Exception as lev_err:
+                    log.warning(f"Could not set leverage for {sym}: {lev_err}")
+
+            side1, side2 = ("buy", "sell") if req.side == "long_spread" else ("sell", "buy")
+
+            ctx = ExecContext(
+                exec_id=exec_id,
+                leg1=LegState(symbol=sym1, side=side1, qty=qty1),
+                leg2=LegState(symbol=sym2, side=side2, qty=qty2),
+                config=cfg,
+                spread_side=req.side,
+                hedge_ratio=req.hedge_ratio,
+                entry_zscore=req.entry_zscore,
+                size_usd=req.size_usd,
+                sizing_method=req.sizing_method,
+                leverage=req.leverage,
+            )
+            log.info(f"Smart execution started: {exec_id} | {sym1}/{sym2} | {req.side}")
 
         active_executions[exec_id] = ctx
         asyncio.create_task(run_execution(ctx, client, db))
 
-        log.info(f"Smart execution started: {exec_id} | {sym1}/{sym2} | {req.side}")
-        return {"exec_id": exec_id, "status": "started"}
+        return {"exec_id": exec_id, "status": "started", "action": req.action}
 
     except HTTPException:
         raise

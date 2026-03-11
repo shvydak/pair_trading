@@ -355,6 +355,29 @@
       toast_smart_started: 'Smart execution started: ',
       toast_smart_error: 'Execution error: ',
       leg_label: 'Leg',
+
+      // strategy positions & journal
+      strategy_positions: 'Strategy Positions',
+      exchange_positions: 'Exchange Positions (Live)',
+      th_pair: 'Pair',
+      th_entry_z2: 'Entry Z',
+      th_current_z: 'Z-score',
+      th_duration: 'Open for',
+      th_actions: 'Actions',
+      no_strategy_positions: 'No open strategy positions.',
+      close_market_btn: 'Market close',
+      close_smart_btn: 'Smart close',
+      load_analysis_btn: 'Load into Analysis',
+      trade_journal: 'Trade Journal',
+      th_opened_at: 'Opened',
+      th_closed_at: 'Closed',
+      no_closed_trades: 'No closed trades yet.',
+      toast_close_ok: 'Position closed.',
+      toast_close_err: 'Close error: ',
+      delete_db_btn: 'Remove DB record',
+      delete_db_confirm: 'Remove DB record for {pair}?\n\nThis does NOT close positions on the exchange — use this only if the position is already closed or was never executed.',
+      toast_delete_ok: 'DB record removed.',
+      toast_delete_err: 'Delete error: ',
     },
     ru: {
       title: 'Дашборд Парного Трейдинга',
@@ -530,6 +553,29 @@
       toast_smart_started: 'Умное исполнение запущено: ',
       toast_smart_error: 'Ошибка исполнения: ',
       leg_label: 'Нога',
+
+      // strategy positions & journal
+      strategy_positions: 'Стратегические позиции',
+      exchange_positions: 'Позиции на бирже (live)',
+      th_pair: 'Пара',
+      th_entry_z2: 'Вход Z',
+      th_current_z: 'Z-score',
+      th_duration: 'Открыта',
+      th_actions: 'Действия',
+      no_strategy_positions: 'Нет открытых стратегических позиций.',
+      close_market_btn: 'Закрыть маркетом',
+      close_smart_btn: 'Закрыть лимитом',
+      load_analysis_btn: 'Загрузить в анализ',
+      trade_journal: 'Журнал сделок',
+      th_opened_at: 'Открыта',
+      th_closed_at: 'Закрыта',
+      no_closed_trades: 'Закрытых сделок пока нет.',
+      toast_close_ok: 'Позиция закрыта.',
+      toast_close_err: 'Ошибка закрытия: ',
+      delete_db_btn: 'Удалить из журнала',
+      delete_db_confirm: 'Удалить запись {pair} из журнала?\n\nПозиция на бирже НЕ закрывается — используй это только если позиция уже закрыта или никогда не была открыта.',
+      toast_delete_ok: 'Запись удалена из журнала.',
+      toast_delete_err: 'Ошибка удаления: ',
     }
   };
 
@@ -1074,8 +1120,36 @@
         </button>
       </div>
 
+      <!-- Strategy Positions (DB + enriched with live Binance data) -->
       <div class="bg-card rounded-lg border border-border p-4">
-        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="open_positions">Open Positions</h3>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-white" data-i18n="strategy_positions">Strategy Positions</h3>
+          <span class="text-[10px] text-muted" id="strategy-pos-updated"></span>
+        </div>
+        <div class="overflow-x-auto">
+          <table id="strategy-positions-table">
+            <thead>
+              <tr>
+                <th data-i18n="th_pair">Pair</th>
+                <th data-i18n="th_side2">Side</th>
+                <th data-i18n="th_entry_price">Entry Prices</th>
+                <th data-i18n="th_entry_z2">Entry Z</th>
+                <th data-i18n="th_current_z">Z-score</th>
+                <th data-i18n="th_upnl">Unrealised PnL</th>
+                <th data-i18n="th_duration">Open for</th>
+                <th data-i18n="th_actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="strategy-positions-body">
+              <tr><td colspan="8" class="text-center text-muted py-6" data-i18n="no_strategy_positions">No open strategy positions.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Exchange Positions (live Binance) -->
+      <div class="bg-card rounded-lg border border-border p-4">
+        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="exchange_positions">Exchange Positions (Live)</h3>
         <div class="overflow-x-auto">
           <table id="positions-table">
             <thead>
@@ -1095,6 +1169,38 @@
               <tr><td colspan="9" class="text-center text-muted py-8" data-i18n="positions_not_loaded">No positions loaded.</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Trade Journal (collapsible) -->
+      <div class="bg-card rounded-lg border border-border p-4">
+        <div class="flex items-center justify-between cursor-pointer select-none" onclick="toggleJournal()">
+          <h3 class="text-sm font-semibold text-white" data-i18n="trade_journal">Trade Journal</h3>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] text-muted" id="journal-count"></span>
+            <svg id="journal-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted transition-transform duration-200"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>
+        <div id="journal-content" class="hidden mt-3">
+          <div class="overflow-x-auto">
+            <table id="journal-table">
+              <thead>
+                <tr>
+                  <th data-i18n="th_pair">Pair</th>
+                  <th data-i18n="th_side2">Side</th>
+                  <th data-i18n="th_entry_z2">Entry Z</th>
+                  <th data-i18n="th_exit_z">Exit Z</th>
+                  <th data-i18n="th_pnl">PnL ($)</th>
+                  <th data-i18n="th_leverage">Lev</th>
+                  <th data-i18n="th_opened_at">Opened</th>
+                  <th data-i18n="th_closed_at">Closed</th>
+                </tr>
+              </thead>
+              <tbody id="journal-body">
+                <tr><td colspan="8" class="text-center text-muted py-4" data-i18n="no_closed_trades">No closed trades yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1388,7 +1494,10 @@ function switchTab(name) {
   btn.classList.add('active', 'text-white');
   btn.classList.remove('text-muted', 'border-transparent');
 
-  if (name === 'positions') refreshPositions();
+  if (name === 'positions') {
+    refreshPositions();
+    loadStrategyPositions();
+  }
 }
 
 // ------------------------------------------------------------------ //
@@ -1764,6 +1873,350 @@ function renderBalanceCards(assets = {}) {
 }
 
 // ------------------------------------------------------------------ //
+//  Strategy Positions
+// ------------------------------------------------------------------ //
+
+// Map posId → position object for button callbacks
+const _stratPosMap = {};
+
+async function loadStrategyPositions() {
+  try {
+    const res = await fetch(`${API}/api/db/positions/enriched`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderStrategyPositions(data.positions || []);
+    const el = document.getElementById('strategy-pos-updated');
+    if (el) el.textContent = t('updated') + ' ' + new Date().toLocaleTimeString();
+  } catch(e) { /* silently fail */ }
+}
+
+function _symShort(ccxt) {
+  if (!ccxt) return ccxt;
+  // "BTC/USDT:USDT" → "BTCUSDT"
+  const slash = ccxt.indexOf('/');
+  const colon = ccxt.indexOf(':');
+  if (slash === -1) return ccxt;
+  const base = ccxt.slice(0, slash);
+  const quote = colon !== -1 ? ccxt.slice(slash + 1, colon) : ccxt.slice(slash + 1);
+  return base + quote;
+}
+
+function _formatDuration(openedAt) {
+  if (!openedAt) return '–';
+  const diffMs = Date.now() - new Date(openedAt).getTime();
+  const h = Math.floor(diffMs / 3600000);
+  const m = Math.floor((diffMs % 3600000) / 60000);
+  const isRu = currentLang === 'ru';
+  if (h >= 24) { const d = Math.floor(h / 24); return isRu ? `${d}д ${h%24}ч` : `${d}d ${h%24}h`; }
+  if (h > 0)   return isRu ? `${h}ч ${m}м` : `${h}h ${m}m`;
+  return isRu ? `${m}м` : `${m}m`;
+}
+
+function renderStrategyPositions(positions) {
+  const tbody = document.getElementById('strategy-positions-body');
+  if (!tbody) return;
+
+  // Clear old map
+  Object.keys(_stratPosMap).forEach(k => delete _stratPosMap[k]);
+
+  if (positions.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-6">${t('no_strategy_positions')}</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = positions.map(pos => {
+    _stratPosMap[pos.id] = pos;
+    const isLong = pos.side === 'long_spread';
+    const sideClass = isLong ? 'text-green-400' : 'text-red-400';
+    const sideLabel = isLong
+      ? (currentLang === 'ru' ? '▲ Лонг' : '▲ Long')
+      : (currentLang === 'ru' ? '▼ Шорт' : '▼ Short');
+    const pnl = pos.unrealized_pnl;
+    const pnlClass = pnl === null ? 'text-muted' : pnl >= 0 ? 'text-green-400' : 'text-red-400';
+    const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(pnl), 2);
+    const canvasId = `sparkline-${pos.id}`;
+    const s1 = _symShort(pos.symbol1);
+    const s2 = _symShort(pos.symbol2);
+
+    return `<tr>
+      <td>
+        <div class="font-medium text-white text-xs leading-tight">${s1}</div>
+        <div class="text-muted text-[10px] leading-tight">${s2}</div>
+      </td>
+      <td class="${sideClass} font-semibold text-xs">${sideLabel}</td>
+      <td class="font-mono text-xs">
+        <div class="text-white leading-tight">${fmt(pos.entry_price1, 4)}</div>
+        <div class="text-muted text-[10px] leading-tight">${fmt(pos.entry_price2, 4)}</div>
+      </td>
+      <td class="font-mono text-xs text-muted">${pos.entry_zscore !== null && pos.entry_zscore !== undefined ? (pos.entry_zscore >= 0 ? '+' : '') + fmt(pos.entry_zscore, 2) : '–'}</td>
+      <td>
+        <div class="flex items-center gap-1.5">
+          <canvas id="${canvasId}" width="90" height="28" style="display:block;flex-shrink:0"></canvas>
+          <span id="z-cur-${pos.id}" class="font-mono text-xs text-muted" style="min-width:32px">…</span>
+        </div>
+      </td>
+      <td class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
+      <td class="text-muted text-xs">${_formatDuration(pos.opened_at)}</td>
+      <td>
+        <div class="flex gap-1 flex-wrap">
+          <button onclick="_loadPosIntoAnalysis(${pos.id})"
+            class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-accent hover:text-accent transition whitespace-nowrap"
+            title="${t('load_analysis_btn')}">↗</button>
+          <button onclick="_closePos(${pos.id},'market')"
+            class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-red-400 hover:text-red-400 transition whitespace-nowrap"
+            title="${t('close_market_btn')}">✕ M</button>
+          <button onclick="_closePos(${pos.id},'smart')"
+            class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-yellow-400 hover:text-yellow-400 transition whitespace-nowrap"
+            title="${t('close_smart_btn')}">◎ S</button>
+          <button onclick="_deleteDbPos(${pos.id})"
+            class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-red-600 hover:text-red-600 transition whitespace-nowrap"
+            title="${t('delete_db_btn')}">🗑</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Load sparklines asynchronously
+  positions.forEach(pos => _loadSparkline(pos));
+}
+
+async function _loadSparkline(pos) {
+  const canvas = document.getElementById(`sparkline-${pos.id}`);
+  const zLabel = document.getElementById(`z-cur-${pos.id}`);
+  if (!canvas) return;
+  try {
+    const params = new URLSearchParams({
+      symbol1: pos.symbol1, symbol2: pos.symbol2,
+      timeframe: '1h', limit: 100, zscore_window: 20,
+    });
+    const res = await fetch(`${API}/api/history?${params}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
+    if (zscores.length === 0) return;
+
+    const currentZ = zscores[zscores.length - 1];
+    if (zLabel) {
+      const zColor = Math.abs(currentZ) >= 2.5 ? '#f85149'
+                   : Math.abs(currentZ) >= 1.5 ? '#d29922' : '#8b949e';
+      zLabel.textContent = (currentZ >= 0 ? '+' : '') + fmt(currentZ, 2);
+      zLabel.style.color = zColor;
+    }
+
+    const sparkData = zscores.slice(-50);
+    const minZ = Math.min(...sparkData);
+    const maxZ = Math.max(...sparkData);
+
+    // Destroy old chart if any
+    const existing = Chart.getChart(canvas);
+    if (existing) existing.destroy();
+
+    new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: sparkData.map((_, i) => i),
+        datasets: [{
+          data: sparkData,
+          borderColor: '#58a6ff',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+        }],
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false },
+          annotation: {
+            annotations: {
+              zero: { type: 'line', yMin: 0, yMax: 0, borderColor: 'rgba(139,148,158,0.3)', borderWidth: 1 },
+            }
+          }
+        },
+        scales: { x: { display: false }, y: { display: false, min: minZ - 0.2, max: maxZ + 0.2 } },
+      },
+    });
+  } catch(e) { /* silently */ }
+}
+
+function _loadPosIntoAnalysis(posId) {
+  const pos = _stratPosMap[posId];
+  if (!pos) return;
+  document.getElementById('sym1-input').value = _symShort(pos.symbol1);
+  document.getElementById('sym2-input').value = _symShort(pos.symbol2);
+  // Pre-load hedge ratio so sidebar Close button works without re-analyzing
+  state.hedgeRatio = pos.hedge_ratio;
+  switchTab('spread');
+  showToast(currentLang === 'ru' ? 'Пара загружена. Нажмите Analyze.' : 'Pair loaded. Click Analyze.', 'info');
+}
+
+async function _closePos(posId, mode) {
+  const pos = _stratPosMap[posId];
+  if (!pos) return;
+  const s1 = _symShort(pos.symbol1);
+  const s2 = _symShort(pos.symbol2);
+  const pnl = pos.unrealized_pnl;
+  const pnlHint = pnl !== null ? ` (PnL: ${pnl >= 0 ? '+' : ''}$${fmt(Math.abs(pnl), 2)})` : '';
+  const modeLabel = mode === 'market'
+    ? (currentLang === 'ru' ? 'рыночным ордером' : 'at market')
+    : (currentLang === 'ru' ? 'смарт-лимит ордером' : 'via smart limit');
+  const confirmMsg = currentLang === 'ru'
+    ? `Закрыть ${s1}/${s2}${pnlHint} ${modeLabel}?`
+    : `Close ${s1}/${s2}${pnlHint} ${modeLabel}?`;
+  if (!window.confirm(confirmMsg)) return;
+
+  if (mode === 'market') {
+    await _closePosMarket(pos);
+  } else {
+    await _closePosSmart(pos);
+  }
+}
+
+async function _closePosMarket(pos) {
+  try {
+    const res = await fetch(`${API}/api/trade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol1: pos.symbol1,
+        symbol2: pos.symbol2,
+        action: 'close',
+        side: pos.side,
+        size_usd: pos.size_usd || 1000,
+        hedge_ratio: pos.hedge_ratio,
+        sizing_method: pos.sizing_method || 'ols',
+        leverage: pos.leverage || 1,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Close failed');
+    const pnlStr = data.pnl !== null && data.pnl !== undefined
+      ? ` PnL: ${data.pnl >= 0 ? '+' : ''}$${fmt(Math.abs(data.pnl), 2)}` : '';
+    showToast(t('toast_close_ok') + pnlStr, 'success');
+    setTimeout(() => { loadStrategyPositions(); refreshPositions(); }, 1500);
+  } catch(e) {
+    showToast(t('toast_close_err') + e.message, 'error');
+  }
+}
+
+async function _closePosSmart(pos) {
+  const passiveS    = parseFloat(document.getElementById('passive-s-input')?.value) || 10;
+  const aggressiveS = parseFloat(document.getElementById('aggressive-s-input')?.value) || 20;
+  const allowMarket = document.getElementById('allow-market-input')?.checked ?? true;
+  try {
+    const res = await fetch(`${API}/api/trade/smart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol1: pos.symbol1,
+        symbol2: pos.symbol2,
+        action: 'close',
+        side: pos.side,
+        size_usd: pos.size_usd || 1000,
+        hedge_ratio: pos.hedge_ratio,
+        sizing_method: pos.sizing_method || 'ols',
+        leverage: pos.leverage || 1,
+        passive_s: passiveS,
+        aggressive_s: aggressiveS,
+        allow_market: allowMarket,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Smart close failed');
+    currentExecId = data.exec_id;
+    showToast(t('toast_smart_started') + currentExecId, 'success');
+    document.getElementById('exec-monitor').classList.remove('hidden');
+    document.getElementById('exec-id-label').textContent = `#${currentExecId}`;
+    if (execPollTimer) clearInterval(execPollTimer);
+    execPollTimer = setInterval(() => pollExecution(currentExecId), 2000);
+  } catch(e) {
+    showToast(t('toast_smart_error') + e.message, 'error');
+  }
+}
+
+async function _deleteDbPos(posId) {
+  const pos = _stratPosMap[posId];
+  if (!pos) return;
+  const pair = `${_symShort(pos.symbol1)}/${_symShort(pos.symbol2)}`;
+  const msg = t('delete_db_confirm').replace('{pair}', pair);
+  if (!window.confirm(msg)) return;
+  try {
+    const res = await fetch(`${API}/api/db/positions/${posId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Delete failed');
+    showToast(t('toast_delete_ok'), 'success');
+    loadStrategyPositions();
+  } catch(e) {
+    showToast(t('toast_delete_err') + e.message, 'error');
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  Trade Journal
+// ------------------------------------------------------------------ //
+
+async function loadTradeJournal() {
+  try {
+    const res = await fetch(`${API}/api/db/history?limit=50`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const trades = data.trades || [];
+    const countEl = document.getElementById('journal-count');
+    if (countEl) countEl.textContent = `${trades.length} ${currentLang === 'ru' ? 'сделок' : 'trades'}`;
+    const tbody = document.getElementById('journal-body');
+    if (!tbody) return;
+    if (trades.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-4">${t('no_closed_trades')}</td></tr>`;
+      return;
+    }
+    let cumPnl = 0;
+    // trades are DESC, reverse for cumulative
+    const ordered = [...trades].reverse();
+    const cumMap = {};
+    ordered.forEach(tr => {
+      cumPnl += tr.pnl || 0;
+      cumMap[tr.id] = cumPnl;
+    });
+
+    tbody.innerHTML = trades.map(tr => {
+      const s1 = _symShort(tr.symbol1);
+      const s2 = _symShort(tr.symbol2);
+      const isLong = tr.side === 'long_spread';
+      const sideClass = isLong ? 'text-green-400' : 'text-red-400';
+      const sideLabel = isLong ? '▲' : '▼';
+      const pnlClass = (tr.pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400';
+      const pnlStr  = tr.pnl !== null && tr.pnl !== undefined
+        ? (tr.pnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(tr.pnl), 2) : '–';
+      const rowBg = (tr.pnl || 0) >= 0 ? 'rgba(63,185,80,0.04)' : 'rgba(248,81,73,0.04)';
+      const opened = tr.opened_at ? new Date(tr.opened_at).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
+      const closed = tr.closed_at ? new Date(tr.closed_at).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
+      return `<tr style="background:${rowBg}">
+        <td><div class="text-white text-xs font-medium">${s1}</div><div class="text-muted text-[10px]">${s2}</div></td>
+        <td class="${sideClass} text-xs font-semibold">${sideLabel} ${isLong ? 'Long' : 'Short'}</td>
+        <td class="font-mono text-xs text-muted">${tr.entry_zscore !== null && tr.entry_zscore !== undefined ? (tr.entry_zscore >= 0 ? '+' : '') + fmt(tr.entry_zscore, 2) : '–'}</td>
+        <td class="font-mono text-xs text-muted">${tr.exit_zscore !== null && tr.exit_zscore !== undefined ? (tr.exit_zscore >= 0 ? '+' : '') + fmt(tr.exit_zscore, 2) : '–'}</td>
+        <td class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
+        <td class="text-muted text-xs">${tr.leverage ? tr.leverage + 'x' : '–'}</td>
+        <td class="text-muted text-[10px]">${opened}</td>
+        <td class="text-muted text-[10px]">${closed}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { /* silently */ }
+}
+
+function toggleJournal() {
+  const content = document.getElementById('journal-content');
+  const chevron = document.getElementById('journal-chevron');
+  if (!content) return;
+  const isHidden = content.classList.toggle('hidden');
+  chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
+  if (!isHidden) loadTradeJournal();
+}
+
+// ------------------------------------------------------------------ //
 //  Live threshold update on Z-score input change
 // ------------------------------------------------------------------ //
 function updateThresholdLines() {
@@ -2077,9 +2530,16 @@ async function pollExecution(execId) {
     if (terminal.includes(data.status)) {
       clearInterval(execPollTimer);
       execPollTimer = null;
-      if (data.status === 'open') showToast('Position OPEN — ' + execId, 'success');
+      if (data.status === 'open') {
+        const msg = data.is_close
+          ? (currentLang === 'ru' ? 'Позиция закрыта — ' : 'Position closed — ') + execId
+          : (currentLang === 'ru' ? 'Позиция открыта — ' : 'Position opened — ') + execId;
+        showToast(msg, 'success');
+      }
       else if (data.status === 'done') showToast('Execution done (rollback) — ' + execId, 'warn');
       else if (data.status === 'failed') showToast('Execution FAILED — ' + execId, 'error');
+      // Refresh positions after any terminal state
+      setTimeout(() => { loadStrategyPositions(); refreshPositions(); }, 2000);
     }
   } catch {}
 }
@@ -3200,6 +3660,87 @@ const GUIDE = {
   [INFO] order_manager: [a1b2c3d4] <span style="color:#3fb950;">OPEN BTC/USDT@84032.1 | ETH/USDT@2004.8</span>
 </div>
 <div class="callout green">Лог ротируется автоматически: 10 МБ × 5 файлов. Место на диске не переполнится.</div>`
+    },
+    {
+      id: 'positions',
+      title: '11. Управление открытыми позициями',
+      content: `
+<h2>Управление открытыми позициями</h2>
+<p>После открытия сделки важно уметь её отслеживать и закрывать. Всё это доступно на вкладке <strong>Позиции</strong> без повторного анализа.</p>
+
+<h3>Таб «Позиции» — три секции</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #58a6ff;">
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">1. Стратегические позиции</div>
+  <p style="margin:0;font-size:13px;">Позиции из базы данных, обогащённые live-ценами с биржи. Именно здесь находятся все кнопки управления.</p>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #3fb950;">
+  <div style="font-weight:600;color:#3fb950;margin-bottom:6px;">2. Позиции на бирже</div>
+  <p style="margin:0;font-size:13px;">Сырые данные от Binance: mark price, ликвидационная цена, нереализованный PnL от биржи.</p>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #8b949e;">
+  <div style="font-weight:600;color:#8b949e;margin-bottom:6px;">3. Журнал сделок</div>
+  <p style="margin:0;font-size:13px;">Закрытые сделки с Entry/Exit Z-score и PnL. Нажмите заголовок, чтобы раскрыть.</p>
+</div>
+
+<h3>Таблица стратегических позиций</h3>
+<table>
+  <thead><tr><th>Колонка</th><th>Что значит</th></tr></thead>
+  <tbody>
+    <tr><td>Пара</td><td>Символы обеих ног (S1 / S2)</td></tr>
+    <tr><td>Сторона</td><td>▲ Лонг спред (купил S1, продал S2) или ▼ Шорт спред</td></tr>
+    <tr><td>Цены входа</td><td>Цены на момент открытия из базы данных</td></tr>
+    <tr><td>Вход Z</td><td>Z-score в момент входа — показывает насколько сильным был сигнал</td></tr>
+    <tr><td>Z-score</td><td>Мини-график + текущее значение (обновляется при открытии вкладки)</td></tr>
+    <tr><td>Нереализ. PnL</td><td>Приблизительный PnL по mark prices с биржи</td></tr>
+    <tr><td>Открыта</td><td>Сколько времени прошло с открытия</td></tr>
+  </tbody>
+</table>
+
+<h3>Как читать Z-score sparkline</h3>
+<p>Маленький график в колонке Z-score показывает последние 50 часовых баров. По нему видно:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li>Движется ли спред обратно к нулю (сигнал к закрытию)</li>
+  <li>Уходит ли спред ещё дальше (риск — подумайте о стоп-лоссе)</li>
+  <li>Насколько волатилен спред прямо сейчас</li>
+</ul>
+<div class="callout green">Идеальный момент для закрытия: Z-score опустился с ±2 почти до 0 и sparkline показывает устойчивое движение к нулю.</div>
+
+<h3>Кнопки действий</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;">
+  <div style="display:grid;grid-template-columns:40px 1fr;gap:6px 10px;font-size:13px;line-height:1.8;">
+    <div style="color:#58a6ff;font-weight:600;font-size:15px;">↗</div>
+    <div><strong>Загрузить в анализ</strong> — заполняет поля символов и hedge ratio в сайдбаре. Нажмите Analyze для полного обновления статистики.</div>
+    <div style="color:#f85149;font-weight:600;">✕ M</div>
+    <div><strong>Закрыть маркетом</strong> — немедленное закрытие рыночным ордером. Использует реальные объёмы с биржи. Надёжно, но платите тейкерскую комиссию.</div>
+    <div style="color:#e3b341;font-weight:600;">◎ S</div>
+    <div><strong>Закрыть лимитом (Smart)</strong> — использует умный движок: сначала пробует мейкер-ордера, при неудаче переключается на тейкер. Настройки берутся из сайдбара (пассивный/агрессивный таймаут). Мониторинг — в панели «Монитор исполнения».</div>
+    <div style="color:#dc2626;font-weight:600;">🗑</div>
+    <div><strong>Удалить из журнала</strong> — удаляет только DB-запись. Биржевые позиции <strong>не закрываются</strong>. Используйте только если позиция уже закрыта вручную или никогда не была открыта.</div>
+  </div>
+</div>
+
+<h3>Рассинхрон DB и биржи</h3>
+<p>Иногда «Стратегические позиции» показывает запись, а «Позиции на бирже» — пусто. Это рассинхрон.</p>
+<div class="callout yellow">
+  <strong>Причины рассинхрона:</strong><br/>
+  • Позиция была закрыта вручную прямо на Binance или через другое приложение<br/>
+  • Smart execution завершился с ошибкой (ROLLBACK/FAILED), но DB-запись не удалилась<br/>
+  • Сделка открыта в тестовых целях без реального исполнения
+</div>
+<div class="callout red" style="margin-top:8px;"><strong>Что делать:</strong> нажмите кнопку 🗑 и подтвердите удаление. Запись исчезнет из журнала. Биржа не затрагивается.</div>
+
+<h3>Загрузка пары после перезагрузки страницы</h3>
+<p>При перезагрузке браузера все поля в сайдбаре сбрасываются. Чтобы восстановить позицию:</p>
+<ol style="font-size:13px;line-height:2;padding-left:18px;">
+  <li>Перейдите на вкладку <strong>Позиции</strong></li>
+  <li>Нажмите <strong>↗</strong> напротив нужной позиции</li>
+  <li>Поля символов и hedge ratio заполнятся автоматически</li>
+  <li>Теперь можно закрыть через кнопки в таблице или через сайдбар (нажав Analyze для обновления)</li>
+</ol>`
     }
   ],
   en: [
@@ -3893,6 +4434,87 @@ const GUIDE = {
   [INFO] order_manager: [a1b2c3d4] <span style="color:#3fb950;">OPEN BTC/USDT@84032.1 | ETH/USDT@2004.8</span>
 </div>
 <div class="callout green">Log rotates automatically: 10 MB × 5 files. Your disk won't fill up.</div>`
+    },
+    {
+      id: 'positions',
+      title: '11. Managing Open Positions',
+      content: `
+<h2>Managing Open Positions</h2>
+<p>After opening a trade, you need to track and close it. Everything is available on the <strong>Positions</strong> tab — no need to re-run analysis.</p>
+
+<h3>The Positions Tab — Three Sections</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #58a6ff;">
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">1. Strategy Positions</div>
+  <p style="margin:0;font-size:13px;">Positions from the database, enriched with live prices from the exchange. All management buttons are here.</p>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #3fb950;">
+  <div style="font-weight:600;color:#3fb950;margin-bottom:6px;">2. Exchange Positions</div>
+  <p style="margin:0;font-size:13px;">Raw Binance data: mark price, liquidation price, unrealized PnL from the exchange.</p>
+</div>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #8b949e;">
+  <div style="font-weight:600;color:#8b949e;margin-bottom:6px;">3. Trade Journal</div>
+  <p style="margin:0;font-size:13px;">Closed trades with Entry/Exit Z-score and PnL. Click the header to expand.</p>
+</div>
+
+<h3>Strategy Positions Table</h3>
+<table>
+  <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>Pair</td><td>Both leg symbols (S1 / S2)</td></tr>
+    <tr><td>Side</td><td>▲ Long spread (bought S1, sold S2) or ▼ Short spread</td></tr>
+    <tr><td>Entry Prices</td><td>Prices at the time of opening from the database</td></tr>
+    <tr><td>Entry Z</td><td>Z-score at entry — shows how strong the signal was</td></tr>
+    <tr><td>Z-score</td><td>Mini sparkline chart + current value (refreshed on tab open)</td></tr>
+    <tr><td>Unrealised PnL</td><td>Approximate PnL using Binance mark prices</td></tr>
+    <tr><td>Open for</td><td>Time elapsed since opening</td></tr>
+  </tbody>
+</table>
+
+<h3>Reading the Z-score Sparkline</h3>
+<p>The small chart in the Z-score column shows the last 50 hourly bars:</p>
+<ul style="font-size:13px;line-height:2;">
+  <li>Is the spread moving back toward zero? (signal to close)</li>
+  <li>Is the spread moving further away? (risk — consider a stop-loss)</li>
+  <li>How volatile is the spread right now?</li>
+</ul>
+<div class="callout green">Ideal close signal: Z-score dropped from ±2 close to 0 and sparkline shows steady movement toward zero.</div>
+
+<h3>Action Buttons</h3>
+
+<div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;">
+  <div style="display:grid;grid-template-columns:40px 1fr;gap:6px 10px;font-size:13px;line-height:1.8;">
+    <div style="color:#58a6ff;font-weight:600;font-size:15px;">↗</div>
+    <div><strong>Load into Analysis</strong> — fills symbol fields and hedge ratio in the sidebar. Press Analyze for a full stats refresh.</div>
+    <div style="color:#f85149;font-weight:600;">✕ M</div>
+    <div><strong>Close at Market</strong> — immediate close with a market order. Uses actual exchange quantities. Reliable but you pay taker fee.</div>
+    <div style="color:#e3b341;font-weight:600;">◎ S</div>
+    <div><strong>Close via Smart Limit</strong> — uses the smart engine: tries maker orders first, falls back to taker on timeout. Settings come from the sidebar (passive/aggressive timeouts). Monitor in the Execution Monitor panel.</div>
+    <div style="color:#dc2626;font-weight:600;">🗑</div>
+    <div><strong>Remove DB Record</strong> — deletes only the database record. Exchange positions are <strong>NOT closed</strong>. Use only when the position is already closed or was never executed.</div>
+  </div>
+</div>
+
+<h3>DB / Exchange Desync</h3>
+<p>Sometimes Strategy Positions shows a record but Exchange Positions is empty. This is a desync.</p>
+<div class="callout yellow">
+  <strong>Common causes:</strong><br/>
+  • Position was manually closed directly on Binance or via another app<br/>
+  • Smart execution ended with an error (ROLLBACK/FAILED) but DB record wasn't cleaned up<br/>
+  • Trade was opened for testing without real execution
+</div>
+<div class="callout red" style="margin-top:8px;"><strong>Fix:</strong> press 🗑 and confirm deletion. The record will disappear from the journal. The exchange is not affected.</div>
+
+<h3>Restoring State After Page Reload</h3>
+<p>When you reload the browser, all sidebar fields reset. To restore a position:</p>
+<ol style="font-size:13px;line-height:2;padding-left:18px;">
+  <li>Go to the <strong>Positions</strong> tab</li>
+  <li>Click <strong>↗</strong> next to the position you need</li>
+  <li>Symbol fields and hedge ratio are filled automatically</li>
+  <li>You can now close via table buttons or the sidebar (run Analyze first for a full update)</li>
+</ol>`
     }
   ]
 };

@@ -69,6 +69,8 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | DELETE | `/api/execution/{exec_id}` | Request cancellation of a running smart execution |
 | GET | `/api/db/positions` | Open positions saved by the strategy (with entry z-score, hedge ratio, etc.) |
 | GET | `/api/db/history` | Closed trade history from SQLite (`?limit=100`) |
+| GET | `/api/db/positions/enriched` | Open positions from DB enriched with live Binance mark prices + unrealized PnL |
+| DELETE | `/api/db/positions/{id}` | Delete a DB position record (does NOT close exchange positions) |
 | WS | `/ws/stream` | Live spread/price/Z-score updates every 5 seconds for the active analysed pair |
 
 ### `GET /api/pre_trade_check` — query params
@@ -90,12 +92,16 @@ Returns `{ok: bool, checks: [{name, ok, detail}], sizes: {qty1, qty2, rounded_qt
 | `exit_zscore` | float | null | Z-score at exit (saved to DB) |
 
 ### `POST /api/trade/smart` — SmartTradeRequest fields
-Same as TradeRequest (minus `action`/`exit_zscore`) plus:
+Same as TradeRequest plus `action: str = "open"` (supports `"close"` for smart close from positions table) and:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `action` | str | `"open"` | `"open"` \| `"close"` |
+| `exit_zscore` | float | null | Z-score at exit (for close action, saved to DB) |
 | `passive_s` | float | `10.0` | Seconds to wait at bid/ask before chasing |
 | `aggressive_s` | float | `20.0` | Seconds at taker side before market fallback |
 | `allow_market` | bool | `true` | Use market order as final fallback |
+
+When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qty (fallback to DB qty), reverses spread direction, runs smart execution that calls `db.close_position()` on success.
 
 ## Key Parameters for `/api/history`
 - `symbol1`, `symbol2` — ccxt format, e.g. `BTC/USDT:USDT` or `BTC/USDC:USDC`
@@ -154,6 +160,15 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 - **Trades table**: colored rows (green/red bg tint), `+/-` PnL signs, legs column showing ▲/▼ per symbol, cumulative PnL column. Populated in `runBacktest()` from `data.trades`
 - **Guide nav**: redesigned as sidebar-style list on left of drawer (not a cramped top bar); numbered sections with readable text
 
+### Positions Tab
+- Three sections: **Strategy Positions** (DB+live enriched), **Exchange Positions** (raw Binance), **Trade Journal** (collapsible closed trades)
+- `loadStrategyPositions()` → `GET /api/db/positions/enriched` → `renderStrategyPositions(positions)` → rows with sparklines
+- `_loadSparkline(pos)` — async; fetches `/api/history?timeframe=1h&limit=100&zscore_window=20`; creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z value
+- `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers
+- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + sets `state.hedgeRatio` + switches to spread tab; `✕ M` → `_closePosMarket(pos)` POST `/api/trade` action=close; `◎ S` → `_closePosSmart(pos)` POST `/api/trade/smart` action=close; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
+- `toggleJournal()` / `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table with colored rows
+- `pollExecution` on terminal state → calls `loadStrategyPositions()` + `refreshPositions()` after 2s delay
+
 ### Trading Section (sidebar)
 - **Leverage input**: `#leverage-input` (1–20x); passed to both market and smart execution
 - **Execution mode toggle**: `setExecMode('market'|'smart')` — globals `execMode`, updates button styles and shows/hides smart settings
@@ -170,7 +185,7 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 - Fixed right panel (520px), slides in with CSS transform transition
 - Backdrop overlay closes on click; `Escape` key also closes
 - Content defined in `GUIDE` JS object — bilingual (`ru`/`en`), switches with `currentLang`
-- 10 sections: intro, theory, pair-selection, analysis, zscore, stats, backtest, trading, risk, trade-safety
+- 11 sections: intro, theory, pair-selection, analysis, zscore, stats, backtest, trading, risk, trade-safety, positions
 - Each section has optional `example` object — "Попробовать / Try example" button calls `applyGuideExample()` which fills the form and closes the drawer
 - Previous/Next navigation at bottom of each section
 - To add a section: add entry to both `GUIDE.ru[]` and `GUIDE.en[]` with `{id, title, content, example?}`
@@ -196,7 +211,7 @@ Private endpoints (positions, balance, trade) require valid keys.
 - Two tables:
   - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, opened_at
   - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
-- Key functions: `save_open_position(...)` → id, `close_position(id, exit_p1, exit_p2, pnl, exit_zscore)`, `find_open_position(sym1, sym2)` → dict|None, `get_open_positions()`, `get_closed_trades(limit)`
+- Key functions: `save_open_position(...)` → id, `close_position(id, exit_p1, exit_p2, pnl, exit_zscore)`, `find_open_position(sym1, sym2)` → dict|None, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)` → bool — deletes record from open_positions without exchange action
 - On `action=open`: position saved with entry prices, z-score from request, `db_id` returned in response
 - On `action=close`: DB position found by (sym1, sym2), PnL calculated from entry prices, record moved to `closed_trades`
 - Backward-compatible: if no DB record found on close, trades still execute (PnL field is null)
@@ -206,13 +221,13 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 - `ExecConfig`: `passive_s` (default 10s), `aggressive_s` (20s), `allow_market` (True), `poll_s` (2s)
 - `LegState`: tracks `order_id`, `status` (WAITING/PARTIAL/FILLED/CANCELLED/FAILED), `filled`, `remaining`, `avg_price`; `absorb_order(order_dict)` syncs from ccxt order
-- `ExecContext`: holds both legs, config, events log, `cancel_req` flag, `db_id`; `to_dict()` → serializable snapshot for polling
+- `ExecContext`: holds both legs, config, events log, `cancel_req` flag, `db_id`, `is_close`, `close_db_id`, `entry_price1/2`, `exit_zscore`; `to_dict()` includes `is_close`; OPEN terminal state branches on `is_close` to call `close_position()` vs `save_open_position()`
 - `run_execution(ctx, client, db_module)` runs as `asyncio.create_task()`:
   1. Fetch both orderbooks, place passive limits simultaneously via `asyncio.gather`
   2. Poll every `poll_s`: check cancel flag → refresh fills → check timeouts
   3. Passive timeout: cancel+replace at taker prices (`_chase_to_taker`)
   4. Aggressive timeout: cancel+market (`_force_market`) → break
-  5. Both filled → `OPEN`, save to DB
+  5. Both filled → `OPEN`; if `is_close=True` → close DB record with PnL; else → save new open position
   6. Partial fill → `ROLLBACK` (close filled leg at market) → `DONE`
 - Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
 - Aggressive price: buy@ask, sell@bid (taker side, crosses spread)
@@ -231,6 +246,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **`amount_to_precision` KeyError**: markets not loaded — fixed by `_ensure_markets()` guard in `place_order`
 - **Smart execution stuck in PASSIVE**: passive_s too long, or orders not visible in `fetch_order` — check log events in execution monitor
 - **Rollback FAILED**: market order for the filled leg also failed — requires manual action; logged as ERROR with "MANUAL ACTION REQUIRED"
+- **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — position was closed manually on exchange or via another interface. Use 🗑 button to remove the stale DB record, OR press `✕ M` (backend will detect no open positions and still clean up DB).
 
 ## User Preferences
 - Русский язык по умолчанию в UI

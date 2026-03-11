@@ -104,6 +104,13 @@ class ExecContext:
     sizing_method: Optional[str]   = None
     leverage:      int             = 1
 
+    # Close-mode fields
+    is_close:      bool            = False
+    close_db_id:   Optional[int]   = None
+    entry_price1:  Optional[float] = None
+    entry_price2:  Optional[float] = None
+    exit_zscore:   Optional[float] = None
+
     status:     ExecStatus    = ExecStatus.PLACING
     started_at: float         = field(default_factory=time.time)
     events:     list[str]     = field(default_factory=list)
@@ -134,6 +141,7 @@ class ExecContext:
             "status":     self.status,
             "elapsed_s":  round(self.elapsed(), 1),
             "spread_side": self.spread_side,
+            "is_close":   self.is_close,
             "leg1":       _leg(self.leg1),
             "leg2":       _leg(self.leg2),
             "events":     self.events[-40:],
@@ -219,22 +227,41 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 f"OPEN  {ctx.leg1.symbol}@{ctx.leg1.avg_price} | "
                 f"{ctx.leg2.symbol}@{ctx.leg2.avg_price}"
             )
-            pos_id = db_module.save_open_position(
-                symbol1=ctx.leg1.symbol,
-                symbol2=ctx.leg2.symbol,
-                side=ctx.spread_side,
-                qty1=ctx.leg1.filled,
-                qty2=ctx.leg2.filled,
-                hedge_ratio=ctx.hedge_ratio or 1.0,
-                entry_zscore=ctx.entry_zscore,
-                entry_price1=ctx.leg1.avg_price,
-                entry_price2=ctx.leg2.avg_price,
-                size_usd=ctx.size_usd,
-                sizing_method=ctx.sizing_method,
-                leverage=ctx.leverage,
-            )
-            ctx.db_id = pos_id
-            ctx.evt(f"Saved to DB id={pos_id}")
+            if ctx.is_close and ctx.close_db_id:
+                # Calculate PnL: leg1=sym1, leg2=sym2; avg_price = exit price
+                pnl = None
+                if (ctx.entry_price1 and ctx.entry_price2
+                        and ctx.leg1.avg_price and ctx.leg2.avg_price):
+                    sign = 1 if ctx.spread_side == "long_spread" else -1
+                    pnl1 = ctx.leg1.qty * (ctx.leg1.avg_price - ctx.entry_price1) * sign
+                    pnl2 = ctx.leg2.qty * (ctx.entry_price2 - ctx.leg2.avg_price) * sign
+                    pnl = round(pnl1 + pnl2, 4)
+                db_module.close_position(
+                    ctx.close_db_id,
+                    ctx.leg1.avg_price,
+                    ctx.leg2.avg_price,
+                    pnl,
+                    ctx.exit_zscore,
+                )
+                ctx.db_id = ctx.close_db_id
+                ctx.evt(f"Position closed in DB id={ctx.close_db_id} pnl={pnl}")
+            else:
+                pos_id = db_module.save_open_position(
+                    symbol1=ctx.leg1.symbol,
+                    symbol2=ctx.leg2.symbol,
+                    side=ctx.spread_side,
+                    qty1=ctx.leg1.filled,
+                    qty2=ctx.leg2.filled,
+                    hedge_ratio=ctx.hedge_ratio or 1.0,
+                    entry_zscore=ctx.entry_zscore,
+                    entry_price1=ctx.leg1.avg_price,
+                    entry_price2=ctx.leg2.avg_price,
+                    size_usd=ctx.size_usd,
+                    sizing_method=ctx.sizing_method,
+                    leverage=ctx.leverage,
+                )
+                ctx.db_id = pos_id
+                ctx.evt(f"Saved to DB id={pos_id}")
         else:
             # Partial fill → rollback
             filled_leg = None

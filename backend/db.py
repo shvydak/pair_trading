@@ -150,6 +150,12 @@ def get_open_positions() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def delete_open_position(position_id: int) -> bool:
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM open_positions WHERE id = ?", (position_id,))
+        return cur.rowcount > 0
+
+
 def get_closed_trades(limit: int = 100) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
