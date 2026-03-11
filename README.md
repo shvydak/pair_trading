@@ -108,11 +108,11 @@ open frontend/index.html
 
 **Position sizing methods:**
 
-| Method | Formula | When to use |
-|--------|---------|-------------|
-| **OLS β** (default) | `qty1 = size/P1`, `qty2 = size×\|β\|/P2` | Most pairs |
-| **ATR** | `qty1 = size/P1`, `qty2 = qty1×(ATR1/ATR2)` | Equal dollar-volatility per leg |
-| **Equal $** | `qty1 = size/P1`, `qty2 = size/P2` | Equal dollar exposure |
+| Method              | Formula                                     | When to use                     |
+| ------------------- | ------------------------------------------- | ------------------------------- |
+| **OLS β** (default) | `qty1 = size/P1`, `qty2 = size×\|β\|/P2`    | Most pairs                      |
+| **ATR**             | `qty1 = size/P1`, `qty2 = qty1×(ATR1/ATR2)` | Equal dollar-volatility per leg |
+| **Equal $**         | `qty1 = size/P1`, `qty2 = size/P2`          | Equal dollar exposure           |
 
 > The **Position Preview** panel shows exact quantities and values before you click Long/Short. Live trading requires both legs to use the same margin market, e.g. both `USDT-M` or both `USDC-M`.
 
@@ -170,6 +170,13 @@ pair_trading/
 ---
 
 ## FAQ
+
+**How to run tests?**
+
+```bash
+cd /path/to/pair_trading
+.venv/bin/pytest tests/ -v
+```
 
 **Do I need API keys to view charts?**
 No. Keys are only required for the Positions tab and trading buttons.

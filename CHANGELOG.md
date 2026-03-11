@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-03-12 — Тестовое покрытие (104 unit-теста)
+
+### Что добавлено
+
+Создан каталог `tests/` с четырьмя файлами тестов. Все 104 теста проходят за ~1.7 сек.
+
+| Файл | Тестов | Что покрыто |
+|---|---|---|
+| `tests/test_strategy.py` | 40 | Всё математическое ядро: spread, z-score, position sizing (OLS/ATR/Equal), сигналы, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
+| `tests/test_db.py` | 21 | SQLite persistence: save/find/close/delete позиций, TP/SL triggers, журнал сделок, дубликат-guard |
+| `tests/test_helpers.py` | 26 | `_clean()` и `_safe_float()` — NaN/Inf в JSON; регрессия на тихий баг сериализации |
+| `tests/test_price_cache.py` | 17 | PriceCache ref-counting: subscribe/unsubscribe, изоляция ключей, lifecycle двух потребителей |
+
+**`tests/conftest.py`** — общий `tmp_db` fixture: каждый тест получает изолированную temp-БД через `monkeypatch.setattr(db, "DB_PATH", ...)`.
+
+**`backend/requirements.txt`** — добавлен `pytest`.
+
+### Запуск
+
+```bash
+cd /Users/y.shvydak/Projects/pair_trading
+.venv/bin/pytest tests/ -v
+```
+
+### Регрессионное покрытие из прошлых багов
+
+| Баг (из changelog) | Тест |
+|---|---|
+| Дубликат позиции в DB (нет guard) | `test_save_duplicate_raises_value_error` |
+| ATR sizing формула (`* P1/P2` лишнее) | `test_position_sizes_atr` |
+| `_clean()` не обрабатывал `np.float64` / `np.int64` | `test_clean_numpy_*` |
+| PriceCache: unsubscribe не чистил данные | `test_unsubscribe_last_removes_store_entry` |
+
+### Что намеренно не покрыто
+
+- `order_manager.py` — требует тяжёлого asyncio + Binance мока
+- `binance_client.py` — внешний API, тестируется интеграционно
+- Balance/notional check в `/api/pre_trade_check` — нужен мок BinanceClient
+
+---
+
 ## 2026-03-11 — Аудит и исправление критических ошибок
 
 ### 1. Исправлен расчёт баланса в `/api/pre_trade_check`

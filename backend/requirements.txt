@@ -9,3 +9,4 @@ statsmodels
 scipy
 aiohttp
 python-dotenv
+pytest

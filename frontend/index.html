@@ -736,13 +736,13 @@
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
           </label>
           <div class="flex gap-1" id="market-filter-btns">
-            <button onclick="setMarketFilter('ALL')" data-market-filter="ALL" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
+            <button onclick="setMarketFilter('ALL')" data-market-filter="ALL" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
               <span data-i18n="market_filter_all">All</span>
             </button>
             <button onclick="setMarketFilter('USDT')" data-market-filter="USDT" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
               <span data-i18n="market_filter_usdt">USDT-M</span>
             </button>
-            <button onclick="setMarketFilter('USDC')" data-market-filter="USDC" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+            <button onclick="setMarketFilter('USDC')" data-market-filter="USDC" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
               <span data-i18n="market_filter_usdc">USDC-M</span>
             </button>
           </div>
@@ -882,11 +882,11 @@
         </label>
         <div class="flex gap-1">
           <button onclick="setExecMode('market')" id="exec-market-btn"
-            class="flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
+            class="flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
             <span data-i18n="exec_market">Market</span>
           </button>
           <button onclick="setExecMode('smart')" id="exec-smart-btn"
-            class="flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+            class="flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
             <span data-i18n="exec_smart">Smart Limit</span>
           </button>
         </div>
@@ -894,7 +894,7 @@
       </div>
 
       <!-- Smart settings (shown only in smart mode) -->
-      <div id="smart-settings" class="hidden mb-3 bg-surface rounded-md p-2.5 border border-border text-xs space-y-2">
+      <div id="smart-settings" class="mb-3 bg-surface rounded-md p-2.5 border border-border text-xs space-y-2">
         <div class="text-muted font-semibold uppercase tracking-wider text-[10px]" data-i18n="smart_settings">Smart Settings</div>
         <div class="flex items-center justify-between tooltip-container">
           <label class="text-muted flex items-center gap-1" data-i18n="passive_timeout">Passive timeout (s)
@@ -1324,7 +1324,7 @@ let state = {
   timeframe: '1h',
   symbols: [],
   markets: [],
-  marketFilter: 'ALL',
+  marketFilter: 'USDC',
   historyData: null,
   historyLimit: null,
   hedgeRatio: null,
@@ -2427,7 +2427,7 @@ function updateTriggerLines(tp, sl) {
 //  Sizing method
 // ------------------------------------------------------------------ //
 let sizingMethod = 'ols';
-let execMode = 'market';
+let execMode = 'smart';
 let currentExecId = null;
 let execPollTimer = null;
 

@@ -22,6 +22,12 @@ pair_trading/
 │   └── requirements.txt
 ├── frontend/
 │   └── index.html           # Single-file UI (Tailwind + Chart.js, no build step)
+├── tests/
+│   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
+│   ├── test_strategy.py     # 40 tests — all strategy math
+│   ├── test_db.py           # 21 tests — SQLite persistence layer
+│   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
+│   └── test_price_cache.py  # 17 tests — PriceCache ref-counting
 ├── logs/
 │   └── pair_trading.log     # Rotating log (10 MB × 5 files)
 ├── pair_trading.db          # SQLite trade journal (auto-created on first run)
@@ -43,6 +49,13 @@ cd backend && ../.venv/bin/uvicorn main:app --reload --port 8080
 
 ### Frontend
 Open `frontend/index.html` directly in browser (no build/server needed).
+
+### Tests
+```bash
+cd /Users/y.shvydak/Projects/pair_trading
+.venv/bin/pytest tests/ -v        # all 104 tests
+.venv/bin/pytest tests/test_strategy.py -v   # strategy math only
+```
 
 ### Virtual Environment
 Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed by Homebrew and blocks system-wide installs.
@@ -269,6 +282,21 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **Smart execution stuck in PASSIVE**: passive_s too long, or orders not visible in `fetch_order` — check log events in execution monitor
 - **Rollback FAILED**: market order for the filled leg also failed — requires manual action; logged as ERROR with "MANUAL ACTION REQUIRED"
 - **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — position was closed manually on exchange or via another interface. Use 🗑 button to remove the stale DB record, OR press `✕ M` (backend will detect no open positions and still clean up DB).
+
+## Tests (`tests/`)
+
+104 unit-тестов, все проходят ~1.7 сек. Запуск: `.venv/bin/pytest tests/ -v`
+
+| Файл | Тестов | Покрытие |
+|---|---|---|
+| `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
+| `test_db.py` | 21 | save/find/close/delete positions, TP/SL triggers, trade journal, duplicate guard |
+| `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
+| `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
+
+**`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
+
+**Не покрыто намеренно**: `order_manager.py` (asyncio + Binance мок), `binance_client.py` (внешний API), баланс/номинал в `/api/pre_trade_check` (нужен мок BinanceClient).
 
 ## User Preferences
 - Русский язык по умолчанию в UI
