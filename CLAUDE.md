@@ -148,6 +148,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - Dependencies via CDN: Tailwind CSS, Chart.js 4.4.2, chartjs-plugin-annotation 3.0.1
 - i18n: `I18N` object with `en`/`ru` keys, `t(key)` function, `applyLocale()` on load and lang switch
 - Language stored in `localStorage` key `pt_lang`, default `ru`
+- **Analysis state persistence**: `saveAnalysisState()` — saves to `localStorage['pt_last']` on every successful Analyze: sym1, sym2, timeframe, limit, zscore_window, entryZ, exitZ, posSize, sizingMethod, leverage, marketFilter. `restoreAnalysisState()` — called on `DOMContentLoaded`; restores all fields and auto-calls `runAnalyze()`. If no saved state (first launch) — falls back to `setTimeframe('1h')`.
 - Tooltips: `position: fixed` with JS positioning — handles viewport clipping above/below
 - **Market filter** in pair config — `setMarketFilter('ALL'|'USDT'|'USDC')` filters symbol suggestions for `Symbol 1/2`
 - **Market context** card in pair config — auto-detects whether the current pair is `USDT-M`, `USDC-M`, or mixed; mixed pairs can be analysed but live trading is blocked
@@ -165,7 +166,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `loadStrategyPositions()` → `GET /api/db/positions/enriched` → `renderStrategyPositions(positions)` → rows with sparklines
 - `_loadSparkline(pos)` — async; fetches `/api/history?timeframe=1h&limit=100&zscore_window=20`; creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z value
 - `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers
-- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + sets `state.hedgeRatio` + switches to spread tab; `✕ M` → `_closePosMarket(pos)` POST `/api/trade` action=close; `◎ S` → `_closePosSmart(pos)` POST `/api/trade/smart` action=close; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
+- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePosMarket(pos)` POST `/api/trade` action=close; `◎ S` → `_closePosSmart(pos)` POST `/api/trade/smart` action=close; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
 - `toggleJournal()` / `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table with colored rows
 - `pollExecution` on terminal state → calls `loadStrategyPositions()` + `refreshPositions()` after 2s delay
 

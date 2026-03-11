@@ -1268,7 +1268,6 @@ let state = {
 // ------------------------------------------------------------------ //
 window.addEventListener('DOMContentLoaded', () => {
   fetchSymbols();
-  setTimeframe('1h');
   setMarketFilter(state.marketFilter);
   applyLocale();
   ['sym1-input', 'sym2-input'].forEach(id => {
@@ -1277,6 +1276,7 @@ window.addEventListener('DOMContentLoaded', () => {
   updatePairContext();
   checkApiStatus();
   initTooltips();
+  restoreAnalysisState();
 });
 
 function inferMarginAsset(symbol) {
@@ -1535,6 +1535,7 @@ async function runAnalyze() {
     enableTrading(true, sym1, sym2);
     connectWebSocket(sym1, sym2, zwindow);
     updateLastUpdate();
+    saveAnalysisState();
     showToast(t('toast_analyze_done'), 'success');
     switchTab('spread');
   } catch(e) {
@@ -1543,6 +1544,48 @@ async function runAnalyze() {
   } finally {
     setLoading(btn, false, t('analyze_btn'));
   }
+}
+
+// ------------------------------------------------------------------ //
+//  Analysis state persistence (localStorage)
+// ------------------------------------------------------------------ //
+function saveAnalysisState() {
+  const params = {
+    sym1:         document.getElementById('sym1-input').value.trim().toUpperCase(),
+    sym2:         document.getElementById('sym2-input').value.trim().toUpperCase(),
+    tf:           state.timeframe,
+    limit:        document.getElementById('limit-input').value,
+    zwindow:      document.getElementById('zwindow-input').value,
+    entryZ:       document.getElementById('entry-z-input').value,
+    exitZ:        document.getElementById('exit-z-input').value,
+    posSize:      document.getElementById('pos-size-input').value,
+    sizing:       sizingMethod,
+    leverage:     document.getElementById('leverage-input').value,
+    marketFilter: state.marketFilter,
+  };
+  localStorage.setItem('pt_last', JSON.stringify(params));
+}
+
+function restoreAnalysisState() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem('pt_last')); } catch(e) {}
+  if (!saved || !saved.sym1 || !saved.sym2) {
+    setTimeframe('1h');
+    return;
+  }
+  if (saved.marketFilter) setMarketFilter(saved.marketFilter);
+  document.getElementById('sym1-input').value = saved.sym1;
+  document.getElementById('sym2-input').value = saved.sym2;
+  setTimeframe(saved.tf || '1h');
+  if (saved.limit)   document.getElementById('limit-input').value   = saved.limit;
+  if (saved.zwindow) document.getElementById('zwindow-input').value = saved.zwindow;
+  if (saved.entryZ)  document.getElementById('entry-z-input').value = saved.entryZ;
+  if (saved.exitZ)   document.getElementById('exit-z-input').value  = saved.exitZ;
+  if (saved.posSize) document.getElementById('pos-size-input').value = saved.posSize;
+  if (saved.sizing)  setSizingMethod(saved.sizing);
+  if (saved.leverage) document.getElementById('leverage-input').value = saved.leverage;
+  updatePairContext();
+  runAnalyze();
 }
 
 // ------------------------------------------------------------------ //
@@ -2047,10 +2090,12 @@ function _loadPosIntoAnalysis(posId) {
   if (!pos) return;
   document.getElementById('sym1-input').value = _symShort(pos.symbol1);
   document.getElementById('sym2-input').value = _symShort(pos.symbol2);
-  // Pre-load hedge ratio so sidebar Close button works without re-analyzing
   state.hedgeRatio = pos.hedge_ratio;
+  if (pos.sizing_method) setSizingMethod(pos.sizing_method);
+  if (pos.leverage)      document.getElementById('leverage-input').value = pos.leverage;
+  updatePairContext();
   switchTab('spread');
-  showToast(currentLang === 'ru' ? 'Пара загружена. Нажмите Analyze.' : 'Pair loaded. Click Analyze.', 'info');
+  runAnalyze();
 }
 
 async function _closePos(posId, mode) {
