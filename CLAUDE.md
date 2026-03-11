@@ -69,7 +69,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | DELETE | `/api/execution/{exec_id}` | Request cancellation of a running smart execution |
 | GET | `/api/db/positions` | Open positions saved by the strategy (with entry z-score, hedge ratio, etc.) |
 | GET | `/api/db/history` | Closed trade history from SQLite (`?limit=100`) |
-| WS | `/ws/stream` | Live z-score updates every 5 seconds |
+| WS | `/ws/stream` | Live spread/price/Z-score updates every 5 seconds for the active analysed pair |
 
 ### `GET /api/pre_trade_check` — query params
 `symbol1`, `symbol2`, `size_usd`, `hedge_ratio`, `sizing_method`, `atr1`, `atr2`, `leverage`
@@ -146,9 +146,10 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 - **Market filter** in pair config — `setMarketFilter('ALL'|'USDT'|'USDC')` filters symbol suggestions for `Symbol 1/2`
 - **Market context** card in pair config — auto-detects whether the current pair is `USDT-M`, `USDC-M`, or mixed; mixed pairs can be analysed but live trading is blocked
 - **Binance status section** in sidebar — `checkApiStatus()` calls `/api/status` on page load and on refresh button click; `renderApiStatus(data)` renders supported futures balances and highlights the active market asset; states: `no_keys` (grey) / connected (green) / `auth_error` (red) / network error (yellow)
+- **Live chart updates**: after `Analyze`, `connectWebSocket()` subscribes to `/ws/stream`; every ~5s the frontend updates the last spread, z-score, and normalised price points in-place without rebuilding charts
 - **Live threshold lines**: `updateThresholdLines()` — called `oninput` on entry/exit Z-score fields; updates chart annotations immediately via `chart.update('none')` without re-fetching data
 - **Position sizing**: `sizingMethod` global (`ols`/`atr`/`equal`), `updateSizePreview()` computes qty/value client-side from `state.historyData` prices + ATR
-- **state** includes: `historyData`, `hedgeRatio`, `atr1`, `atr2`, `pairMeta`, `balances`, `markets`, `marketFilter`, `spreadChart`, `priceChart`, `ws`
+- **state** includes: `historyData`, `historyLimit`, `hedgeRatio`, `atr1`, `atr2`, `pairMeta`, `balances`, `markets`, `marketFilter`, `spreadChart`, `priceChart`, `ws`
 - **Tooltips with i18n**: tooltip HTML is stored in `I18N.en.tip_*` / `I18N.ru.tip_*` keys; `tooltip-box` div uses `data-i18n-html` attribute; `applyLocale()` sets `innerHTML` for these. Existing tooltip keys: `tip_entry_z`, `tip_exit_z`, `tip_zwindow`
 - **Trades table**: colored rows (green/red bg tint), `+/-` PnL signs, legs column showing ▲/▼ per symbol, cumulative PnL column. Populated in `runBacktest()` from `data.trades`
 - **Guide nav**: redesigned as sidebar-style list on left of drawer (not a cramped top bar); numbered sections with readable text
@@ -162,6 +163,7 @@ Same as TradeRequest (minus `action`/`exit_zscore`) plus:
 - **Execution monitor** (`#exec-monitor`): shown during/after smart execution; status badge, per-leg fill %, event log; `cancelCurrentExecution()` sends DELETE
 - **Smart execution globals**: `execMode`, `currentExecId`, `execPollTimer`
 - **Smart execution flow**: `executeTrade()` routes to `startSmartExecution(side)` in smart mode → POST `/api/trade/smart` → starts `setInterval(pollExecution, 2000)` → `renderExecution(data)` → stops on terminal status
+- **History/WS consistency**: `runAnalyze()` stores the active history length in `state.historyLimit`, and `connectWebSocket()` passes that `limit` to `/ws/stream` so live updates are calculated on the same window as the original chart (prevents the last point from jumping on first refresh)
 
 ## Guide Drawer
 - Triggered by "? Руководство / Guide" button in header

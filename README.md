@@ -9,8 +9,8 @@ Monitors the spread between two correlated assets in real time, runs backtests, 
 ## Features
 
 - **Pair analysis** — cointegration, hedge ratio, half-life, Hurst exponent, correlation
-- **Spread & Z-score chart** — entry/exit threshold lines update live as you type, real-time WebSocket updates
-- **Normalised price chart** — see how both assets move relative to each other
+- **Spread & Z-score chart** — entry/exit threshold lines update live as you type, and the latest point refreshes via WebSocket every 5 seconds after analysis
+- **Normalised price chart** — see how both assets move relative to each other, with the latest point refreshing every 5 seconds after analysis
 - **Backtesting** — equity curve, Sharpe ratio, max drawdown, trade log
 - **Live trading** — Long/Short spread with one click via Binance Futures API
 - **Position sizing** — three methods: OLS β (default), ATR volatility parity, Equal dollar
@@ -80,6 +80,7 @@ open frontend/index.html
 2. Select a timeframe: `5m` / `1h` / `4h` / `1d`
 3. Set the lookback (candles) and Z-score window
 4. Click **Analyze Pair**
+5. After analysis, the dashboard keeps the last chart point updated every ~5 seconds via WebSocket without rerunning backtest
 
 ### Statistics Reference
 
