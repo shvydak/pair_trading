@@ -1144,6 +1144,7 @@ let state = {
   markets: [],
   marketFilter: 'ALL',
   historyData: null,
+  historyLimit: null,
   hedgeRatio: null,
   atr1: null,
   atr2: null,
@@ -1207,6 +1208,7 @@ function formatAssetAmount(value, asset) {
 function handleSymbolInputChange() {
   state.pairMeta = null;
   state.historyData = null;
+  state.historyLimit = null;
   state.hedgeRatio = null;
   state.atr1 = null;
   state.atr2 = null;
@@ -1409,6 +1411,7 @@ async function runAnalyze() {
     if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
     const data = await res.json();
     state.historyData = data;
+    state.historyLimit = Array.isArray(data.timestamps) ? data.timestamps.length : (parseInt(limit, 10) || null);
     state.hedgeRatio = data.hedge_ratio;
     state.atr1 = data.stats?.atr1 ?? null;
     state.atr2 = data.stats?.atr2 ?? null;
@@ -2139,7 +2142,13 @@ function connectWebSocket(sym1, sym2, zwindow) {
   state.ws = new WebSocket(wsUrl);
 
   state.ws.onopen = () => {
-    state.ws.send(JSON.stringify({ symbol1: sym1, symbol2: sym2, timeframe: state.timeframe, zscore_window: zwindow }));
+    state.ws.send(JSON.stringify({
+      symbol1: sym1,
+      symbol2: sym2,
+      timeframe: state.timeframe,
+      zscore_window: zwindow,
+      limit: state.historyLimit || undefined,
+    }));
     setWsStatus(true);
   };
 
@@ -2155,6 +2164,72 @@ function connectWebSocket(sym1, sym2, zwindow) {
   state.ws.onerror = () => { setWsStatus(false); };
 }
 
+function syncLiveHistory(msg) {
+  const history = state.historyData;
+  const timestamp = msg?.timestamp;
+  if (!history || !timestamp || !Array.isArray(history.timestamps)) return false;
+
+  const seriesEntries = [
+    ['price1', msg.price1],
+    ['price2', msg.price2],
+    ['spread', msg.spread],
+    ['zscore', msg.zscore],
+  ];
+  if (seriesEntries.some(([key, value]) => !Array.isArray(history[key]) || value === undefined || value === null)) {
+    return false;
+  }
+
+  const lastIdx = history.timestamps.length - 1;
+  const prevLastTimestamp = lastIdx >= 0 ? history.timestamps[lastIdx] : null;
+  const replaceLast = lastIdx >= 0 && history.timestamps[lastIdx] === timestamp;
+
+  if (replaceLast) {
+    for (const [key, value] of seriesEntries) {
+      history[key][lastIdx] = value;
+    }
+  } else {
+    history.timestamps.push(timestamp);
+    for (const [key, value] of seriesEntries) {
+      history[key].push(value);
+    }
+  }
+
+  const maxPoints = state.historyLimit || history.timestamps.length;
+  while (history.timestamps.length > maxPoints) {
+    history.timestamps.shift();
+    for (const [key] of seriesEntries) {
+      history[key].shift();
+    }
+  }
+
+  history.stats = history.stats || {};
+  history.stats.current_zscore = msg.zscore;
+  return true;
+}
+
+function refreshLiveCharts() {
+  const history = state.historyData;
+  if (!history || !Array.isArray(history.timestamps)) return;
+
+  const labels = history.timestamps.map(ts => String(ts).substring(0, 16));
+
+  if (state.spreadChart) {
+    state.spreadChart.data.labels = labels;
+    state.spreadChart.data.datasets[0].data = history.spread;
+    state.spreadChart.data.datasets[1].data = history.zscore;
+    state.spreadChart.update('none');
+  }
+
+  if (state.priceChart && Array.isArray(history.price1) && Array.isArray(history.price2) && history.price1.length && history.price2.length) {
+    const base1 = history.price1[0] || 1;
+    const base2 = history.price2[0] || 1;
+    state.priceChart.data.labels = labels;
+    state.priceChart.data.datasets[0].data = history.price1.map(p => (p / base1) * 100);
+    state.priceChart.data.datasets[1].data = history.price2.map(p => (p / base2) * 100);
+    state.priceChart.update('none');
+  }
+}
+
 function updateLiveData(msg) {
   if (msg.zscore !== undefined && msg.zscore !== null) {
     const z = msg.zscore;
@@ -2164,6 +2239,12 @@ function updateLiveData(msg) {
     if (z <= -2)      zEl.classList.add('text-green-400');
     else if (z >= 2)  zEl.classList.add('text-red-400');
     else              zEl.classList.add('text-yellow-400');
+  }
+  if (syncLiveHistory(msg)) {
+    refreshLiveCharts();
+    if (!document.getElementById('size-preview').classList.contains('hidden')) {
+      updateSizePreview();
+    }
   }
   updateLastUpdate();
 }

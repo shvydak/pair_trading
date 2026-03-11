@@ -741,12 +741,13 @@ async def websocket_stream(websocket: WebSocket):
         symbol2 = meta2["symbol"]
         timeframe = params.get("timeframe", "1h")
         zscore_window = int(params.get("zscore_window", 20))
+        history_limit = max(int(params.get("limit", zscore_window * 3)), zscore_window * 3)
 
         while True:
             try:
                 df1, df2 = await asyncio.gather(
-                    client.fetch_ohlcv(symbol1, timeframe, zscore_window * 3),
-                    client.fetch_ohlcv(symbol2, timeframe, zscore_window * 3),
+                    client.fetch_ohlcv(symbol1, timeframe, history_limit),
+                    client.fetch_ohlcv(symbol2, timeframe, history_limit),
                 )
                 price1 = df1["close"]
                 price2 = df2["close"]
