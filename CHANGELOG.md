@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-03-11 — Аудит и исправление критических ошибок
+
+### 1. Исправлен расчёт баланса в `/api/pre_trade_check`
+
+**Было:** `free >= size_usd * 0.5` — не учитывало leverage, давало ложные результаты во всех случаях.
+**Стало:** `free >= size_usd / leverage * 1.1` — корректный margin requirement с 10%-буфером.
+
+| Файл | Строка | Изменение |
+|---|---|---|
+| `backend/main.py` | pre_trade_check | `size_usd * 0.5` → `size_usd / leverage * 1.1` |
+
+---
+
+### 2. Защита от дублирующихся позиций в DB
+
+`save_open_position()` теперь проверяет, есть ли уже открытая позиция для этой пары. Если да — выбрасывает `ValueError` вместо создания второй записи-дубля, которая бы никогда не закрылась.
+
+| Файл | Изменение |
+|---|---|
+| `backend/db.py` | Проверка `SELECT id FROM open_positions WHERE symbol1=? AND symbol2=?` перед INSERT |
+
+---
+
+### 3. Порядок операций при открытии позиции
+
+**Было:** Set leverage → check notional → place orders (если notional провалил, leverage уже выставлен).
+**Стало:** Check notional → set leverage → place orders.
+
+---
+
+### 4. Market mode: в DB сохраняется реальный rounded qty
+
+**Было:** `qty1=qty1` — расчётное значение до округления Binance.
+**Стало:** `qty1=float(order1.get("amount") or qty1)` — фактический объём из ответа биржи.
+
+---
+
+### 5. Monitor TP/SL: интервал 10s → 5s
+
+Теперь совпадает с частотой обновления `price_cache`. Каждое обновление кэша проверяется немедленно, без пропуска цикла.
+
+---
+
+### 6. Очистка `active_executions` по TTL (2 часа)
+
+Завершённые executions (DONE/CANCELLED/FAILED) теперь удаляются из памяти через 2 часа. Ранее они накапливались бесконечно.
+
+---
+
+### 7. Ликвидационная цена в таблице Strategy Positions
+
+Поле `liq_price1`/`liq_price2` из `/api/db/positions/enriched` теперь отображается в таблице (оранжевый цвет). Данные берутся с Binance при каждом обновлении вкладки Positions.
+
+---
+
+### 8. ATR sizing docstring: исправлена вводящая в заблуждение формулировка
+
+Было: "equal dollar volatility". Стало: "equal price-unit volatility (qty1×ATR1 == qty2×ATR2)" с пояснением, что dollar exposure ног может отличаться.
+
+---
+
 ## 2026-03-11 — Централизованный кэш данных (PriceCache)
 
 ### Проблема

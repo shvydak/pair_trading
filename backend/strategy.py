@@ -173,8 +173,9 @@ class PairTradingStrategy:
                           ratio = atr1 / atr2
                           qty1 = size_usd / price1
                           qty2 = qty1 * ratio
-                          → both legs contribute equal dollar volatility
-                            (qty1*ATR1 == qty2*ATR2)
+                          → equal price-unit volatility (qty1*ATR1 == qty2*ATR2)
+                            Note: dollar exposure of leg2 (qty2*price2) may differ
+                            from size_usd when ATR ratio is far from price ratio
 
         method="equal" — equal dollar exposure on both legs:
                           qty1 = size_usd / price1

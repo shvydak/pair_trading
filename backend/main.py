@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -61,6 +62,9 @@ strategy = PairTradingStrategy()
 
 # active smart executions: exec_id -> ExecContext
 active_executions: dict = {}
+# timestamps of when each execution was created (for TTL cleanup)
+_exec_created_at: dict[str, float] = {}
+_EXEC_TTL = 7200  # remove terminal executions after 2 hours
 
 SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
 
@@ -224,10 +228,10 @@ _MONITOR_TIMEFRAME = "1h"
 
 async def monitor_position_triggers() -> None:
     """
-    Background task: check TP/SL triggers every 10 s for all open positions.
-    Reads price data from price_cache (shared with WebSocket) to avoid
-    duplicate Binance requests.  Manages its own cache subscriptions keyed
-    by DB position id.
+    Background task: check TP/SL triggers every 5 s for all open positions.
+    Runs at the same cadence as price_cache.run() so every cache update is
+    checked immediately.  Reads from price_cache to avoid duplicate Binance
+    requests.  Manages its own cache subscriptions keyed by DB position id.
     """
     await asyncio.sleep(15)  # wait for startup + first cache fill
     monitored_keys: dict[int, tuple] = {}  # pos_id → cache_key
@@ -303,7 +307,17 @@ async def monitor_position_triggers() -> None:
 
         except Exception as e:
             log.warning(f"monitor: outer error: {e}")
-        await asyncio.sleep(10)
+
+        # Clean up terminal executions older than TTL
+        now = time.monotonic()
+        for eid in list(active_executions.keys()):
+            ctx = active_executions[eid]
+            created = _exec_created_at.get(eid, now)
+            if ctx.status.name in ("DONE", "CANCELLED", "FAILED") and (now - created) > _EXEC_TTL:
+                active_executions.pop(eid, None)
+                _exec_created_at.pop(eid, None)
+
+        await asyncio.sleep(5)  # same cadence as price_cache refresh
 
 
 async def lifespan(app: FastAPI):
@@ -664,17 +678,18 @@ async def pre_trade_check(
             ),
         })
 
-        # Balance check
+        # Balance check — required margin ≈ size_usd / leverage (+10% buffer)
         if client.has_creds and margin_asset:
             try:
                 balance = await client.get_balance(margin_asset)
                 free = balance.get("free", 0)
+                required_margin = round(size_usd / leverage * 1.1, 2)
                 checks.append({
                     "name": "balance",
-                    "ok": free >= size_usd * 0.5,  # rough margin estimate
+                    "ok": free >= required_margin,
                     "detail": (
                         f"Free {margin_asset}: {free:.2f}, "
-                        f"required ~{size_usd * 0.5:.2f} ({margin_asset} margin)"
+                        f"required ~{required_margin:.2f} ({margin_asset} at {leverage}x leverage)"
                     ),
                 })
             except Exception as e:
@@ -860,6 +875,7 @@ async def start_smart_trade(req: SmartTradeRequest):
             log.info(f"Smart execution started: {exec_id} | {sym1}/{sym2} | {req.side}")
 
         active_executions[exec_id] = ctx
+        _exec_created_at[exec_id] = time.monotonic()
         asyncio.create_task(run_execution(ctx, client, db))
 
         return {"exec_id": exec_id, "status": "started", "action": req.action}
@@ -924,15 +940,7 @@ async def execute_trade(req: TradeRequest):
         qty2 = sizes["qty2"]
 
         if req.action == "open":
-            # --- 1. Set leverage (best-effort; may fail if position already exists) ---
-            for sym in (sym1, sym2):
-                try:
-                    await client.set_leverage(sym, req.leverage)
-                    log.info(f"Leverage set to {req.leverage}x for {sym}")
-                except Exception as lev_err:
-                    log.warning(f"Could not set leverage for {sym}: {lev_err}")
-
-            # --- 2. Validate minimum notional ---
+            # --- 1. Validate minimum notional FIRST (before touching exchange state) ---
             ok1, notional1, min1 = await client.check_min_notional(sym1, qty1, price1)
             ok2, notional2, min2 = await client.check_min_notional(sym2, qty2, price2)
             if not ok1:
@@ -946,6 +954,14 @@ async def execute_trade(req: TradeRequest):
                     detail=f"{sym2}: notional ${notional2:.2f} is below exchange minimum ${min2:.2f}",
                 )
 
+            # --- 2. Set leverage (best-effort; may fail if position already exists) ---
+            for sym in (sym1, sym2):
+                try:
+                    await client.set_leverage(sym, req.leverage)
+                    log.info(f"Leverage set to {req.leverage}x for {sym}")
+                except Exception as lev_err:
+                    log.warning(f"Could not set leverage for {sym}: {lev_err}")
+
             side1, side2 = ("buy", "sell") if req.side == "long_spread" else ("sell", "buy")
 
             # --- 3. Place orders (qty rounded inside place_order) ---
@@ -954,13 +970,15 @@ async def execute_trade(req: TradeRequest):
                 client.place_order(sym2, side2, qty2),
             )
 
-            # --- 4. Persist to DB ---
+            # --- 4. Persist to DB — use actual rounded qty from order response ---
+            actual_qty1 = float(order1.get("amount") or qty1)
+            actual_qty2 = float(order2.get("amount") or qty2)
             pos_id = db.save_open_position(
                 symbol1=sym1,
                 symbol2=sym2,
                 side=req.side,
-                qty1=qty1,
-                qty2=qty2,
+                qty1=actual_qty1,
+                qty2=actual_qty2,
                 hedge_ratio=req.hedge_ratio,
                 entry_zscore=req.entry_zscore,
                 entry_price1=price1,

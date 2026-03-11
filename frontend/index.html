@@ -363,6 +363,7 @@
       th_entry_z2: 'Entry Z',
       th_current_z: 'Z-score',
       th_duration: 'Open for',
+      th_liq_price: 'Liq. Price',
       th_actions: 'Actions',
       no_strategy_positions: 'No open strategy positions.',
       close_market_btn: 'Market close',
@@ -581,6 +582,7 @@
       th_entry_z2: 'Вход Z',
       th_current_z: 'Z-score',
       th_duration: 'Открыта',
+      th_liq_price: 'Ликвидация',
       th_actions: 'Действия',
       no_strategy_positions: 'Нет открытых стратегических позиций.',
       close_market_btn: 'Закрыть маркетом',
@@ -1210,6 +1212,7 @@
                 <th data-i18n="th_current_z">Z-score</th>
                 <th data-i18n="th_upnl">Unrealised PnL</th>
                 <th data-i18n="th_duration">Open for</th>
+                <th data-i18n="th_liq_price">Liq. Price</th>
                 <th data-i18n="th_actions">Actions</th>
               </tr>
             </thead>
@@ -2047,7 +2050,7 @@ function renderStrategyPositions(positions) {
   Object.keys(_stratPosMap).forEach(k => delete _stratPosMap[k]);
 
   if (positions.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-6">${t('no_strategy_positions')}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-6">${t('no_strategy_positions')}</td></tr>`;
     return;
   }
 
@@ -2084,6 +2087,11 @@ function renderStrategyPositions(positions) {
       </td>
       <td class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
       <td class="text-muted text-xs">${_formatDuration(pos.opened_at)}</td>
+      <td class="font-mono text-xs">
+        ${pos.liq_price1 != null ? `<div class="text-orange-400 leading-tight">${fmt(pos.liq_price1, 4)}</div>` : ''}
+        ${pos.liq_price2 != null ? `<div class="text-orange-400 text-[10px] leading-tight">${fmt(pos.liq_price2, 4)}</div>` : ''}
+        ${pos.liq_price1 == null && pos.liq_price2 == null ? '<span class="text-muted">–</span>' : ''}
+      </td>
       <td>
         <div class="flex gap-1 flex-wrap">
           <button onclick="_loadPosIntoAnalysis(${pos.id})"
@@ -3758,27 +3766,76 @@ const GUIDE = {
 <p>Кнопка <strong>«Отменить»</strong> запрашивает отмену — незаполненные ордера будут сняты.</p>
 
 <h3>Методы расчёта объёмов позиций</h3>
-<p>В парном трейдинге нельзя просто купить на $400 BTC и продать на $400 ETH — активы движутся с разной силой. Нужно правильно подобрать соотношение объёмов, чтобы позиция была рыночно-нейтральной.</p>
+
+<div class="callout yellow"><strong>Почему нельзя просто купить на $20 и продать на $20?</strong><br/>
+Представьте: LTC стоит $55, XRP — $1.33. За $20 в LTC вы купите 0.36 монеты. За $20 в XRP — 15 монет. Но если LTC вырастет на 10% (+$2), XRP в тот же день вырастет совсем на другую сумму. Нога на $20 XRP не компенсирует ногу на $20 LTC — вы окажетесь с открытым риском.</div>
+
+<p style="margin:8px 0 4px;font-weight:600;">Реальный пример: LTC=$55, XRP=$1.33, размер=$20</p>
+
+<!-- Bar chart: dollar exposure per method -->
+<svg viewBox="0 0 360 130" style="width:100%;max-width:360px;display:block;margin:0 auto 12px;font-family:inherit;">
+  <!-- Labels -->
+  <text x="2" y="26" font-size="11" fill="#8b949e">Equal</text>
+  <text x="2" y="62" font-size="11" fill="#8b949e">OLS β</text>
+  <text x="2" y="98" font-size="11" fill="#8b949e">ATR</text>
+  <!-- Equal: both $20 -->
+  <rect x="58" y="13" width="120" height="16" rx="3" fill="#58a6ff" opacity="0.85"/>
+  <rect x="58" y="32" width="120" height="16" rx="3" fill="#e3b341" opacity="0.85"/>
+  <text x="184" y="25" font-size="10" fill="#58a6ff">$20</text>
+  <text x="184" y="44" font-size="10" fill="#e3b341">$20</text>
+  <!-- OLS β=0.45: $20 / $9 -->
+  <rect x="58" y="49" width="120" height="16" rx="3" fill="#58a6ff" opacity="0.85"/>
+  <rect x="58" y="68" width="54" height="16" rx="3" fill="#e3b341" opacity="0.85"/>
+  <text x="184" y="61" font-size="10" fill="#58a6ff">$20</text>
+  <text x="118" y="80" font-size="10" fill="#e3b341">$9  ← β=0.45</text>
+  <!-- ATR ratio≈1.05: $20 / $21 -->
+  <rect x="58" y="85" width="120" height="16" rx="3" fill="#58a6ff" opacity="0.85"/>
+  <rect x="58" y="104" width="126" height="16" rx="3" fill="#e3b341" opacity="0.85"/>
+  <text x="184" y="97" font-size="10" fill="#58a6ff">$20</text>
+  <text x="190" y="116" font-size="10" fill="#e3b341">$21</text>
+  <!-- Legend -->
+  <rect x="58" y="126" width="10" height="6" rx="1" fill="#58a6ff"/>
+  <text x="72" y="132" font-size="9" fill="#8b949e">Нога 1 (LTC)</text>
+  <rect x="150" y="126" width="10" height="6" rx="1" fill="#e3b341"/>
+  <text x="164" y="132" font-size="9" fill="#8b949e">Нога 2 (XRP)</text>
+</svg>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #58a6ff;">
-  <div style="font-weight:600;color:#58a6ff;margin-bottom:4px;">OLS β — по умолчанию</div>
-  <p style="margin:0 0 4px;font-size:13px;">Если β = 0.82, значит на $1000 в BTC нужно $820 в ETH — ровно столько, чтобы движения компенсировали друг друга.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Начинайте с него.</div>
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">OLS β — по коинтеграции <span style="color:#8b949e;font-weight:400;font-size:11px;">(рекомендуется)</span></div>
+  <p style="margin:0 0 6px;font-size:13px;">Статистика показала: когда LTC двигается на 1%, XRP двигается в среднем на 1/β%. Коэффициент β = 0.45 означает, что 1 доллар риска в LTC эквивалентен 0.45 доллара риска в XRP.</p>
+  <div style="background:#0d1117;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;line-height:1.8;margin-bottom:6px;">
+    <div>qty_LTC = $20 ÷ $55 = <span style="color:#58a6ff;">0.3631 LTC</span> → <span style="color:#3fb950;">$20</span></div>
+    <div>qty_XRP = $20 × 0.45 ÷ $1.33 = <span style="color:#e3b341;">6.77 XRP</span> → <span style="color:#3fb950;">$9</span></div>
+  </div>
+  <div style="color:#8b949e;font-size:12px;">Суммы в долларах <em>разные</em> — это нормально! Позиция нейтральна по спреду, а не по деньгам.</div>
 </div>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #e3b341;">
-  <div style="font-weight:600;color:#e3b341;margin-bottom:4px;">ATR — по волатильности</div>
-  <p style="margin:0 0 4px;font-size:13px;">Объёмы подбираются так, чтобы дневной риск в долларах был одинаковым для обеих ног.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Когда активы сильно различаются по волатильности.</div>
+  <div style="font-weight:600;color:#e3b341;margin-bottom:6px;">ATR — по реальной волатильности</div>
+  <p style="margin:0 0 6px;font-size:13px;">ATR (Average True Range) — это сколько пунктов цена проходит за день. Если ATR у LTC = 2.5, а у XRP = 0.06, значит объём XRP нужно в 2.5/0.06 = 41.7× больше, чтобы каждая нога давала одинаковый риск в пунктах.</p>
+  <div style="background:#0d1117;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;line-height:1.8;margin-bottom:6px;">
+    <div>qty_LTC = $20 ÷ $55 = <span style="color:#58a6ff;">0.3631 LTC</span> → <span style="color:#3fb950;">$20</span></div>
+    <div>qty_XRP = 0.3631 × (ATR_LTC ÷ ATR_XRP) = <span style="color:#e3b341;">14.89 XRP</span> → <span style="color:#3fb950;">$21</span></div>
+  </div>
+  <div style="color:#8b949e;font-size:12px;">Суммы почти равные — каждая нога несёт одинаковый ценовой риск. Выбирайте ATR для скальпинга или когда активы сильно отличаются по волатильности.</div>
 </div>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #8b949e;">
   <div style="font-weight:600;color:#8b949e;margin-bottom:4px;">Equal — равные доллары</div>
-  <p style="margin:0 0 4px;font-size:13px;">Одинаковая сумма в обе ноги. Не учитывает β и волатильность.</p>
-  <div style="color:#8b949e;font-size:12px;">⚠️ Только для экспериментов.</div>
+  <p style="margin:0 0 4px;font-size:13px;">Одинаковая сумма в обе ноги независимо ни от чего. Не учитывает ни статистическую связь, ни волатильность — нога XRP будет намного больше по количеству контрактов.</p>
+  <div style="color:#8b949e;font-size:12px;">⚠️ Только для тестирования или когда β и ATR недоступны.</div>
 </div>
 
-<div class="callout yellow"><strong>Предпросмотр позиции</strong> в секции «Торговля» показывает точные объёмы и долларовые суммы для текущих цен и выбранного метода — до отправки ордера.</div>`
+<div style="background:#161b22;border-radius:8px;padding:10px 12px;margin:10px 0;border:1px solid #30363d;">
+  <div style="font-weight:600;color:#c9d1d9;margin-bottom:6px;">Когда что выбирать?</div>
+  <div style="font-size:12px;line-height:2;">
+    <div>📐 <strong style="color:#58a6ff;">OLS β</strong> — начните с него. Хорошо работает на парах с высокой коинтеграцией.</div>
+    <div>📊 <strong style="color:#e3b341;">ATR</strong> — когда β нестабилен или активы очень разные по цене (напр. BTC/DOGE).</div>
+    <div>⚖️ <strong style="color:#8b949e;">Equal</strong> — не рекомендуется для реальной торговли.</div>
+  </div>
+</div>
+
+<div class="callout green"><strong>Предпросмотр позиции</strong> в секции «Торговля» показывает точные объёмы и долларовые суммы для текущих цен и выбранного метода — до отправки ордера. Соотношение S1/S2 $ &gt; 1 — нормально для OLS с β &lt; 1.</div>`
     },
     {
       id: 'risk',
@@ -4542,27 +4599,71 @@ const GUIDE = {
 <p>The <strong>Cancel</strong> button requests cancellation — any unfilled orders will be withdrawn.</p>
 
 <h3>Position Sizing Methods</h3>
-<p>You can't simply buy $400 of BTC and sell $400 of ETH — they move with different force. You need to balance the number of contracts so the position is market-neutral.</p>
+
+<div class="callout yellow"><strong>Why not just buy $20 and sell $20?</strong><br/>
+Say LTC = $55, XRP = $1.33. $20 in LTC buys 0.36 coins; $20 in XRP buys 15 coins. But when LTC rises 10% (+$2), XRP won't move the same dollar amount. Equal dollars ≠ equal risk.</div>
+
+<p style="margin:8px 0 4px;font-weight:600;">Real example: LTC=$55, XRP=$1.33, size=$20</p>
+
+<!-- Bar chart: dollar exposure per method -->
+<svg viewBox="0 0 360 130" style="width:100%;max-width:360px;display:block;margin:0 auto 12px;font-family:inherit;">
+  <text x="2" y="26" font-size="11" fill="#8b949e">Equal</text>
+  <text x="2" y="62" font-size="11" fill="#8b949e">OLS β</text>
+  <text x="2" y="98" font-size="11" fill="#8b949e">ATR</text>
+  <rect x="58" y="13" width="120" height="16" rx="3" fill="#58a6ff" opacity="0.85"/>
+  <rect x="58" y="32" width="120" height="16" rx="3" fill="#e3b341" opacity="0.85"/>
+  <text x="184" y="25" font-size="10" fill="#58a6ff">$20</text>
+  <text x="184" y="44" font-size="10" fill="#e3b341">$20</text>
+  <rect x="58" y="49" width="120" height="16" rx="3" fill="#58a6ff" opacity="0.85"/>
+  <rect x="58" y="68" width="54" height="16" rx="3" fill="#e3b341" opacity="0.85"/>
+  <text x="184" y="61" font-size="10" fill="#58a6ff">$20</text>
+  <text x="118" y="80" font-size="10" fill="#e3b341">$9  ← β=0.45</text>
+  <rect x="58" y="85" width="120" height="16" rx="3" fill="#58a6ff" opacity="0.85"/>
+  <rect x="58" y="104" width="126" height="16" rx="3" fill="#e3b341" opacity="0.85"/>
+  <text x="184" y="97" font-size="10" fill="#58a6ff">$20</text>
+  <text x="190" y="116" font-size="10" fill="#e3b341">$21</text>
+  <rect x="58" y="126" width="10" height="6" rx="1" fill="#58a6ff"/>
+  <text x="72" y="132" font-size="9" fill="#8b949e">Leg 1 (LTC)</text>
+  <rect x="150" y="126" width="10" height="6" rx="1" fill="#e3b341"/>
+  <text x="164" y="132" font-size="9" fill="#8b949e">Leg 2 (XRP)</text>
+</svg>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #58a6ff;">
-  <div style="font-weight:600;color:#58a6ff;margin-bottom:4px;">OLS β — default</div>
-  <p style="margin:0 0 4px;font-size:13px;">If β = 0.82, for $1000 in BTC you put $820 in ETH — their price moves offset each other.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ Start here.</div>
+  <div style="font-weight:600;color:#58a6ff;margin-bottom:6px;">OLS β — cointegration-based <span style="color:#8b949e;font-weight:400;font-size:11px;">(recommended)</span></div>
+  <p style="margin:0 0 6px;font-size:13px;">Statistics show: when LTC moves 1%, XRP moves 1/β% on average. β = 0.45 means $1 of risk in LTC equals $0.45 of risk in XRP — so leg 2 is intentionally smaller.</p>
+  <div style="background:#0d1117;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;line-height:1.8;margin-bottom:6px;">
+    <div>qty_LTC = $20 ÷ $55 = <span style="color:#58a6ff;">0.3631 LTC</span> → <span style="color:#3fb950;">$20</span></div>
+    <div>qty_XRP = $20 × 0.45 ÷ $1.33 = <span style="color:#e3b341;">6.77 XRP</span> → <span style="color:#3fb950;">$9</span></div>
+  </div>
+  <div style="color:#8b949e;font-size:12px;">Dollar amounts are <em>unequal by design</em> — the position is spread-neutral, not dollar-neutral.</div>
 </div>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #e3b341;">
-  <div style="font-weight:600;color:#e3b341;margin-bottom:4px;">ATR — volatility-based</div>
-  <p style="margin:0 0 4px;font-size:13px;">Sizes each leg so their daily dollar risk is equal.</p>
-  <div style="color:#8b949e;font-size:12px;">✅ When assets have very different volatility.</div>
+  <div style="font-weight:600;color:#e3b341;margin-bottom:6px;">ATR — volatility-based</div>
+  <p style="margin:0 0 6px;font-size:13px;">ATR (Average True Range) measures how many price points an asset moves per day. If LTC ATR = 2.5 and XRP ATR = 0.06, you need 41.7× more XRP contracts so both legs carry equal price-point risk.</p>
+  <div style="background:#0d1117;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;line-height:1.8;margin-bottom:6px;">
+    <div>qty_LTC = $20 ÷ $55 = <span style="color:#58a6ff;">0.3631 LTC</span> → <span style="color:#3fb950;">$20</span></div>
+    <div>qty_XRP = 0.3631 × (ATR_LTC ÷ ATR_XRP) = <span style="color:#e3b341;">14.89 XRP</span> → <span style="color:#3fb950;">$21</span></div>
+  </div>
+  <div style="color:#8b949e;font-size:12px;">Dollar amounts are roughly equal — each leg carries the same price-movement risk. Best for scalping or very dissimilar assets.</div>
 </div>
 
 <div style="background:#161b22;border-radius:8px;padding:12px;margin:8px 0;border-left:3px solid #8b949e;">
-  <div style="font-weight:600;color:#8b949e;margin-bottom:4px;">Equal $ — equal dollars</div>
-  <p style="margin:0 0 4px;font-size:13px;">Same dollar amount in both legs. Ignores β and volatility.</p>
-  <div style="color:#8b949e;font-size:12px;">⚠️ Quick experiments only.</div>
+  <div style="font-weight:600;color:#8b949e;margin-bottom:4px;">Equal — same dollars in both legs</div>
+  <p style="margin:0 0 4px;font-size:13px;">Ignores β and volatility entirely. The XRP leg will have many more contracts than LTC, and the position won't be properly hedged.</p>
+  <div style="color:#8b949e;font-size:12px;">⚠️ Not recommended for real trading.</div>
 </div>
 
-<div class="callout yellow"><strong>Position Preview</strong> in the Trading section shows exact quantities and dollar values for the selected method — before you place any order.</div>`
+<div style="background:#161b22;border-radius:8px;padding:10px 12px;margin:10px 0;border:1px solid #30363d;">
+  <div style="font-weight:600;color:#c9d1d9;margin-bottom:6px;">When to use each?</div>
+  <div style="font-size:12px;line-height:2;">
+    <div>📐 <strong style="color:#58a6ff;">OLS β</strong> — start here. Works well for pairs with strong cointegration.</div>
+    <div>📊 <strong style="color:#e3b341;">ATR</strong> — when β is unstable or assets are very different in price (e.g. BTC/DOGE).</div>
+    <div>⚖️ <strong style="color:#8b949e;">Equal</strong> — not recommended for live trading.</div>
+  </div>
+</div>
+
+<div class="callout green"><strong>Position Preview</strong> in the Trading section shows exact quantities and dollar values for the selected method — before placing any order. A ratio S1/S2 &gt; 1 is normal for OLS when β &lt; 1.</div>`
     },
     {
       id: 'risk',

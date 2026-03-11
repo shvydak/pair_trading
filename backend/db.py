@@ -87,6 +87,15 @@ def save_open_position(
     leverage: Optional[int] = None,
 ) -> int:
     with _conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM open_positions WHERE symbol1=? AND symbol2=?",
+            (symbol1, symbol2),
+        ).fetchone()
+        if existing:
+            raise ValueError(
+                f"Position already open for {symbol1}/{symbol2} (id={existing[0]}). "
+                "Close or delete it first."
+            )
         cur = conn.execute(
             """
             INSERT INTO open_positions

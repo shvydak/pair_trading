@@ -223,10 +223,11 @@ Centralised OHLCV data feed shared by all consumers (WebSocket, monitor, future 
 ### SQLite Persistence (`backend/db.py`)
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
 - Two tables:
-  - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, opened_at
+  - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, opened_at
   - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
 - Key functions: `save_open_position(...)` → id, `close_position(id, exit_p1, exit_p2, pnl, exit_zscore)`, `find_open_position(sym1, sym2)` → dict|None, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)` → bool — deletes record from open_positions without exchange action
-- On `action=open`: position saved with entry prices, z-score from request, `db_id` returned in response
+- `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicate DB records
+- On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance, not pre-rounding calculated value)
 - On `action=close`: DB position found by (sym1, sym2), PnL calculated from entry prices, record moved to `closed_trades`
 - Backward-compatible: if no DB record found on close, trades still execute (PnL field is null)
 
@@ -245,8 +246,15 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
   6. Partial fill → `ROLLBACK` (close filled leg at market) → `DONE`
 - Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
 - Aggressive price: buy@ask, sell@bid (taker side, crosses spread)
-- `active_executions` dict in `main.py` maps `exec_id → ExecContext`; never cleaned up (keep for review)
+- `active_executions` dict in `main.py` maps `exec_id → ExecContext`; terminal entries (DONE/CANCELLED/FAILED) are cleaned up after 2h TTL in the monitor loop
+- `_exec_created_at: dict[str, float]` — monotonic timestamps for TTL cleanup
 - `exec_id` is first 8 chars of UUID4
+
+## Pre-trade Check (`GET /api/pre_trade_check`)
+- Balance check formula: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
+- Order of validation: balance → min_notional → lot_size → leverage (informational)
+- monitor_position_triggers runs every **5 s** (same as price_cache refresh) — every cache update is checked immediately
+- Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
 
 ## Common Issues & Fixes
 - **Empty symbols list**: ccxt returns Binance perpetuals as `type: "swap"`, not `"future"` — filter includes both
