@@ -199,6 +199,19 @@ BINANCE_SECRET=...
 Public endpoints (symbols, history, backtest) work without API keys.
 Private endpoints (positions, balance, trade) require valid keys.
 
+## Price Cache (`backend/main.py` — class `PriceCache`)
+Centralised OHLCV data feed shared by all consumers (WebSocket, monitor, future watchlist).
+
+- **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
+- **Entry**: `{"price1": pd.Series, "price2": pd.Series}` — raw close prices, aligned
+- `price_cache.subscribe(sym1, sym2, tf, limit) → key` — registers pair; reference-counted
+- `price_cache.unsubscribe(key)` — decrements ref; entry removed when count reaches 0
+- `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
+- `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every 5 s via `fetch_ohlcv × 2`
+- **WebSocket**: subscribes on connect, reads from cache each 5 s loop, unsubscribes in `finally`
+- **monitor_position_triggers**: maintains `monitored_keys: dict[pos_id → cache_key]`; subscribes per position with TP/SL, unsubscribes on close or external deletion
+- **Watchlist (future)**: call `subscribe()` per card on add, `unsubscribe()` on remove — data appears automatically if the pair is already tracked
+
 ## Logging & Persistence
 
 ### Logging (`backend/logger.py`)

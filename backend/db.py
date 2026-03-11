@@ -32,6 +32,8 @@ def init_db() -> None:
                 size_usd       REAL,
                 sizing_method  TEXT,
                 leverage       INTEGER,
+                tp_zscore      REAL,
+                sl_zscore      REAL,
                 opened_at      TEXT    NOT NULL
             );
 
@@ -57,6 +59,17 @@ def init_db() -> None:
                 closed_at      TEXT    NOT NULL
             );
         """)
+    _migrate()
+
+
+def _migrate() -> None:
+    """Add columns introduced after initial schema."""
+    with _conn() as conn:
+        for col, typedef in [("tp_zscore", "REAL"), ("sl_zscore", "REAL")]:
+            try:
+                conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {typedef} DEFAULT NULL")
+            except Exception:
+                pass  # column already exists
 
 
 def save_open_position(
@@ -153,6 +166,19 @@ def get_open_positions() -> list[dict]:
 def delete_open_position(position_id: int) -> bool:
     with _conn() as conn:
         cur = conn.execute("DELETE FROM open_positions WHERE id = ?", (position_id,))
+        return cur.rowcount > 0
+
+
+def set_position_triggers(
+    position_id: int,
+    tp_zscore: Optional[float],
+    sl_zscore: Optional[float],
+) -> bool:
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE open_positions SET tp_zscore = ?, sl_zscore = ? WHERE id = ?",
+            (tp_zscore, sl_zscore, position_id),
+        )
         return cur.rowcount > 0
 
 

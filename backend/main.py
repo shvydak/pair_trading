@@ -65,6 +65,72 @@ active_executions: dict = {}
 SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
 
 
+# ---------------------------------------------------------------------------
+# Shared price cache — single OHLCV feed for WS + monitor + future watchlist
+# ---------------------------------------------------------------------------
+
+class PriceCache:
+    """
+    Centralised OHLCV cache.  Consumers call subscribe() to register a pair;
+    a single background task (run()) refreshes all subscribed keys every 5 s.
+    Reference-counting: entries are kept alive only while at least one
+    subscriber is active.
+
+    Key = (sym1, sym2, timeframe, limit)
+    Entry = {"price1": pd.Series, "price2": pd.Series}
+    """
+
+    FEED_INTERVAL = 5  # seconds between refreshes
+
+    def __init__(self) -> None:
+        self._store: dict[tuple, dict] = {}
+        self._refs:  dict[tuple, int]  = {}
+
+    def subscribe(self, sym1: str, sym2: str, tf: str, limit: int) -> tuple:
+        key = (sym1, sym2, tf, limit)
+        self._refs[key] = self._refs.get(key, 0) + 1
+        return key
+
+    def unsubscribe(self, key: tuple) -> None:
+        if key not in self._refs:
+            return
+        self._refs[key] -= 1
+        if self._refs[key] <= 0:
+            self._refs.pop(key, None)
+            self._store.pop(key, None)
+
+    def get(self, key: tuple) -> Optional[dict]:
+        return self._store.get(key)
+
+    async def _refresh_one(self, key: tuple) -> None:
+        sym1, sym2, tf, limit = key
+        df1, df2 = await asyncio.gather(
+            client.fetch_ohlcv(sym1, tf, limit),
+            client.fetch_ohlcv(sym2, tf, limit),
+        )
+        p1 = df1["close"]
+        p2 = df2["close"]
+        p1, p2 = p1.align(p2, join="inner")
+        self._store[key] = {"price1": p1, "price2": p2}
+
+    async def run(self) -> None:
+        """Background task: refresh all subscribed keys every FEED_INTERVAL seconds."""
+        while True:
+            keys = list(self._refs.keys())
+            if keys:
+                results = await asyncio.gather(
+                    *[self._refresh_one(k) for k in keys],
+                    return_exceptions=True,
+                )
+                for k, r in zip(keys, results):
+                    if isinstance(r, Exception):
+                        log.warning(f"price_cache refresh error {k}: {r}")
+            await asyncio.sleep(self.FEED_INTERVAL)
+
+
+price_cache = PriceCache()
+
+
 def _pair_meta(meta1: dict, meta2: dict) -> dict:
     asset1 = meta1.get("margin_asset")
     asset2 = meta2.get("margin_asset")
@@ -114,8 +180,136 @@ def _require_tradeable_pair(meta1: dict, meta2: dict) -> str:
 
 
 @asynccontextmanager
+async def _do_market_close(pos: dict, exit_zscore: Optional[float] = None) -> dict:
+    """Close both legs of a DB position at market. Returns result dict."""
+    sym1 = pos["symbol1"]
+    sym2 = pos["symbol2"]
+    ticker1, ticker2 = await asyncio.gather(
+        client.fetch_ticker(sym1),
+        client.fetch_ticker(sym2),
+    )
+    price1 = ticker1["last"]
+    price2 = ticker2["last"]
+
+    positions = await client.get_positions()
+    pos_map = {p["symbol"]: p for p in positions}
+    p1 = pos_map.get(sym1)
+    p2 = pos_map.get(sym2)
+
+    qty1 = abs(p1["size"]) if p1 else pos["qty1"]
+    qty2 = abs(p2["size"]) if p2 else pos["qty2"]
+    side1 = "sell" if (p1 and p1["side"] == "long") else "buy"
+    side2 = "buy" if (p2 and p2["side"] == "short") else "sell"
+
+    await asyncio.gather(
+        client.place_order(sym1, side1, qty1),
+        client.place_order(sym2, side2, qty2),
+    )
+
+    pnl = None
+    if pos.get("entry_price1") and pos.get("entry_price2"):
+        sign = 1 if pos["side"] == "long_spread" else -1
+        pnl = round(
+            pos["qty1"] * (price1 - pos["entry_price1"]) * sign
+            + pos["qty2"] * (pos["entry_price2"] - price2) * sign,
+            4,
+        )
+    db.close_position(pos["id"], price1, price2, pnl, exit_zscore)
+    return {"pnl": pnl, "price1": price1, "price2": price2}
+
+
+_MONITOR_ZSCORE_WINDOW = 20
+_MONITOR_TIMEFRAME = "1h"
+
+
+async def monitor_position_triggers() -> None:
+    """
+    Background task: check TP/SL triggers every 10 s for all open positions.
+    Reads price data from price_cache (shared with WebSocket) to avoid
+    duplicate Binance requests.  Manages its own cache subscriptions keyed
+    by DB position id.
+    """
+    await asyncio.sleep(15)  # wait for startup + first cache fill
+    monitored_keys: dict[int, tuple] = {}  # pos_id → cache_key
+
+    while True:
+        try:
+            positions = db.get_open_positions()
+            current_ids: set[int] = set()
+
+            for pos in positions:
+                tp = pos.get("tp_zscore")
+                sl = pos.get("sl_zscore")
+                if not tp and not sl:
+                    continue
+
+                pos_id = pos["id"]
+                current_ids.add(pos_id)
+
+                # Subscribe to cache on first encounter
+                if pos_id not in monitored_keys:
+                    limit = max(_MONITOR_ZSCORE_WINDOW * 3, 60)
+                    key = price_cache.subscribe(
+                        pos["symbol1"], pos["symbol2"], _MONITOR_TIMEFRAME, limit
+                    )
+                    monitored_keys[pos_id] = key
+
+                entry = price_cache.get(monitored_keys[pos_id])
+                if entry is None:
+                    continue  # cache not yet populated, skip this cycle
+
+                try:
+                    p1 = entry["price1"]
+                    p2 = entry["price2"]
+                    hedge = pos["hedge_ratio"]
+                    spread = strategy.calculate_spread(p1, p2, hedge)
+                    zscore_series = strategy.calculate_zscore(spread, window=_MONITOR_ZSCORE_WINDOW)
+                    current_z = float(zscore_series.dropna().iloc[-1])
+
+                    side = pos["side"]
+                    trigger = None
+                    if side == "long_spread":
+                        if tp and current_z >= -tp:
+                            trigger = "tp"
+                        elif sl and current_z <= -sl:
+                            trigger = "sl"
+                    else:  # short_spread
+                        if tp and current_z <= tp:
+                            trigger = "tp"
+                        elif sl and current_z >= sl:
+                            trigger = "sl"
+
+                    if trigger:
+                        log.info(
+                            f"TRIGGER {trigger.upper()} | pos={pos_id} "
+                            f"{pos['symbol1']}/{pos['symbol2']} | z={current_z:.3f} | "
+                            f"tp={tp} sl={sl}"
+                        )
+                        result = await _do_market_close(pos, exit_zscore=current_z)
+                        log.info(
+                            f"AUTO-CLOSE {trigger.upper()} | pos={pos_id} | "
+                            f"pnl={result['pnl']}"
+                        )
+                        # Unsubscribe immediately after closing
+                        price_cache.unsubscribe(monitored_keys.pop(pos_id))
+                        current_ids.discard(pos_id)
+                except Exception as e:
+                    log.warning(f"monitor: error checking pos {pos_id}: {e}")
+
+            # Unsubscribe positions that were closed/deleted externally
+            for pos_id in list(monitored_keys.keys()):
+                if pos_id not in current_ids:
+                    price_cache.unsubscribe(monitored_keys.pop(pos_id))
+
+        except Exception as e:
+            log.warning(f"monitor: outer error: {e}")
+        await asyncio.sleep(10)
+
+
 async def lifespan(app: FastAPI):
     db.init_db()
+    asyncio.create_task(price_cache.run())
+    asyncio.create_task(monitor_position_triggers())
     log.info("Pair Trading backend started")
     yield
     await client.close()
@@ -358,6 +552,16 @@ async def delete_db_position(position_id: int):
     return {"deleted": True, "id": position_id}
 
 
+@app.post("/api/db/positions/{position_id}/triggers")
+async def set_triggers(position_id: int, req: TriggerRequest):
+    """Set TP/SL z-score triggers for an open position."""
+    ok = db.set_position_triggers(position_id, req.tp_zscore, req.sl_zscore)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Position {position_id} not found")
+    log.info(f"Triggers set for position {position_id}: TP={req.tp_zscore} SL={req.sl_zscore}")
+    return {"ok": True, "id": position_id, "tp_zscore": req.tp_zscore, "sl_zscore": req.sl_zscore}
+
+
 @app.get("/api/db/history")
 async def get_db_history(limit: int = Query(100)):
     """Return closed trade history."""
@@ -396,6 +600,11 @@ class SmartTradeRequest(BaseModel):
     passive_s: float = 10.0
     aggressive_s: float = 20.0
     allow_market: bool = True
+
+
+class TriggerRequest(BaseModel):
+    tp_zscore: Optional[float] = None
+    sl_zscore: Optional[float] = None
 
 
 @app.get("/api/pre_trade_check")
@@ -826,10 +1035,12 @@ async def execute_trade(req: TradeRequest):
 @app.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
     """
-    Accept {symbol1, symbol2, timeframe, zscore_window} and broadcast
-    live updates every 5 seconds.
+    Accept {symbol1, symbol2, timeframe, zscore_window, limit, hedge_ratio}
+    and broadcast live updates every 5 seconds.
+    Reads from price_cache — no direct Binance calls while the feed is running.
     """
     await websocket.accept()
+    cache_key = None
     try:
         data = await websocket.receive_text()
         params = json.loads(data)
@@ -842,44 +1053,41 @@ async def websocket_stream(websocket: WebSocket):
         timeframe = params.get("timeframe", "1h")
         zscore_window = int(params.get("zscore_window", 20))
         history_limit = max(int(params.get("limit", zscore_window * 3)), zscore_window * 3)
+        fixed_hedge_ratio = params.get("hedge_ratio")
+        if fixed_hedge_ratio is not None:
+            fixed_hedge_ratio = float(fixed_hedge_ratio)
+
+        cache_key = price_cache.subscribe(symbol1, symbol2, timeframe, history_limit)
 
         while True:
-            try:
-                df1, df2 = await asyncio.gather(
-                    client.fetch_ohlcv(symbol1, timeframe, history_limit),
-                    client.fetch_ohlcv(symbol2, timeframe, history_limit),
-                )
-                price1 = df1["close"]
-                price2 = df2["close"]
-                price1, price2 = price1.align(price2, join="inner")
-
-                hedge_ratio = strategy.calculate_hedge_ratio(price1, price2)
-                spread = strategy.calculate_spread(price1, price2, hedge_ratio)
-                zscore = strategy.calculate_zscore(spread, window=zscore_window)
-
-                current_p1 = float(price1.iloc[-1])
-                current_p2 = float(price2.iloc[-1])
-                current_spread = float(spread.iloc[-1])
-                current_z = float(zscore.dropna().iloc[-1]) if not zscore.dropna().empty else 0.0
-
-                payload = _clean({
-                    "timestamp": str(price1.index[-1]),
-                    "price1": current_p1,
-                    "price2": current_p2,
-                    "spread": current_spread,
-                    "zscore": current_z,
-                    "hedge_ratio": hedge_ratio,
-                })
-                await websocket.send_text(json.dumps(payload))
-            except Exception as inner_e:
-                await websocket.send_text(json.dumps({"error": str(inner_e)}))
-
+            entry = price_cache.get(cache_key)
+            if entry is not None:
+                try:
+                    price1 = entry["price1"]
+                    price2 = entry["price2"]
+                    hedge_ratio = fixed_hedge_ratio if fixed_hedge_ratio is not None else strategy.calculate_hedge_ratio(price1, price2)
+                    spread = strategy.calculate_spread(price1, price2, hedge_ratio)
+                    zscore = strategy.calculate_zscore(spread, window=zscore_window)
+                    payload = _clean({
+                        "timestamp": str(price1.index[-1]),
+                        "price1": float(price1.iloc[-1]),
+                        "price2": float(price2.iloc[-1]),
+                        "spread": float(spread.iloc[-1]),
+                        "zscore": float(zscore.dropna().iloc[-1]) if not zscore.dropna().empty else 0.0,
+                        "hedge_ratio": hedge_ratio,
+                    })
+                    await websocket.send_text(json.dumps(payload))
+                except Exception as inner_e:
+                    await websocket.send_text(json.dumps({"error": str(inner_e)}))
             await asyncio.sleep(5)
 
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
+    finally:
+        if cache_key is not None:
+            price_cache.unsubscribe(cache_key)
 
 
 # ---------------------------------------------------------------------------
