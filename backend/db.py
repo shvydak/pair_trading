@@ -34,6 +34,7 @@ def init_db() -> None:
                 leverage       INTEGER,
                 tp_zscore      REAL,
                 sl_zscore      REAL,
+                tp_smart       INTEGER DEFAULT 0,
                 opened_at      TEXT    NOT NULL
             );
 
@@ -65,9 +66,13 @@ def init_db() -> None:
 def _migrate() -> None:
     """Add columns introduced after initial schema."""
     with _conn() as conn:
-        for col, typedef in [("tp_zscore", "REAL"), ("sl_zscore", "REAL")]:
+        for col, typedef in [
+            ("tp_zscore", "REAL"),
+            ("sl_zscore", "REAL"),
+            ("tp_smart",  "INTEGER DEFAULT 0"),
+        ]:
             try:
-                conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {typedef} DEFAULT NULL")
+                conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {typedef}")
             except Exception:
                 pass  # column already exists
 
@@ -182,11 +187,12 @@ def set_position_triggers(
     position_id: int,
     tp_zscore: Optional[float],
     sl_zscore: Optional[float],
+    tp_smart: bool = False,
 ) -> bool:
     with _conn() as conn:
         cur = conn.execute(
-            "UPDATE open_positions SET tp_zscore = ?, sl_zscore = ? WHERE id = ?",
-            (tp_zscore, sl_zscore, position_id),
+            "UPDATE open_positions SET tp_zscore = ?, sl_zscore = ?, tp_smart = ? WHERE id = ?",
+            (tp_zscore, sl_zscore, int(tp_smart), position_id),
         )
         return cur.rowcount > 0
 

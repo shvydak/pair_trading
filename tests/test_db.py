@@ -196,6 +196,22 @@ def test_set_position_triggers_can_clear(tmp_db):
     assert pos["sl_zscore"] is None
 
 
+def test_set_position_triggers_tp_smart_true(tmp_db):
+    """tp_smart=True is persisted correctly."""
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0, tp_smart=True)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["tp_smart"] == 1
+
+
+def test_set_position_triggers_tp_smart_default_false(tmp_db):
+    """tp_smart defaults to False (0) when not provided."""
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert not pos["tp_smart"]
+
+
 # ---------------------------------------------------------------------------
 # get_closed_trades
 # ---------------------------------------------------------------------------

@@ -3,7 +3,6 @@ import json
 import math
 import os
 import time
-from contextlib import asynccontextmanager
 from typing import Optional
 
 import numpy as np
@@ -183,7 +182,6 @@ def _require_tradeable_pair(meta1: dict, meta2: dict) -> str:
     )
 
 
-@asynccontextmanager
 async def _do_market_close(pos: dict, exit_zscore: Optional[float] = None) -> dict:
     """Close both legs of a DB position at market. Returns result dict."""
     sym1 = pos["symbol1"]
@@ -222,6 +220,42 @@ async def _do_market_close(pos: dict, exit_zscore: Optional[float] = None) -> di
     return {"pnl": pnl, "price1": price1, "price2": price2}
 
 
+async def _do_smart_close_trigger(pos: dict, exit_zscore: Optional[float] = None) -> str:
+    """Start a smart limit-order close for a triggered position. Returns exec_id."""
+    import uuid
+
+    sym1, sym2 = pos["symbol1"], pos["symbol2"]
+    spread_side = pos["side"]  # "long_spread" | "short_spread"
+    # Closing reverses the spread direction
+    side1 = "sell" if spread_side == "long_spread" else "buy"
+    side2 = "buy"  if spread_side == "long_spread" else "sell"
+
+    positions = await client.get_positions()
+    pos_map = {p["symbol"]: p for p in positions}
+    p1 = pos_map.get(sym1)
+    p2 = pos_map.get(sym2)
+    qty1 = abs(p1["size"]) if p1 else pos["qty1"]
+    qty2 = abs(p2["size"]) if p2 else pos["qty2"]
+
+    cfg = ExecConfig(passive_s=10.0, aggressive_s=20.0, allow_market=True)
+    ctx = ExecContext(
+        sym1=sym1, sym2=sym2,
+        side1=side1, side2=side2,
+        qty1=qty1, qty2=qty2,
+        config=cfg,
+        is_close=True,
+        close_db_id=pos["id"],
+        entry_price1=pos.get("entry_price1"),
+        entry_price2=pos.get("entry_price2"),
+        exit_zscore=exit_zscore,
+    )
+    exec_id = uuid.uuid4().hex[:8]
+    active_executions[exec_id] = ctx
+    _exec_created_at[exec_id] = time.monotonic()
+    asyncio.create_task(run_execution(ctx, client, db))
+    return exec_id
+
+
 _MONITOR_ZSCORE_WINDOW = 20
 _MONITOR_TIMEFRAME = "1h"
 
@@ -235,6 +269,7 @@ async def monitor_position_triggers() -> None:
     """
     await asyncio.sleep(15)  # wait for startup + first cache fill
     monitored_keys: dict[int, tuple] = {}  # pos_id → cache_key
+    closing_ids: set[int] = set()  # positions currently being closed (smart)
 
     while True:
         try:
@@ -249,6 +284,9 @@ async def monitor_position_triggers() -> None:
 
                 pos_id = pos["id"]
                 current_ids.add(pos_id)
+
+                if pos_id in closing_ids:
+                    continue  # smart close already in flight
 
                 # Subscribe to cache on first encounter
                 if pos_id not in monitored_keys:
@@ -289,16 +327,46 @@ async def monitor_position_triggers() -> None:
                             f"{pos['symbol1']}/{pos['symbol2']} | z={current_z:.3f} | "
                             f"tp={tp} sl={sl}"
                         )
-                        result = await _do_market_close(pos, exit_zscore=current_z)
-                        log.info(
-                            f"AUTO-CLOSE {trigger.upper()} | pos={pos_id} | "
-                            f"pnl={result['pnl']}"
-                        )
-                        # Unsubscribe immediately after closing
-                        price_cache.unsubscribe(monitored_keys.pop(pos_id))
-                        current_ids.discard(pos_id)
+                        # Safety: check that the position still exists on the exchange.
+                        # If closed manually, clean up the DB record instead of placing
+                        # orders (which would open a new position in the wrong direction).
+                        live_positions = await client.get_positions()
+                        live_syms = {p["symbol"] for p in live_positions if p.get("size")}
+                        sym1, sym2 = pos["symbol1"], pos["symbol2"]
+                        if sym1 not in live_syms and sym2 not in live_syms:
+                            log.warning(
+                                f"TRIGGER {trigger.upper()} | pos={pos_id} | "
+                                f"no live positions found — position was closed manually. "
+                                f"Removing stale DB record."
+                            )
+                            db.delete_open_position(pos_id)
+                            price_cache.unsubscribe(monitored_keys.pop(pos_id))
+                            current_ids.discard(pos_id)
+                            continue
+
+                        use_smart = trigger == "tp" and bool(pos.get("tp_smart"))
+                        if use_smart:
+                            exec_id = await _do_smart_close_trigger(pos, exit_zscore=current_z)
+                            closing_ids.add(pos_id)
+                            log.info(
+                                f"AUTO-SMART-CLOSE {trigger.upper()} | pos={pos_id} | "
+                                f"exec_id={exec_id}"
+                            )
+                        else:
+                            result = await _do_market_close(pos, exit_zscore=current_z)
+                            log.info(
+                                f"AUTO-CLOSE {trigger.upper()} | pos={pos_id} | "
+                                f"pnl={result['pnl']}"
+                            )
+                        # Unsubscribe immediately after market close (smart close cleans up later)
+                        if not use_smart:
+                            price_cache.unsubscribe(monitored_keys.pop(pos_id))
+                            current_ids.discard(pos_id)
                 except Exception as e:
                     log.warning(f"monitor: error checking pos {pos_id}: {e}")
+
+            # Remove closing_ids that are no longer in DB (smart close finished)
+            closing_ids &= current_ids
 
             # Unsubscribe positions that were closed/deleted externally
             for pos_id in list(monitored_keys.keys()):
@@ -566,14 +634,26 @@ async def delete_db_position(position_id: int):
     return {"deleted": True, "id": position_id}
 
 
+class TriggerRequest(BaseModel):
+    tp_zscore: Optional[float] = None
+    sl_zscore: Optional[float] = None
+    tp_smart: bool = False
+
+
 @app.post("/api/db/positions/{position_id}/triggers")
 async def set_triggers(position_id: int, req: TriggerRequest):
     """Set TP/SL z-score triggers for an open position."""
-    ok = db.set_position_triggers(position_id, req.tp_zscore, req.sl_zscore)
+    ok = db.set_position_triggers(position_id, req.tp_zscore, req.sl_zscore, req.tp_smart)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Position {position_id} not found")
-    log.info(f"Triggers set for position {position_id}: TP={req.tp_zscore} SL={req.sl_zscore}")
-    return {"ok": True, "id": position_id, "tp_zscore": req.tp_zscore, "sl_zscore": req.sl_zscore}
+    log.info(
+        f"Triggers set for position {position_id}: "
+        f"TP={req.tp_zscore} (smart={req.tp_smart}) SL={req.sl_zscore}"
+    )
+    return {
+        "ok": True, "id": position_id,
+        "tp_zscore": req.tp_zscore, "sl_zscore": req.sl_zscore, "tp_smart": req.tp_smart,
+    }
 
 
 @app.get("/api/db/history")
@@ -614,11 +694,6 @@ class SmartTradeRequest(BaseModel):
     passive_s: float = 10.0
     aggressive_s: float = 20.0
     allow_market: bool = True
-
-
-class TriggerRequest(BaseModel):
-    tp_zscore: Optional[float] = None
-    sl_zscore: Optional[float] = None
 
 
 @app.get("/api/pre_trade_check")
