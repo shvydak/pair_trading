@@ -17,7 +17,7 @@ pair_trading/
 │   ├── strategy.py          # Pair trading math (cointegration, z-score, backtest)
 │   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
-│   ├── db.py                # SQLite persistence — open_positions + closed_trades
+│   ├── db.py                # SQLite persistence — open_positions + closed_trades + triggers
 │   ├── logger.py            # RotatingFileHandler setup → logs/pair_trading.log
 │   └── requirements.txt
 ├── frontend/
@@ -25,9 +25,10 @@ pair_trading/
 ├── tests/
 │   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
 │   ├── test_strategy.py     # 40 tests — all strategy math
-│   ├── test_db.py           # 21 tests — SQLite persistence layer
+│   ├── test_db.py           # 23 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
-│   └── test_price_cache.py  # 17 tests — PriceCache ref-counting
+│   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
+│   └── test_triggers.py     # 40 tests — triggers table CRUD
 ├── logs/
 │   └── pair_trading.log     # Rotating log (10 MB × 5 files)
 ├── pair_trading.db          # SQLite trade journal (auto-created on first run)
@@ -53,7 +54,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 ### Tests
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 104 tests
+.venv/bin/pytest tests/ -v        # all 106 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -84,6 +85,9 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET | `/api/db/history` | Closed trade history from SQLite (`?limit=100`) |
 | GET | `/api/db/positions/enriched` | Open positions from DB enriched with live Binance mark prices + unrealized PnL |
 | DELETE | `/api/db/positions/{id}` | Delete a DB position record (does NOT close exchange positions) |
+| GET | `/api/triggers` | All active TP/SL triggers (standalone, independent of positions) |
+| POST | `/api/triggers` | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart}` |
+| DELETE | `/api/triggers/{id}` | Cancel an active trigger |
 | WS | `/ws/stream` | Live spread/price/Z-score updates every 5 seconds for the active analysed pair |
 
 ### `GET /api/pre_trade_check` — query params
@@ -161,6 +165,38 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - Dependencies via CDN: Tailwind CSS, Chart.js 4.4.2, chartjs-plugin-annotation 3.0.1
 - i18n: `I18N` object with `en`/`ru` keys, `t(key)` function, `applyLocale()` on load and lang switch
 - Language stored in `localStorage` key `pt_lang`, default `ru`
+
+### Layout (после редизайна)
+Трёхпанельный торговый терминал:
+- **Header**: переключатель режимов Trade/Backtest, статус подключения, кнопка Guide, язык
+- **Trade mode** (`#trade-mode`): три колонки
+  - Left `#watchlist-panel` (~180px): Watchlist пар с live z-score
+  - Center `#charts-panel`: Spread/Z-score chart + Price chart, всегда видны
+  - Right `#trading-panel` (~320px, scroll): конфиг пары, stats, sizing, исполнение
+- **Backtest mode** (`#backtest-mode`): charts с сигналами + правая панель с контролами + таблица сделок
+- **Bottom panel** (`#bottom-panel`): resizable (drag handle), три вкладки:
+  - **Позиции** (`tab-positions`): Strategy Positions + Exchange Positions
+  - **Ордера TP/SL** (`tab-orders`): активные triggers из `/api/triggers`, кнопка ✕
+  - **Журнал** (`tab-journal`): закрытые сделки
+
+### Режимы
+- `setMode('trade'|'backtest')` — переключает layout, сохраняет в `localStorage['pt_mode']`
+- `setBottomTab('positions'|'orders'|'journal')` — вкладки нижней панели
+- `toggleBottomPanel()` — свернуть/развернуть нижнюю панель
+- Backtest: кнопка "→ Открыть в Trade" вызывает `setMode('trade')`
+
+### Watchlist
+- Хранится в `localStorage['pt_watchlist']` как `[{sym1, sym2}]`
+- Z-score обновляется каждые 30 сек через `GET /api/history?limit=60&zscore_window=20`
+- Цвет z-score: зелёный `|z|<1`, жёлтый `1≤|z|<2`, красный `|z|≥2`
+- `addWatchlistItem(sym1, sym2)`, `removeWatchlistItem(sym1, sym2)`, `renderWatchlist()`
+- Клик на пару → `loadPairIntoAnalysis(sym1, sym2)` → `runAnalyze()`
+
+### TP/SL Ордера (новая система)
+- `loadOrdersTab()` → `GET /api/triggers` → рендерит таблицу
+- `cancelTrigger(id)` → `DELETE /api/triggers/{id}` → перерисовывает
+- `createTriggerFromPosition(pos, type, zscore, tp_smart)` → `POST /api/triggers`
+- Ордера живут независимо от позиций — не удаляются при закрытии/удалении позиции
 - **Analysis state persistence**: `saveAnalysisState()` — saves to `localStorage['pt_last']` on every successful Analyze: sym1, sym2, timeframe, limit, zscore_window, entryZ, exitZ, posSize, sizingMethod, leverage, marketFilter. `restoreAnalysisState()` — called on `DOMContentLoaded`; restores all fields and auto-calls `runAnalyze()`. If no saved state (first launch) — falls back to `setTimeframe('1h')`.
 - Tooltips: `position: fixed` with JS positioning — handles viewport clipping above/below
 - **Market filter** in pair config — `setMarketFilter('ALL'|'USDT'|'USDC')` filters symbol suggestions for `Symbol 1/2`
@@ -222,8 +258,8 @@ Centralised OHLCV data feed shared by all consumers (WebSocket, monitor, future 
 - `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
 - `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every 5 s via `fetch_ohlcv × 2`
 - **WebSocket**: subscribes on connect, reads from cache each 5 s loop, unsubscribes in `finally`
-- **monitor_position_triggers**: maintains `monitored_keys: dict[pos_id → cache_key]`; subscribes per position with TP/SL, unsubscribes on close or external deletion
-- **Watchlist (future)**: call `subscribe()` per card on add, `unsubscribe()` on remove — data appears automatically if the pair is already tracked
+- **monitor_position_triggers**: maintains `monitored_keys: dict[tag → cache_key]`; tags are `"pos_{id}"` (legacy) or `"trig_{id}"` (standalone); subscribes per trigger, unsubscribes on close/cancel
+- **Watchlist**: updates every 30s via JS fetch (not PriceCache); `subscribe()` / `unsubscribe()` pattern available for future server-push watchlist
 
 ## Logging & Persistence
 
@@ -235,10 +271,13 @@ Centralised OHLCV data feed shared by all consumers (WebSocket, monitor, future 
 
 ### SQLite Persistence (`backend/db.py`)
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
-- Two tables:
-  - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, opened_at
+- Three tables:
+  - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, tp_smart, opened_at
   - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
-- Key functions: `save_open_position(...)` → id, `close_position(id, exit_p1, exit_p2, pnl, exit_zscore)`, `find_open_position(sym1, sym2)` → dict|None, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)` → bool — deletes record from open_positions without exchange action
+  - `triggers` — standalone TP/SL orders, independent of positions; columns: symbol1/2, side, type (tp|sl), zscore, tp_smart, status (active|triggered|cancelled), created_at, triggered_at
+- Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
+- Trigger functions: `save_trigger(sym1, sym2, side, type, zscore, tp_smart)` → id, `get_active_triggers()`, `get_triggers_for_pair(sym1, sym2)`, `cancel_trigger(id)`, `trigger_fired(id)`
+- Triggers survive position deletion — user manages them explicitly via `/api/triggers` endpoints
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicate DB records
 - On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance, not pre-rounding calculated value)
 - On `action=close`: DB position found by (sym1, sym2), PnL calculated from entry prices, record moved to `closed_trades`
