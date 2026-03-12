@@ -401,6 +401,36 @@
       tip_tp_sl: '<strong>Take Profit / Stop Loss</strong><br/>Auto-close the position when the z-score crosses these levels. Checked every 5 seconds on the server — works even with the browser closed.<br/><br/><svg width="200" height="64" style="display:block;margin:6px 0"><line x1="0" y1="32" x2="200" y2="32" stroke="#30363d" stroke-width="1"/><line x1="0" y1="12" x2="200" y2="12" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="52" x2="200" y2="52" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="4" x2="200" y2="4" stroke="#f85149" stroke-width="1" stroke-dasharray="2,3" opacity="0.6"/><line x1="0" y1="60" x2="200" y2="60" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,3" opacity="0.6"/><text x="4" y="10" font-size="8" fill="#f85149">SL = 3.5</text><text x="4" y="24" font-size="8" fill="#8b949e">Entry = 2.0</text><text x="4" y="44" font-size="8" fill="#8b949e">TP = 0.5 (exit)</text><text x="4" y="58" font-size="8" fill="#3fb950">Entry = −2.0</text><path d="M0,55 C20,50 30,30 50,32 S70,20 90,28 S110,35 130,18 S160,15 200,22" fill="none" stroke="#e3b341" stroke-width="1.5"/></svg><strong>TP</strong> (green) — absolute z-score to take profit. Set ≈ exit z (e.g. 0.5). Fires when |z| ≤ TP.<br/><strong>SL</strong> (red) — absolute z-score to stop loss. Set above entry (e.g. 3.5). Fires when z diverges past SL.',
       tip_long_spread: '<strong>Long Spread</strong><br/>BUY S1, SELL S2.<br/>You profit when S1 rises faster than S2 (spread increases).<br/><br/>Use when z-score is <span style="color:#3fb950">very negative</span> (S1 is cheap vs S2 historically).<br/><br/>Example: z = −2.5 → S1 is underpriced → buy S1, sell S2, wait for reversion to 0.',
       tip_short_spread: '<strong>Short Spread</strong><br/>SELL S1, BUY S2.<br/>You profit when S1 falls faster than S2 (spread decreases).<br/><br/>Use when z-score is <span style="color:#f85149">very positive</span> (S1 is expensive vs S2 historically).<br/><br/>Example: z = +2.5 → S1 is overpriced → sell S1, buy S2, wait for reversion to 0.',
+
+      // new layout
+      watchlist_title: 'Watchlist',
+      add_to_watchlist: 'Add to watchlist',
+      remove_from_watchlist: 'Remove',
+      tab_positions: 'Positions',
+      tab_orders: 'TP/SL Orders',
+      tab_journal: 'Journal',
+      orders_col_pair: 'Pair',
+      orders_col_side: 'Side',
+      orders_col_type: 'Type',
+      orders_col_zscore: 'Z-score',
+      orders_col_smart: 'Smart',
+      orders_col_created: 'Created',
+      mode_trade: 'Trade',
+      mode_backtest: 'Backtest',
+      open_in_trade: 'Open in Trade mode',
+      wl_add_btn: 'Add pair',
+      wl_no_items: 'No pairs in watchlist',
+      wl_sym1_ph: 'Symbol 1',
+      wl_sym2_ph: 'Symbol 2',
+      add_tp_btn: 'Add TP',
+      add_sl_btn: 'Add SL',
+      trigger_zscore_ph: 'Z-score',
+      trigger_smart_label: 'Smart',
+      trigger_confirm: 'Add',
+      no_active_triggers: 'No active triggers.',
+      toast_trigger_created: 'Trigger created.',
+      toast_trigger_cancelled: 'Trigger cancelled.',
+      toast_trigger_error: 'Trigger error: ',
     },
     ru: {
       title: 'Дашборд Парного Трейдинга',
@@ -622,6 +652,36 @@
       tip_tp_sl: '<strong>Take Profit / Stop Loss</strong><br/>Автоматическое закрытие когда z-score достигает порога. Проверяется каждые 5 сек на сервере — работает даже с закрытым браузером.<br/><br/><svg width="200" height="64" style="display:block;margin:6px 0"><line x1="0" y1="32" x2="200" y2="32" stroke="#30363d" stroke-width="1"/><line x1="0" y1="12" x2="200" y2="12" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="52" x2="200" y2="52" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="4" x2="200" y2="4" stroke="#f85149" stroke-width="1" stroke-dasharray="2,3" opacity="0.6"/><line x1="0" y1="60" x2="200" y2="60" stroke="#3fb950" stroke-width="1" stroke-dasharray="2,3" opacity="0.6"/><text x="4" y="10" font-size="8" fill="#f85149">SL = 3.5</text><text x="4" y="24" font-size="8" fill="#8b949e">Вход = 2.0</text><text x="4" y="44" font-size="8" fill="#8b949e">TP = 0.5 (выход)</text><text x="4" y="58" font-size="8" fill="#3fb950">Вход = −2.0</text><path d="M0,55 C20,50 30,30 50,32 S70,20 90,28 S110,35 130,18 S160,15 200,22" fill="none" stroke="#e3b341" stroke-width="1.5"/></svg><strong>TP</strong> (зел.) — z-score для фиксации прибыли. Ставь ≈ z-score выхода (напр. 0.5). Срабатывает при |z| ≤ TP.<br/><strong>SL</strong> (красн.) — z-score для стопа. Ставь выше z-score входа (напр. 3.5). Срабатывает при дивергенции.',
       tip_long_spread: '<strong>Лонг Спред</strong><br/>КУПИТЬ S1, ПРОДАТЬ S2.<br/>Прибыль когда S1 растёт быстрее S2 (спред увеличивается).<br/><br/>Используй когда z-score <span style="color:#3fb950">очень отрицательный</span> (S1 дёшев относительно S2 исторически).<br/><br/>Пример: z = −2.5 → S1 недооценён → купить S1, продать S2, ждать возврата к 0.',
       tip_short_spread: '<strong>Шорт Спред</strong><br/>ПРОДАТЬ S1, КУПИТЬ S2.<br/>Прибыль когда S1 падает быстрее S2 (спред уменьшается).<br/><br/>Используй когда z-score <span style="color:#f85149">очень положительный</span> (S1 дорог относительно S2 исторически).<br/><br/>Пример: z = +2.5 → S1 переоценён → продать S1, купить S2, ждать возврата к 0.',
+
+      // new layout
+      watchlist_title: 'Список пар',
+      add_to_watchlist: 'Добавить в список',
+      remove_from_watchlist: 'Удалить',
+      tab_positions: 'Позиции',
+      tab_orders: 'Ордера TP/SL',
+      tab_journal: 'Журнал',
+      orders_col_pair: 'Пара',
+      orders_col_side: 'Сторона',
+      orders_col_type: 'Тип',
+      orders_col_zscore: 'Z-score',
+      orders_col_smart: 'Smart',
+      orders_col_created: 'Создан',
+      mode_trade: 'Торговля',
+      mode_backtest: 'Бэктест',
+      open_in_trade: 'Открыть в режиме торговли',
+      wl_add_btn: 'Добавить пару',
+      wl_no_items: 'Нет пар в списке',
+      wl_sym1_ph: 'Символ 1',
+      wl_sym2_ph: 'Символ 2',
+      add_tp_btn: 'TP',
+      add_sl_btn: 'SL',
+      trigger_zscore_ph: 'Z-score',
+      trigger_smart_label: 'Smart',
+      trigger_confirm: 'Добавить',
+      no_active_triggers: 'Нет активных триггеров.',
+      toast_trigger_created: 'Триггер создан.',
+      toast_trigger_cancelled: 'Триггер отменён.',
+      toast_trigger_error: 'Ошибка триггера: ',
     }
   };
 
@@ -671,82 +731,176 @@
   </script>
 </head>
 
-<body class="min-h-screen flex flex-col">
+<body class="h-screen flex flex-col overflow-hidden" style="background:#0f1117;color:#c9d1d9">
 
-<!-- ========== TOP BAR ========== -->
-<header class="flex items-center justify-between px-6 py-3 border-b border-border bg-panel sticky top-0 z-50">
+<!-- ========== HEADER ========== -->
+<header id="app-header" class="flex items-center justify-between px-4 py-2 border-b border-border bg-panel shrink-0" style="min-height:44px">
   <div class="flex items-center gap-3">
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
     </svg>
-    <span class="text-lg font-semibold tracking-tight text-white" data-i18n="title">Pair Trading Dashboard</span>
-    <span class="text-xs text-muted bg-card px-2 py-0.5 rounded" data-i18n="badge">Statistical Arbitrage</span>
+    <span class="font-bold text-accent text-sm">Pair Trading</span>
+    <!-- Mode switcher -->
+    <div class="flex rounded overflow-hidden border border-border">
+      <button onclick="setMode('trade')" id="mode-trade-btn" class="px-3 py-1 text-xs font-medium bg-accent text-surface transition" data-i18n="mode_trade">Trade</button>
+      <button onclick="setMode('backtest')" id="mode-backtest-btn" class="px-3 py-1 text-xs font-medium text-muted hover:text-white transition" data-i18n="mode_backtest">Backtest</button>
+    </div>
   </div>
-  <div class="flex items-center gap-4">
+  <div class="flex items-center gap-3">
+    <!-- Binance status badge -->
+    <div id="header-status" class="flex items-center gap-1.5">
+      <span id="ws-dot" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+      <span id="ws-label" class="text-muted text-xs" data-i18n="ws_disconnected">Disconnected</span>
+    </div>
+    <div class="text-xs text-muted" id="last-update">-</div>
     <!-- Guide button -->
-    <button onclick="openGuide()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:border-accent hover:text-accent transition">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
-      <span data-i18n="guide_btn">Руководство</span>
+    <button onclick="openGuide()" class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border text-muted hover:border-accent hover:text-accent transition">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      <span data-i18n="guide_btn">Guide</span>
     </button>
     <!-- Lang toggle -->
     <div class="flex gap-1">
       <button class="lang-btn" data-lang="en" onclick="setLang('en')">EN</button>
       <button class="lang-btn active" data-lang="ru" onclick="setLang('ru')">RU</button>
     </div>
-    <div class="text-xs text-muted" id="last-update">–</div>
-    <div class="flex items-center gap-2 text-sm">
-      <span id="ws-dot" class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
-      <span id="ws-label" class="text-muted text-xs" data-i18n="ws_disconnected">Disconnected</span>
-    </div>
   </div>
 </header>
 
-<!-- ========== MAIN LAYOUT ========== -->
-<div class="flex flex-1 overflow-hidden" style="height: calc(100vh - 52px);">
+<!-- ========== TRADE MODE ========== -->
+<div id="trade-mode" class="flex flex-1 overflow-hidden min-h-0">
 
-  <!-- ===== LEFT PANEL ===== -->
-  <aside class="w-80 flex-shrink-0 border-r border-border bg-panel overflow-y-auto p-4 flex flex-col gap-4">
+  <!-- ===== LEFT: WATCHLIST ===== -->
+  <div id="watchlist-panel" class="w-44 shrink-0 border-r border-border flex flex-col bg-panel overflow-hidden">
+    <div class="flex items-center justify-between px-2 py-2 border-b border-border">
+      <span class="text-xs font-semibold text-muted uppercase tracking-wide" data-i18n="watchlist_title">Watchlist</span>
+      <button onclick="showAddWatchlistModal()" class="text-accent hover:text-white text-sm font-bold px-1" title="Add pair">+</button>
+    </div>
+    <div id="watchlist-add-form" class="hidden px-2 py-2 border-b border-border bg-card">
+      <input id="wl-sym1" placeholder="BTCUSDT" class="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white mb-1 focus:outline-none focus:border-accent" />
+      <input id="wl-sym2" placeholder="ETHUSDT" class="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white mb-1 focus:outline-none focus:border-accent" />
+      <button onclick="addWatchlistItem()" class="w-full py-1 rounded text-xs font-medium bg-accent text-surface hover:opacity-90 transition" data-i18n="trigger_confirm">Add</button>
+    </div>
+    <div id="watchlist-list" class="flex-1 overflow-y-auto"></div>
+  </div>
+
+  <!-- ===== CENTER: CHARTS ===== -->
+  <div id="charts-panel" class="flex-1 flex flex-col overflow-hidden min-w-0">
+    <!-- Stats Cards (compact row) -->
+    <div class="flex gap-2 px-3 py-2 border-b border-border bg-panel overflow-x-auto shrink-0" id="stats-cards">
+      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
+        <span class="text-[10px] text-muted" data-i18n="stat_zscore">Z-score</span>
+        <span id="stat-zscore" class="text-sm font-bold text-white">-</span>
+        <div class="tooltip-box" data-i18n-html="tip_zscore"></div>
+      </div>
+      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
+        <span class="text-[10px] text-muted" data-i18n="stat_hedge">Hedge</span>
+        <span id="stat-hedge" class="text-sm font-bold text-white">-</span>
+        <div class="tooltip-box" data-i18n-html="tip_hedge"></div>
+      </div>
+      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
+        <span class="text-[10px] text-muted" data-i18n="stat_halflife">Half-Life</span>
+        <span id="stat-halflife" class="text-sm font-bold text-white">-</span>
+        <div class="tooltip-box" data-i18n-html="tip_halflife"></div>
+      </div>
+      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
+        <span class="text-[10px] text-muted" data-i18n="stat_hurst">Hurst</span>
+        <span id="stat-hurst" class="text-sm font-bold text-white">-</span>
+        <span id="stat-hurst-label" class="text-[10px] text-muted">-</span>
+        <div class="tooltip-box" data-i18n-html="tip_hurst"></div>
+      </div>
+      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
+        <span class="text-[10px] text-muted" data-i18n="stat_corr">Corr</span>
+        <span id="stat-corr" class="text-sm font-bold text-white">-</span>
+        <div class="tooltip-box" data-i18n-html="tip_corr"></div>
+      </div>
+      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
+        <span class="text-[10px] text-muted" data-i18n="stat_coint">Coint</span>
+        <span id="stat-coint" class="text-sm font-bold text-white">-</span>
+        <span id="stat-coint-pval" class="text-[10px] text-muted">-</span>
+        <div class="tooltip-box" data-i18n-html="tip_coint"></div>
+      </div>
+    </div>
+
+    <!-- Spread / Z-score Chart -->
+    <div class="flex-1 min-h-0 p-2 flex flex-col">
+      <div class="flex items-center justify-between mb-1 px-1">
+        <div class="flex items-center gap-3 text-xs text-muted">
+          <span class="tooltip-container flex items-center gap-1 cursor-default">
+            <span class="w-3 h-0.5 bg-blue-400 inline-block"></span>
+            <span data-i18n="legend_spread">Spread</span>
+            <div class="tooltip-box" data-i18n-html="tip_legend_spread"></div>
+          </span>
+          <span class="tooltip-container flex items-center gap-1 cursor-default">
+            <span class="w-3 h-0.5 bg-yellow-400 inline-block"></span>
+            <span data-i18n="legend_zscore">Z-Score</span>
+            <div class="tooltip-box" data-i18n-html="tip_legend_zscore"></div>
+          </span>
+          <span class="tooltip-container flex items-center gap-1 cursor-default">
+            <span class="w-3 h-px border-t border-dashed border-red-400 inline-block"></span>
+            <span data-i18n="legend_threshold">+/-2s threshold</span>
+            <div class="tooltip-box" data-i18n-html="tip_legend_threshold"></div>
+          </span>
+        </div>
+      </div>
+      <div class="flex-1 min-h-0 relative">
+        <canvas id="spread-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Price chart -->
+    <div class="h-36 shrink-0 p-2 border-t border-border">
+      <div class="flex items-center gap-3 text-xs text-muted mb-1 px-1">
+        <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span> <span id="price-label1">S1</span></span>
+        <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-orange-400 inline-block"></span> <span id="price-label2">S2</span></span>
+      </div>
+      <div class="h-full relative" style="height:calc(100% - 20px)">
+        <canvas id="price-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RIGHT: TRADING PANEL ===== -->
+  <div id="trading-panel" class="w-80 shrink-0 border-l border-border flex flex-col overflow-y-auto bg-panel">
 
     <!-- Pair Configuration -->
-    <section class="bg-card rounded-lg p-4 border border-border">
-      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-3" data-i18n="pair_config">Pair Configuration</h3>
-
-      <div class="flex flex-col gap-3">
+    <div class="p-3 border-b border-border">
+      <h3 class="text-xs font-semibold text-muted uppercase tracking-wider mb-2" data-i18n="pair_config">Pair Configuration</h3>
+      <div class="flex flex-col gap-2">
         <div>
-          <label class="text-xs text-muted mb-1 block" data-i18n="symbol1">Symbol 1</label>
+          <label class="text-[10px] text-muted mb-0.5 block" data-i18n="symbol1">Symbol 1</label>
           <input id="sym1-input" list="sym1-list" placeholder="BTCUSDT" value="BTCUSDT"
-            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+            class="w-full bg-surface border border-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent" />
           <datalist id="sym1-list"></datalist>
         </div>
         <div>
-          <label class="text-xs text-muted mb-1 block" data-i18n="symbol2">Symbol 2</label>
+          <label class="text-[10px] text-muted mb-0.5 block" data-i18n="symbol2">Symbol 2</label>
           <input id="sym2-input" list="sym2-list" placeholder="ETHUSDT" value="ETHUSDT"
-            class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
+            class="w-full bg-surface border border-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent" />
           <datalist id="sym2-list"></datalist>
         </div>
 
-        <div class="market-context">
-          <div class="flex items-center justify-between gap-3">
-            <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted" data-i18n="market_context">Market Context</div>
-            <span id="pair-market-badge" class="market-chip">-</span>
+        <div class="market-context" style="padding:6px 8px">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-[9px] font-semibold uppercase tracking-[0.12em] text-muted" data-i18n="market_context">Market</div>
+            <span id="pair-market-badge" class="market-chip" style="font-size:9px;padding:2px 6px">-</span>
           </div>
-          <div id="pair-market-note" class="text-[11px] leading-relaxed text-muted mt-2" data-i18n="market_detecting">
-            Type symbols to detect whether the pair runs on USDT-M or USDC-M.
+          <div id="pair-market-note" class="text-[10px] leading-relaxed text-muted mt-1" data-i18n="market_detecting">
+            Type symbols to detect market.
           </div>
         </div>
 
         <div class="tooltip-container">
-          <label class="text-xs text-muted mb-1.5 flex items-center gap-1" data-i18n="market_filter">Market Filter
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <label class="text-[10px] text-muted mb-1 flex items-center gap-1" data-i18n="market_filter">Market Filter
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
           </label>
           <div class="flex gap-1" id="market-filter-btns">
-            <button onclick="setMarketFilter('ALL')" data-market-filter="ALL" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+            <button onclick="setMarketFilter('ALL')" data-market-filter="ALL" class="market-filter-btn flex-1 py-1 rounded text-[10px] font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
               <span data-i18n="market_filter_all">All</span>
             </button>
-            <button onclick="setMarketFilter('USDT')" data-market-filter="USDT" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
+            <button onclick="setMarketFilter('USDT')" data-market-filter="USDT" class="market-filter-btn flex-1 py-1 rounded text-[10px] font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">
               <span data-i18n="market_filter_usdt">USDT-M</span>
             </button>
-            <button onclick="setMarketFilter('USDC')" data-market-filter="USDC" class="market-filter-btn flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">
+            <button onclick="setMarketFilter('USDC')" data-market-filter="USDC" class="market-filter-btn flex-1 py-1 rounded text-[10px] font-medium border border-accent bg-surface text-accent transition">
               <span data-i18n="market_filter_usdc">USDC-M</span>
             </button>
           </div>
@@ -790,7 +944,7 @@
           <span data-i18n="analyze_btn">Analyze Pair</span>
         </button>
       </div>
-    </section>
+    </div>
 
     <!-- Strategy Parameters -->
     <section class="bg-card rounded-lg p-4 border border-border">
@@ -984,310 +1138,206 @@
       <div id="api-status-content" class="text-xs text-muted" data-i18n="api_checking">Checking…</div>
     </section>
 
-  </aside>
+  </div> <!-- /trading-panel -->
 
-  <!-- ===== MAIN CONTENT ===== -->
-  <main class="flex-1 overflow-y-auto flex flex-col">
+</div> <!-- /trade-mode -->
 
-    <!-- Tab Bar -->
-    <div class="flex gap-0 border-b border-border bg-panel px-6 sticky top-0 z-10">
-      <button onclick="switchTab('spread')" id="tab-spread" class="tab-btn active px-5 py-3 text-sm font-medium text-white border-b-2 border-accent transition" data-i18n="tab_spread">Spread Analysis</button>
-      <button onclick="switchTab('price')"  id="tab-price"  class="tab-btn px-5 py-3 text-sm font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_price">Price Chart</button>
-      <button onclick="switchTab('backtest')" id="tab-backtest" class="tab-btn px-5 py-3 text-sm font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_backtest">Backtest</button>
-      <button onclick="switchTab('positions')" id="tab-positions" class="tab-btn px-5 py-3 text-sm font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_positions">Positions</button>
+<!-- ========== BACKTEST MODE ========== -->
+<div id="backtest-mode" class="hidden flex-1 overflow-y-auto p-6 flex flex-col gap-5">
+
+  <!-- Backtest Stats Cards -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="bt-cards">
+    <div class="bg-card rounded-lg p-3 border border-border">
+      <div class="text-xs text-muted mb-1" data-i18n="total_pnl">Total PnL</div>
+      <div id="bt-pnl" class="text-xl font-bold text-white">-</div>
     </div>
-
-    <!-- ======== TAB: SPREAD ANALYSIS ======== -->
-    <div id="pane-spread" class="tab-pane flex-1 p-6 flex flex-col gap-5">
-
-      <!-- Stats Cards -->
-      <div class="grid grid-cols-3 lg:grid-cols-6 gap-3" id="stats-cards">
-        <!-- Z-score -->
-        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
-          <div class="text-xs text-muted flex items-center gap-1">
-            <span data-i18n="stat_zscore">Z-score</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          </div>
-          <div id="stat-zscore" class="text-2xl font-bold text-white">–</div>
-          <div class="text-xs text-muted" data-i18n="stat_zscore_sub">Current</div>
-          <div class="tooltip-box" data-i18n-html="tip_zscore"></div>
-        </div>
-
-        <!-- Hedge Ratio -->
-        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
-          <div class="text-xs text-muted flex items-center gap-1">
-            <span data-i18n="stat_hedge">Hedge Ratio</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          </div>
-          <div id="stat-hedge" class="text-2xl font-bold text-white">–</div>
-          <div class="text-xs text-muted" data-i18n="stat_hedge_sub">OLS β</div>
-          <div class="tooltip-box" data-i18n-html="tip_hedge"></div>
-        </div>
-
-        <!-- Half-life -->
-        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
-          <div class="text-xs text-muted flex items-center gap-1">
-            <span data-i18n="stat_halflife">Half-Life</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          </div>
-          <div id="stat-halflife" class="text-2xl font-bold text-white">–</div>
-          <div class="text-xs text-muted" data-i18n="stat_halflife_sub">Bars to revert</div>
-          <div class="tooltip-box" data-i18n-html="tip_halflife"></div>
-        </div>
-
-        <!-- Hurst -->
-        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
-          <div class="text-xs text-muted flex items-center gap-1">
-            <span data-i18n="stat_hurst">Hurst Exp</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          </div>
-          <div id="stat-hurst" class="text-2xl font-bold text-white">–</div>
-          <div id="stat-hurst-label" class="text-xs text-muted">–</div>
-          <div class="tooltip-box" data-i18n-html="tip_hurst"></div>
-        </div>
-
-        <!-- Correlation -->
-        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
-          <div class="text-xs text-muted flex items-center gap-1">
-            <span data-i18n="stat_corr">Correlation</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          </div>
-          <div id="stat-corr" class="text-2xl font-bold text-white">–</div>
-          <div class="text-xs text-muted" data-i18n="stat_corr_sub">Log returns ρ</div>
-          <div class="tooltip-box" data-i18n-html="tip_corr"></div>
-        </div>
-
-        <!-- Cointegrated -->
-        <div class="bg-card rounded-lg p-3 border border-border flex flex-col gap-1 tooltip-container">
-          <div class="text-xs text-muted flex items-center gap-1">
-            <span data-i18n="stat_coint">Cointegrated</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          </div>
-          <div id="stat-coint" class="text-2xl font-bold text-white">–</div>
-          <div id="stat-coint-pval" class="text-xs text-muted">–</div>
-          <div class="tooltip-box" data-i18n-html="tip_coint"></div>
-        </div>
-      </div>
-
-      <!-- Spread / Z-score Chart -->
-      <div class="bg-card rounded-lg border border-border p-4 flex flex-col gap-3">
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-semibold text-white" data-i18n="spread_chart_title">Spread &amp; Z-Score</h3>
-          <div class="flex items-center gap-4 text-xs text-muted">
-            <span class="tooltip-container flex items-center gap-1 cursor-default">
-              <span class="w-3 h-0.5 bg-blue-400 inline-block"></span>
-              <span data-i18n="legend_spread">Spread</span>
-              <div class="tooltip-box" data-i18n-html="tip_legend_spread"></div>
-            </span>
-            <span class="tooltip-container flex items-center gap-1 cursor-default">
-              <span class="w-3 h-0.5 bg-yellow-400 inline-block"></span>
-              <span data-i18n="legend_zscore">Z-Score</span>
-              <div class="tooltip-box" data-i18n-html="tip_legend_zscore"></div>
-            </span>
-            <span class="tooltip-container flex items-center gap-1 cursor-default">
-              <span class="w-3 h-px border-t border-dashed border-red-400 inline-block"></span>
-              <span data-i18n="legend_threshold">±2σ threshold</span>
-              <div class="tooltip-box" data-i18n-html="tip_legend_threshold"></div>
-            </span>
-          </div>
-        </div>
-        <div class="chart-wrap">
-          <canvas id="spread-chart"></canvas>
-        </div>
-      </div>
-
+    <div class="bg-card rounded-lg p-3 border border-border">
+      <div class="text-xs text-muted mb-1" data-i18n="sharpe">Sharpe Ratio</div>
+      <div id="bt-sharpe" class="text-xl font-bold text-white">-</div>
     </div>
-
-    <!-- ======== TAB: PRICE CHART ======== -->
-    <div id="pane-price" class="tab-pane hidden p-6 flex-col gap-5">
-      <div class="bg-card rounded-lg border border-border p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-white" data-i18n="price_chart_title">Normalised Price (indexed to 100)</h3>
-          <div class="flex items-center gap-4 text-xs text-muted">
-            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span> <span id="price-label1">Symbol 1</span></span>
-            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-orange-400 inline-block"></span> <span id="price-label2">Symbol 2</span></span>
-          </div>
-        </div>
-        <div class="chart-wrap" style="height:360px">
-          <canvas id="price-chart"></canvas>
-        </div>
-      </div>
+    <div class="bg-card rounded-lg p-3 border border-border">
+      <div class="text-xs text-muted mb-1" data-i18n="max_dd">Max Drawdown</div>
+      <div id="bt-dd" class="text-xl font-bold text-white">-</div>
     </div>
-
-    <!-- ======== TAB: BACKTEST ======== -->
-    <div id="pane-backtest" class="tab-pane hidden p-6 flex-col gap-5">
-
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="bt-cards">
-        <div class="bg-card rounded-lg p-3 border border-border">
-          <div class="text-xs text-muted mb-1" data-i18n="total_pnl">Total PnL</div>
-          <div id="bt-pnl" class="text-xl font-bold text-white">–</div>
-        </div>
-        <div class="bg-card rounded-lg p-3 border border-border">
-          <div class="text-xs text-muted mb-1" data-i18n="sharpe">Sharpe Ratio</div>
-          <div id="bt-sharpe" class="text-xl font-bold text-white">–</div>
-        </div>
-        <div class="bg-card rounded-lg p-3 border border-border">
-          <div class="text-xs text-muted mb-1" data-i18n="max_dd">Max Drawdown</div>
-          <div id="bt-dd" class="text-xl font-bold text-white">–</div>
-        </div>
-        <div class="bg-card rounded-lg p-3 border border-border">
-          <div class="text-xs text-muted mb-1" data-i18n="win_rate">Win Rate</div>
-          <div id="bt-wr" class="text-xl font-bold text-white">–</div>
-        </div>
-        <div class="bg-card rounded-lg p-3 border border-border">
-          <div class="text-xs text-muted mb-1" data-i18n="num_trades"># Trades</div>
-          <div id="bt-trades" class="text-xl font-bold text-white">–</div>
-        </div>
-      </div>
-
-      <div class="bg-card rounded-lg border border-border p-4">
-        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="equity_curve">Equity Curve</h3>
-        <div class="chart-wrap" style="height:260px">
-          <canvas id="equity-chart"></canvas>
-        </div>
-      </div>
-
-      <div class="bg-card rounded-lg border border-border p-4">
-        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="trades_title">Trades</h3>
-        <div class="overflow-x-auto">
-          <table id="trades-table">
-            <thead>
-              <tr>
-                <th data-i18n="th_entry_time">Entry Time</th>
-                <th data-i18n="th_exit_time">Exit Time</th>
-                <th data-i18n="th_side">Legs</th>
-                <th data-i18n="th_entry_z">Entry Z</th>
-                <th data-i18n="th_exit_z">Exit Z</th>
-                <th data-i18n="th_pnl">PnL (USD)</th>
-                <th data-i18n="th_cumulative">Cumulative</th>
-              </tr>
-            </thead>
-            <tbody id="trades-body">
-              <tr><td colspan="7" class="text-center text-muted py-8" data-i18n="no_trades_hint">Run a backtest to see trades.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
+    <div class="bg-card rounded-lg p-3 border border-border">
+      <div class="text-xs text-muted mb-1" data-i18n="win_rate">Win Rate</div>
+      <div id="bt-wr" class="text-xl font-bold text-white">-</div>
     </div>
+    <div class="bg-card rounded-lg p-3 border border-border">
+      <div class="text-xs text-muted mb-1" data-i18n="num_trades"># Trades</div>
+      <div id="bt-trades" class="text-xl font-bold text-white">-</div>
+    </div>
+  </div>
 
-    <!-- ======== TAB: POSITIONS ======== -->
-    <div id="pane-positions" class="tab-pane hidden p-6 flex-col gap-5">
+  <!-- Equity Curve -->
+  <div class="bg-card rounded-lg border border-border p-4">
+    <h3 class="text-sm font-semibold text-white mb-3" data-i18n="equity_curve">Equity Curve</h3>
+    <div class="chart-wrap" style="height:260px">
+      <canvas id="equity-chart"></canvas>
+    </div>
+  </div>
 
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4 w-full">
-          <div class="w-full max-w-2xl">
-            <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted mb-2" data-i18n="market_balances">Futures Balances</div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
-            <div id="balance-card-USDT" class="bg-card rounded-lg px-4 py-3 border border-border">
-              <div class="text-xs text-muted mb-1">USDT-M</div>
-              <div id="balance-free-USDT" class="text-xl font-bold text-white">–</div>
-              <div id="balance-meta-USDT" class="text-xs text-muted">–</div>
-            </div>
-            <div id="balance-card-USDC" class="bg-card rounded-lg px-4 py-3 border border-border">
-              <div class="text-xs text-muted mb-1">USDC-M</div>
-              <div id="balance-free-USDC" class="text-xl font-bold text-white">–</div>
-              <div id="balance-meta-USDC" class="text-xs text-muted">–</div>
-            </div>
-            </div>
-          </div>
+  <!-- Trades Table -->
+  <div class="bg-card rounded-lg border border-border p-4">
+    <h3 class="text-sm font-semibold text-white mb-3" data-i18n="trades_title">Trades</h3>
+    <div class="overflow-x-auto">
+      <table id="trades-table">
+        <thead>
+          <tr>
+            <th data-i18n="th_entry_time">Entry Time</th>
+            <th data-i18n="th_exit_time">Exit Time</th>
+            <th data-i18n="th_side">Legs</th>
+            <th data-i18n="th_entry_z">Entry Z</th>
+            <th data-i18n="th_exit_z">Exit Z</th>
+            <th data-i18n="th_pnl">PnL (USD)</th>
+            <th data-i18n="th_cumulative">Cumulative</th>
+          </tr>
+        </thead>
+        <tbody id="trades-body">
+          <tr><td colspan="7" class="text-center text-muted py-8" data-i18n="no_trades_hint">Run a backtest to see trades.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div> <!-- /backtest-mode -->
+
+<!-- ========== BOTTOM PANEL ========== -->
+<div id="bottom-panel" class="shrink-0 border-t border-border bg-panel flex flex-col" style="height:240px;min-height:80px;max-height:60vh">
+
+  <!-- Resize handle -->
+  <div id="bottom-panel-handle" class="h-1 cursor-ns-resize bg-border hover:bg-accent transition flex-shrink-0" style="cursor:ns-resize"></div>
+
+  <!-- Bottom Tabs -->
+  <div class="flex gap-0 border-b border-border px-4 shrink-0">
+    <button onclick="setBottomTab('positions')" id="btab-positions" class="tab-btn active px-4 py-2 text-xs font-medium text-white border-b-2 border-accent transition" data-i18n="tab_positions">Positions</button>
+    <button onclick="setBottomTab('orders')" id="btab-orders" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_orders">TP/SL Orders</button>
+    <button onclick="setBottomTab('journal')" id="btab-journal" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_journal">Journal</button>
+    <div class="flex-1"></div>
+    <button onclick="toggleBottomPanel()" class="text-muted hover:text-white text-xs px-2 transition" title="Toggle panel">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 15 12 9 18 15"/></svg>
+    </button>
+  </div>
+
+  <!-- Positions Pane -->
+  <div id="bpane-positions" class="btab-pane flex-1 overflow-y-auto p-3">
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-3">
+        <span class="text-xs font-semibold text-muted uppercase" data-i18n="strategy_positions">Strategy Positions</span>
+        <span class="text-[10px] text-muted" id="strategy-pos-updated"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <!-- Balance badges -->
+        <div class="flex gap-1.5">
+          <span id="balance-card-USDT" class="text-[10px] px-2 py-0.5 rounded border border-border text-muted bg-card">USDT: <span id="balance-free-USDT" class="text-white font-medium">-</span></span>
+          <span id="balance-card-USDC" class="text-[10px] px-2 py-0.5 rounded border border-border text-muted bg-card">USDC: <span id="balance-free-USDC" class="text-white font-medium">-</span></span>
         </div>
-        <button onclick="refreshPositions()"
-          class="flex items-center gap-2 px-4 py-2 rounded-md text-sm border border-border text-muted hover:border-accent hover:text-accent transition">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-          <span data-i18n="refresh">Refresh</span>
+        <button onclick="refreshPositions()" class="text-muted hover:text-accent transition p-0.5" title="Refresh">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.06-3.39L10 6h5V1l-1.35 1.35z"/></svg>
         </button>
       </div>
-
-      <!-- Strategy Positions (DB + enriched with live Binance data) -->
-      <div class="bg-card rounded-lg border border-border p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-white" data-i18n="strategy_positions">Strategy Positions</h3>
-          <span class="text-[10px] text-muted" id="strategy-pos-updated"></span>
-        </div>
-        <div class="overflow-x-auto">
-          <table id="strategy-positions-table">
-            <thead>
-              <tr>
-                <th data-i18n="th_pair">Pair</th>
-                <th data-i18n="th_side2">Side</th>
-                <th data-i18n="th_entry_price">Entry Prices</th>
-                <th data-i18n="th_entry_z2">Entry Z</th>
-                <th data-i18n="th_current_z">Z-score</th>
-                <th data-i18n="th_upnl">Unrealised PnL</th>
-                <th data-i18n="th_duration">Open for</th>
-                <th data-i18n="th_liq_price">Liq. Price</th>
-                <th data-i18n="th_actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="strategy-positions-body">
-              <tr><td colspan="8" class="text-center text-muted py-6" data-i18n="no_strategy_positions">No open strategy positions.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Exchange Positions (live Binance) -->
-      <div class="bg-card rounded-lg border border-border p-4">
-        <h3 class="text-sm font-semibold text-white mb-3" data-i18n="exchange_positions">Exchange Positions (Live)</h3>
-        <div class="overflow-x-auto">
-          <table id="positions-table">
-            <thead>
-              <tr>
-                <th data-i18n="th_symbol">Symbol</th>
-                <th data-i18n="th_side2">Side</th>
-                <th data-i18n="th_size">Size</th>
-                <th data-i18n="th_entry_price">Entry Price</th>
-                <th data-i18n="th_mark_price">Mark Price</th>
-                <th data-i18n="th_notional">Notional</th>
-                <th data-i18n="th_upnl">Unrealised PnL</th>
-                <th data-i18n="th_leverage">Leverage</th>
-                <th data-i18n="th_liq">Liq. Price</th>
-              </tr>
-            </thead>
-            <tbody id="positions-body">
-              <tr><td colspan="9" class="text-center text-muted py-8" data-i18n="positions_not_loaded">No positions loaded.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Trade Journal (collapsible) -->
-      <div class="bg-card rounded-lg border border-border p-4">
-        <div class="flex items-center justify-between cursor-pointer select-none" onclick="toggleJournal()">
-          <h3 class="text-sm font-semibold text-white" data-i18n="trade_journal">Trade Journal</h3>
-          <div class="flex items-center gap-2">
-            <span class="text-[10px] text-muted" id="journal-count"></span>
-            <svg id="journal-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted transition-transform duration-200"><polyline points="6 9 12 15 18 9"/></svg>
-          </div>
-        </div>
-        <div id="journal-content" class="hidden mt-3">
-          <div class="overflow-x-auto">
-            <table id="journal-table">
-              <thead>
-                <tr>
-                  <th data-i18n="th_pair">Pair</th>
-                  <th data-i18n="th_side2">Side</th>
-                  <th data-i18n="th_entry_z2">Entry Z</th>
-                  <th data-i18n="th_exit_z">Exit Z</th>
-                  <th data-i18n="th_pnl">PnL ($)</th>
-                  <th data-i18n="th_leverage">Lev</th>
-                  <th data-i18n="th_opened_at">Opened</th>
-                  <th data-i18n="th_closed_at">Closed</th>
-                </tr>
-              </thead>
-              <tbody id="journal-body">
-                <tr><td colspan="8" class="text-center text-muted py-4" data-i18n="no_closed_trades">No closed trades yet.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
+    </div>
+    <div class="overflow-x-auto">
+      <table id="strategy-positions-table">
+        <thead>
+          <tr>
+            <th data-i18n="th_pair">Pair</th>
+            <th data-i18n="th_side2">Side</th>
+            <th data-i18n="th_entry_price">Entry Prices</th>
+            <th data-i18n="th_entry_z2">Entry Z</th>
+            <th data-i18n="th_current_z">Z-score</th>
+            <th data-i18n="th_upnl">Unrealised PnL</th>
+            <th data-i18n="th_duration">Open for</th>
+            <th data-i18n="th_liq_price">Liq. Price</th>
+            <th data-i18n="th_actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="strategy-positions-body">
+          <tr><td colspan="9" class="text-center text-muted py-4" data-i18n="no_strategy_positions">No open strategy positions.</td></tr>
+        </tbody>
+      </table>
     </div>
 
-  </main>
-</div>
+    <!-- Exchange Positions -->
+    <div class="mt-3">
+      <span class="text-xs font-semibold text-muted uppercase" data-i18n="exchange_positions">Exchange Positions (Live)</span>
+      <div class="overflow-x-auto mt-1">
+        <table id="positions-table">
+          <thead>
+            <tr>
+              <th data-i18n="th_symbol">Symbol</th>
+              <th data-i18n="th_side2">Side</th>
+              <th data-i18n="th_size">Size</th>
+              <th data-i18n="th_entry_price">Entry Price</th>
+              <th data-i18n="th_mark_price">Mark Price</th>
+              <th data-i18n="th_notional">Notional</th>
+              <th data-i18n="th_upnl">Unrealised PnL</th>
+              <th data-i18n="th_leverage">Leverage</th>
+              <th data-i18n="th_liq">Liq. Price</th>
+            </tr>
+          </thead>
+          <tbody id="positions-body">
+            <tr><td colspan="9" class="text-center text-muted py-4" data-i18n="positions_not_loaded">No positions loaded.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Orders Pane -->
+  <div id="bpane-orders" class="btab-pane hidden flex-1 overflow-y-auto p-3">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-semibold text-muted uppercase" data-i18n="tab_orders">TP/SL Orders</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table id="triggers-table">
+        <thead>
+          <tr>
+            <th data-i18n="orders_col_pair">Pair</th>
+            <th data-i18n="orders_col_side">Side</th>
+            <th data-i18n="orders_col_type">Type</th>
+            <th data-i18n="orders_col_zscore">Z-score</th>
+            <th data-i18n="orders_col_smart">Smart</th>
+            <th>Status</th>
+            <th data-i18n="orders_col_created">Created</th>
+            <th data-i18n="th_actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="triggers-body">
+          <tr><td colspan="8" class="text-center text-muted py-4" data-i18n="no_active_triggers">No active triggers.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Journal Pane -->
+  <div id="bpane-journal" class="btab-pane hidden flex-1 overflow-y-auto p-3">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-semibold text-muted uppercase" data-i18n="trade_journal">Trade Journal</span>
+      <span class="text-[10px] text-muted" id="journal-count"></span>
+    </div>
+    <div class="overflow-x-auto">
+      <table id="journal-table">
+        <thead>
+          <tr>
+            <th data-i18n="th_pair">Pair</th>
+            <th data-i18n="th_side2">Side</th>
+            <th data-i18n="th_entry_z2">Entry Z</th>
+            <th data-i18n="th_exit_z">Exit Z</th>
+            <th data-i18n="th_pnl">PnL ($)</th>
+            <th data-i18n="th_leverage">Lev</th>
+            <th data-i18n="th_opened_at">Opened</th>
+            <th data-i18n="th_closed_at">Closed</th>
+          </tr>
+        </thead>
+        <tbody id="journal-body">
+          <tr><td colspan="8" class="text-center text-muted py-4" data-i18n="no_closed_trades">No closed trades yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div> <!-- /bottom-panel -->
 
 <!-- ================================================================== -->
 <!--  Guide Drawer                                                      -->
@@ -1357,8 +1407,305 @@ window.addEventListener('DOMContentLoaded', () => {
   updatePairContext();
   checkApiStatus();
   initTooltips();
+  // Restore mode (trade/backtest)
+  const savedMode = localStorage.getItem('pt_mode') || 'trade';
+  setMode(savedMode);
+  // Bottom panel resize
+  initBottomPanelResize();
+  // Watchlist
+  renderWatchlist();
+  startWatchlistUpdater();
+  // Bottom panel: load positions tab by default
+  setBottomTab('positions');
+  loadStrategyPositions();
+  loadOrdersTab();
   restoreAnalysisState();
 });
+
+// ------------------------------------------------------------------ //
+//  Mode switcher (Trade / Backtest)
+// ------------------------------------------------------------------ //
+let currentMode = 'trade';
+
+function setMode(mode) {
+  currentMode = mode;
+  localStorage.setItem('pt_mode', mode);
+  const tradeMode = document.getElementById('trade-mode');
+  const backtestMode = document.getElementById('backtest-mode');
+  const bottomPanel = document.getElementById('bottom-panel');
+  const tradeBtn = document.getElementById('mode-trade-btn');
+  const btBtn = document.getElementById('mode-backtest-btn');
+
+  if (mode === 'trade') {
+    tradeMode.classList.remove('hidden');
+    tradeMode.classList.add('flex');
+    backtestMode.classList.add('hidden');
+    bottomPanel.classList.remove('hidden');
+    tradeBtn.classList.add('bg-accent', 'text-surface');
+    tradeBtn.classList.remove('text-muted');
+    btBtn.classList.remove('bg-accent', 'text-surface');
+    btBtn.classList.add('text-muted');
+  } else {
+    tradeMode.classList.add('hidden');
+    tradeMode.classList.remove('flex');
+    backtestMode.classList.remove('hidden');
+    bottomPanel.classList.add('hidden');
+    btBtn.classList.add('bg-accent', 'text-surface');
+    btBtn.classList.remove('text-muted');
+    tradeBtn.classList.remove('bg-accent', 'text-surface');
+    tradeBtn.classList.add('text-muted');
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  Bottom panel tabs
+// ------------------------------------------------------------------ //
+function setBottomTab(name) {
+  ['positions', 'orders', 'journal'].forEach(t => {
+    const pane = document.getElementById('bpane-' + t);
+    const btn = document.getElementById('btab-' + t);
+    if (!pane || !btn) return;
+    pane.classList.add('hidden');
+    btn.classList.remove('active', 'text-white', 'border-accent');
+    btn.classList.add('text-muted', 'border-transparent');
+  });
+  const pane = document.getElementById('bpane-' + name);
+  const btn = document.getElementById('btab-' + name);
+  if (pane) pane.classList.remove('hidden');
+  if (btn) {
+    btn.classList.add('active', 'text-white');
+    btn.classList.remove('text-muted', 'border-transparent');
+  }
+  if (name === 'positions') {
+    loadStrategyPositions();
+    refreshPositions();
+  } else if (name === 'orders') {
+    loadOrdersTab();
+  } else if (name === 'journal') {
+    loadTradeJournal();
+  }
+}
+
+let _bottomCollapsed = false;
+let _bottomPrevHeight = 240;
+
+function toggleBottomPanel() {
+  const panel = document.getElementById('bottom-panel');
+  if (_bottomCollapsed) {
+    panel.style.height = _bottomPrevHeight + 'px';
+    _bottomCollapsed = false;
+  } else {
+    _bottomPrevHeight = panel.offsetHeight;
+    panel.style.height = '32px';
+    _bottomCollapsed = true;
+  }
+}
+
+function initBottomPanelResize() {
+  const handle = document.getElementById('bottom-panel-handle');
+  const panel = document.getElementById('bottom-panel');
+  if (!handle || !panel) return;
+  let startY, startH;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startY = e.clientY;
+    startH = panel.offsetHeight;
+    const onMove = ev => {
+      const diff = startY - ev.clientY;
+      const newH = Math.max(80, Math.min(window.innerHeight * 0.6, startH + diff));
+      panel.style.height = newH + 'px';
+      _bottomCollapsed = false;
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// ------------------------------------------------------------------ //
+//  Watchlist (localStorage)
+// ------------------------------------------------------------------ //
+function getWatchlist() {
+  try { return JSON.parse(localStorage.getItem('pt_watchlist') || '[]'); }
+  catch { return []; }
+}
+function saveWatchlist(items) {
+  localStorage.setItem('pt_watchlist', JSON.stringify(items));
+}
+
+function showAddWatchlistModal() {
+  const form = document.getElementById('watchlist-add-form');
+  form.classList.toggle('hidden');
+  if (!form.classList.contains('hidden')) {
+    document.getElementById('wl-sym1').focus();
+  }
+}
+
+function addWatchlistItem() {
+  const s1 = document.getElementById('wl-sym1').value.trim().toUpperCase();
+  const s2 = document.getElementById('wl-sym2').value.trim().toUpperCase();
+  if (!s1 || !s2) return;
+  const items = getWatchlist();
+  const exists = items.some(w => w.sym1 === s1 && w.sym2 === s2);
+  if (!exists) {
+    items.push({ sym1: s1, sym2: s2, zscore: null });
+    saveWatchlist(items);
+  }
+  document.getElementById('wl-sym1').value = '';
+  document.getElementById('wl-sym2').value = '';
+  document.getElementById('watchlist-add-form').classList.add('hidden');
+  renderWatchlist();
+}
+
+function removeWatchlistItem(idx) {
+  const items = getWatchlist();
+  items.splice(idx, 1);
+  saveWatchlist(items);
+  renderWatchlist();
+}
+
+function loadPairIntoAnalysis(sym1, sym2) {
+  document.getElementById('sym1-input').value = sym1;
+  document.getElementById('sym2-input').value = sym2;
+  handleSymbolInputChange();
+  setMode('trade');
+  runAnalyze();
+}
+
+function renderWatchlist() {
+  const list = document.getElementById('watchlist-list');
+  if (!list) return;
+  const items = getWatchlist();
+  if (items.length === 0) {
+    list.innerHTML = `<div class="text-center text-muted text-[10px] py-6">${t('wl_no_items')}</div>`;
+    return;
+  }
+  list.innerHTML = items.map((w, i) => `
+    <div class="px-2 py-1.5 border-b border-border hover:bg-card cursor-pointer transition flex items-center justify-between group" onclick="loadPairIntoAnalysis('${w.sym1}','${w.sym2}')">
+      <div class="flex flex-col min-w-0">
+        <span class="text-[10px] font-medium text-white truncate">${w.sym1}</span>
+        <span class="text-[10px] text-muted truncate">${w.sym2}</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="text-[10px] font-mono ${w.zscore != null ? (w.zscore > 0 ? 'text-green' : w.zscore < 0 ? 'text-red' : 'text-muted') : 'text-muted'}">${w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '-'}</span>
+        <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px]" title="${t('remove_from_watchlist')}">x</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+let _wlInterval = null;
+function startWatchlistUpdater() {
+  if (_wlInterval) clearInterval(_wlInterval);
+  _wlInterval = setInterval(updateWatchlistZScores, 30000);
+}
+
+async function updateWatchlistZScores() {
+  const items = getWatchlist();
+  if (items.length === 0) return;
+  let changed = false;
+  for (const w of items) {
+    try {
+      const res = await fetch(`${API}/api/history?symbol1=${encodeURIComponent(w.sym1)}&symbol2=${encodeURIComponent(w.sym2)}&timeframe=1h&limit=100&zscore_window=20`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.stats && data.stats.zscore != null) {
+        w.zscore = data.stats.zscore;
+        changed = true;
+      }
+    } catch {}
+  }
+  if (changed) {
+    saveWatchlist(items);
+    renderWatchlist();
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  Orders/Triggers tab
+// ------------------------------------------------------------------ //
+async function loadOrdersTab() {
+  try {
+    const res = await fetch(`${API}/api/triggers`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderTriggers(data.triggers || []);
+  } catch {}
+}
+
+function renderTriggers(triggers) {
+  const tbody = document.getElementById('triggers-body');
+  if (!tbody) return;
+  if (triggers.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-4">${t('no_active_triggers')}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = triggers.map(tr => {
+    const isTP = tr.type === 'tp';
+    const typeColor = isTP ? 'text-green' : 'text-red';
+    const sideLabel = tr.side === 'long_spread' ? t('trade_long') : t('trade_short');
+    const statusBadge = tr.status === 'active'
+      ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">active</span>'
+      : tr.status === 'triggered'
+      ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-yellow-900 text-yellow-300">triggered</span>'
+      : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">cancelled</span>';
+    const created = tr.created_at ? new Date(tr.created_at).toLocaleString() : '-';
+    const cancelBtn = tr.status === 'active'
+      ? `<button onclick="cancelTrigger(${tr.id})" class="text-red-400 hover:text-red-300 text-[10px] uppercase">${t('exec_cancel')}</button>`
+      : '';
+    return `<tr class="border-b border-border/30">
+      <td class="text-xs">${tr.symbol1}<br/><span class="text-muted">${tr.symbol2}</span></td>
+      <td class="text-xs">${sideLabel}</td>
+      <td class="text-xs ${typeColor} font-semibold">${tr.type.toUpperCase()}</td>
+      <td class="text-xs font-mono">${tr.zscore.toFixed(2)}</td>
+      <td class="text-xs">${tr.tp_smart ? '◎' : '-'}</td>
+      <td>${statusBadge}</td>
+      <td class="text-xs text-muted">${created}</td>
+      <td>${cancelBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function cancelTrigger(triggerId) {
+  try {
+    const res = await fetch(`${API}/api/triggers/${triggerId}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast(t('toast_trigger_cancelled'), 'ok');
+      loadOrdersTab();
+    } else {
+      const data = await res.json();
+      showToast(t('toast_trigger_error') + (data.detail || res.status), 'error');
+    }
+  } catch (e) {
+    showToast(t('toast_trigger_error') + e.message, 'error');
+  }
+}
+
+async function createTriggerFromPosition(sym1, sym2, side, type, zscore, tpSmart) {
+  try {
+    const res = await fetch(`${API}/api/triggers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol1: sym1, symbol2: sym2,
+        side, type, zscore: parseFloat(zscore),
+        tp_smart: Boolean(tpSmart),
+      }),
+    });
+    if (res.ok) {
+      showToast(t('toast_trigger_created'), 'ok');
+      loadOrdersTab();
+    } else {
+      const data = await res.json();
+      showToast(t('toast_trigger_error') + (data.detail || res.status), 'error');
+    }
+  } catch (e) {
+    showToast(t('toast_trigger_error') + e.message, 'error');
+  }
+}
 
 function inferMarginAsset(symbol) {
   const value = String(symbol || '').trim().toUpperCase();
@@ -1563,23 +1910,13 @@ function setTimeframe(tf) {
 //  Tab switching
 // ------------------------------------------------------------------ //
 function switchTab(name) {
-  ['spread','price','backtest','positions'].forEach(t => {
-    document.getElementById('pane-' + t).classList.add('hidden');
-    document.getElementById('pane-' + t).classList.remove('flex');
-    const btn = document.getElementById('tab-' + t);
-    btn.classList.remove('active', 'text-white', 'border-accent');
-    btn.classList.add('text-muted', 'border-transparent');
-  });
-  const pane = document.getElementById('pane-' + name);
-  pane.classList.remove('hidden');
-  pane.classList.add('flex');
-  const btn = document.getElementById('tab-' + name);
-  btn.classList.add('active', 'text-white');
-  btn.classList.remove('text-muted', 'border-transparent');
-
+  // Legacy compat — old tab system replaced by mode switcher + bottom panel
   if (name === 'positions') {
+    setBottomTab('positions');
     refreshPositions();
     loadStrategyPositions();
+  } else if (name === 'backtest') {
+    setMode('backtest');
   }
 }
 
@@ -1993,9 +2330,9 @@ function renderBalanceCards(assets = {}) {
     const freeEl = document.getElementById(`balance-free-${asset}`);
     const metaEl = document.getElementById(`balance-meta-${asset}`);
     const data = assets?.[asset] || {};
-    if (!card || !freeEl || !metaEl) return;
+    if (!freeEl) return;
     freeEl.textContent = '$' + fmt(data.free, 2);
-    metaEl.textContent = `${t('balance_total_label')}: $${fmt(data.total, 2)} · ${t('balance_used_label')}: $${fmt(data.used, 2)}`;
+    if (metaEl) metaEl.textContent = `${t('balance_total_label')}: $${fmt(data.total, 2)} · ${t('balance_used_label')}: $${fmt(data.used, 2)}`;
   });
 
   const activeAsset = getCurrentPairMeta().shared_margin_asset;
@@ -2456,12 +2793,8 @@ async function loadTradeJournal() {
 }
 
 function toggleJournal() {
-  const content = document.getElementById('journal-content');
-  const chevron = document.getElementById('journal-chevron');
-  if (!content) return;
-  const isHidden = content.classList.toggle('hidden');
-  chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
-  if (!isHidden) loadTradeJournal();
+  // Legacy compat — now just switches to journal tab in bottom panel
+  setBottomTab('journal');
 }
 
 // ------------------------------------------------------------------ //

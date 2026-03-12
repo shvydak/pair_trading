@@ -38,6 +38,19 @@ def init_db() -> None:
                 opened_at      TEXT    NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS triggers (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol1      TEXT    NOT NULL,
+                symbol2      TEXT    NOT NULL,
+                side         TEXT    NOT NULL,
+                type         TEXT    NOT NULL,
+                zscore       REAL    NOT NULL,
+                tp_smart     INTEGER DEFAULT 0,
+                status       TEXT    DEFAULT 'active',
+                created_at   TEXT    NOT NULL,
+                triggered_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS closed_trades (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol1        TEXT    NOT NULL,
@@ -204,3 +217,70 @@ def get_closed_trades(limit: int = 100) -> list[dict]:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Triggers (standalone TP/SL orders, independent of open_positions)
+# ---------------------------------------------------------------------------
+
+def save_trigger(
+    symbol1: str,
+    symbol2: str,
+    side: str,
+    type: str,
+    zscore: float,
+    tp_smart: bool = False,
+) -> int:
+    """Save a new TP/SL trigger. Returns the trigger id."""
+    with _conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO triggers
+              (symbol1, symbol2, side, type, zscore, tp_smart, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+            """,
+            (
+                symbol1, symbol2, side, type, zscore, int(tp_smart),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_active_triggers() -> list[dict]:
+    """Return all triggers with status='active'."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM triggers WHERE status = 'active' ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_triggers_for_pair(symbol1: str, symbol2: str) -> list[dict]:
+    """Return all triggers (any status) for a given pair."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM triggers WHERE symbol1 = ? AND symbol2 = ? ORDER BY created_at DESC",
+            (symbol1, symbol2),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def cancel_trigger(trigger_id: int) -> bool:
+    """Set trigger status to 'cancelled'. Returns True if found."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE triggers SET status = 'cancelled' WHERE id = ? AND status = 'active'",
+            (trigger_id,),
+        )
+        return cur.rowcount > 0
+
+
+def trigger_fired(trigger_id: int) -> bool:
+    """Set trigger status to 'triggered' with current timestamp. Returns True if found."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE triggers SET status = 'triggered', triggered_at = ? WHERE id = ? AND status = 'active'",
+            (datetime.now(timezone.utc).isoformat(), trigger_id),
+        )
+        return cur.rowcount > 0

@@ -262,20 +262,27 @@ _MONITOR_TIMEFRAME = "1h"
 
 async def monitor_position_triggers() -> None:
     """
-    Background task: check TP/SL triggers every 5 s for all open positions.
-    Runs at the same cadence as price_cache.run() so every cache update is
-    checked immediately.  Reads from price_cache to avoid duplicate Binance
-    requests.  Manages its own cache subscriptions keyed by DB position id.
+    Background task: check TP/SL triggers every 5 s.
+
+    Two sources of triggers:
+    1. Legacy: tp_zscore/sl_zscore columns on open_positions (backward compat)
+    2. New: rows in the `triggers` table with status='active'
+
+    Both use the same price_cache for z-score calculation.
+    Manages cache subscriptions keyed by a string tag:
+      - "pos_{id}" for legacy position triggers
+      - "trig_{id}" for standalone triggers
     """
     await asyncio.sleep(15)  # wait for startup + first cache fill
-    monitored_keys: dict[int, tuple] = {}  # pos_id → cache_key
-    closing_ids: set[int] = set()  # positions currently being closed (smart)
+    monitored_keys: dict[str, tuple] = {}  # tag → cache_key
+    closing_tags: set[str] = set()  # tags currently being closed (smart)
 
     while True:
         try:
-            positions = db.get_open_positions()
-            current_ids: set[int] = set()
+            current_tags: set[str] = set()
 
+            # ── 1. Legacy: open_positions with tp_zscore/sl_zscore ──────────
+            positions = db.get_open_positions()
             for pos in positions:
                 tp = pos.get("tp_zscore")
                 sl = pos.get("sl_zscore")
@@ -283,20 +290,21 @@ async def monitor_position_triggers() -> None:
                     continue
 
                 pos_id = pos["id"]
-                current_ids.add(pos_id)
+                tag = f"pos_{pos_id}"
+                current_tags.add(tag)
 
-                if pos_id in closing_ids:
+                if tag in closing_tags:
                     continue  # smart close already in flight
 
                 # Subscribe to cache on first encounter
-                if pos_id not in monitored_keys:
+                if tag not in monitored_keys:
                     limit = max(_MONITOR_ZSCORE_WINDOW * 3, 60)
                     key = price_cache.subscribe(
                         pos["symbol1"], pos["symbol2"], _MONITOR_TIMEFRAME, limit
                     )
-                    monitored_keys[pos_id] = key
+                    monitored_keys[tag] = key
 
-                entry = price_cache.get(monitored_keys[pos_id])
+                entry = price_cache.get(monitored_keys[tag])
                 if entry is None:
                     continue  # cache not yet populated, skip this cycle
 
@@ -328,8 +336,6 @@ async def monitor_position_triggers() -> None:
                             f"tp={tp} sl={sl}"
                         )
                         # Safety: check that the position still exists on the exchange.
-                        # If closed manually, clean up the DB record instead of placing
-                        # orders (which would open a new position in the wrong direction).
                         live_positions = await client.get_positions()
                         live_syms = {p["symbol"] for p in live_positions if p.get("size")}
                         sym1, sym2 = pos["symbol1"], pos["symbol2"]
@@ -340,14 +346,14 @@ async def monitor_position_triggers() -> None:
                                 f"Removing stale DB record."
                             )
                             db.delete_open_position(pos_id)
-                            price_cache.unsubscribe(monitored_keys.pop(pos_id))
-                            current_ids.discard(pos_id)
+                            price_cache.unsubscribe(monitored_keys.pop(tag))
+                            current_tags.discard(tag)
                             continue
 
                         use_smart = trigger == "tp" and bool(pos.get("tp_smart"))
                         if use_smart:
                             exec_id = await _do_smart_close_trigger(pos, exit_zscore=current_z)
-                            closing_ids.add(pos_id)
+                            closing_tags.add(tag)
                             log.info(
                                 f"AUTO-SMART-CLOSE {trigger.upper()} | pos={pos_id} | "
                                 f"exec_id={exec_id}"
@@ -358,20 +364,117 @@ async def monitor_position_triggers() -> None:
                                 f"AUTO-CLOSE {trigger.upper()} | pos={pos_id} | "
                                 f"pnl={result['pnl']}"
                             )
-                        # Unsubscribe immediately after market close (smart close cleans up later)
+                        # Unsubscribe immediately after market close
                         if not use_smart:
-                            price_cache.unsubscribe(monitored_keys.pop(pos_id))
-                            current_ids.discard(pos_id)
+                            price_cache.unsubscribe(monitored_keys.pop(tag))
+                            current_tags.discard(tag)
                 except Exception as e:
                     log.warning(f"monitor: error checking pos {pos_id}: {e}")
 
-            # Remove closing_ids that are no longer in DB (smart close finished)
-            closing_ids &= current_ids
+            # ── 2. Standalone triggers table ────────────────────────────────
+            active_triggers = db.get_active_triggers()
+            for trig in active_triggers:
+                trig_id = trig["id"]
+                tag = f"trig_{trig_id}"
+                current_tags.add(tag)
 
-            # Unsubscribe positions that were closed/deleted externally
-            for pos_id in list(monitored_keys.keys()):
-                if pos_id not in current_ids:
-                    price_cache.unsubscribe(monitored_keys.pop(pos_id))
+                if tag in closing_tags:
+                    continue
+
+                sym1, sym2 = trig["symbol1"], trig["symbol2"]
+
+                # Subscribe to cache on first encounter
+                if tag not in monitored_keys:
+                    limit = max(_MONITOR_ZSCORE_WINDOW * 3, 60)
+                    key = price_cache.subscribe(sym1, sym2, _MONITOR_TIMEFRAME, limit)
+                    monitored_keys[tag] = key
+
+                entry = price_cache.get(monitored_keys[tag])
+                if entry is None:
+                    continue
+
+                try:
+                    p1 = entry["price1"]
+                    p2 = entry["price2"]
+                    # For standalone triggers we need a hedge ratio from the data
+                    hedge = strategy.calculate_hedge_ratio(p1, p2)
+                    spread = strategy.calculate_spread(p1, p2, hedge)
+                    zscore_series = strategy.calculate_zscore(spread, window=_MONITOR_ZSCORE_WINDOW)
+                    current_z = float(zscore_series.dropna().iloc[-1])
+
+                    side = trig["side"]
+                    trig_type = trig["type"]  # "tp" or "sl"
+                    trig_z = trig["zscore"]
+                    fired = False
+
+                    if trig_type == "tp":
+                        if side == "long_spread" and current_z >= -trig_z:
+                            fired = True
+                        elif side == "short_spread" and current_z <= trig_z:
+                            fired = True
+                    elif trig_type == "sl":
+                        if side == "long_spread" and current_z <= -trig_z:
+                            fired = True
+                        elif side == "short_spread" and current_z >= trig_z:
+                            fired = True
+
+                    if fired:
+                        log.info(
+                            f"STANDALONE TRIGGER FIRED | trig_id={trig_id} | "
+                            f"{sym1}/{sym2} | {side} | {trig_type} z={trig_z} | "
+                            f"current_z={current_z:.3f}"
+                        )
+                        # Safety: check live positions on exchange
+                        live_positions = await client.get_positions()
+                        live_syms = {p["symbol"] for p in live_positions if p.get("size")}
+                        if sym1 not in live_syms and sym2 not in live_syms:
+                            log.warning(
+                                f"STANDALONE TRIGGER | trig_id={trig_id} | "
+                                f"no live positions found — cancelling trigger."
+                            )
+                            db.trigger_fired(trig_id)
+                            price_cache.unsubscribe(monitored_keys.pop(tag))
+                            current_tags.discard(tag)
+                            continue
+
+                        # Find DB position for this pair
+                        db_pos = db.find_open_position(sym1, sym2)
+                        if db_pos:
+                            use_smart = trig_type == "tp" and bool(trig.get("tp_smart"))
+                            if use_smart:
+                                exec_id = await _do_smart_close_trigger(db_pos, exit_zscore=current_z)
+                                closing_tags.add(tag)
+                                log.info(
+                                    f"AUTO-SMART-CLOSE via trigger | trig_id={trig_id} | "
+                                    f"exec_id={exec_id}"
+                                )
+                            else:
+                                result = await _do_market_close(db_pos, exit_zscore=current_z)
+                                log.info(
+                                    f"AUTO-CLOSE via trigger | trig_id={trig_id} | "
+                                    f"pnl={result['pnl']}"
+                                )
+                        else:
+                            log.warning(
+                                f"STANDALONE TRIGGER | trig_id={trig_id} | "
+                                f"no DB position found for {sym1}/{sym2} — marking as fired."
+                            )
+
+                        db.trigger_fired(trig_id)
+                        if not (db_pos and trig_type == "tp" and bool(trig.get("tp_smart"))):
+                            price_cache.unsubscribe(monitored_keys.pop(tag))
+                            current_tags.discard(tag)
+                except Exception as e:
+                    log.warning(f"monitor: error checking trigger {trig_id}: {e}")
+
+            # ── Cleanup ─────────────────────────────────────────────────────
+            # Remove closing_tags that are no longer active
+            closing_tags &= current_tags
+
+            # Unsubscribe tags that were closed/deleted/cancelled externally
+            for t in list(monitored_keys.keys()):
+                if t not in current_tags:
+                    price_cache.unsubscribe(monitored_keys.pop(t))
 
         except Exception as e:
             log.warning(f"monitor: outer error: {e}")
@@ -654,6 +757,55 @@ async def set_triggers(position_id: int, req: TriggerRequest):
         "ok": True, "id": position_id,
         "tp_zscore": req.tp_zscore, "sl_zscore": req.sl_zscore, "tp_smart": req.tp_smart,
     }
+
+
+# ---------------------------------------------------------------------------
+# Standalone trigger endpoints (new triggers table)
+# ---------------------------------------------------------------------------
+
+class TriggerCreateRequest(BaseModel):
+    symbol1: str
+    symbol2: str
+    side: str       # long_spread | short_spread
+    type: str       # tp | sl
+    zscore: float
+    tp_smart: bool = False
+
+
+@app.get("/api/triggers")
+async def get_triggers():
+    """Return all active triggers."""
+    return {"triggers": _clean(db.get_active_triggers())}
+
+
+@app.post("/api/triggers")
+async def create_trigger(req: TriggerCreateRequest):
+    """Create a new TP/SL trigger."""
+    sym1 = _normalise_symbol(req.symbol1)
+    sym2 = _normalise_symbol(req.symbol2)
+    trigger_id = db.save_trigger(
+        symbol1=sym1,
+        symbol2=sym2,
+        side=req.side,
+        type=req.type,
+        zscore=req.zscore,
+        tp_smart=req.tp_smart,
+    )
+    log.info(
+        f"Trigger created: id={trigger_id} | {sym1}/{sym2} | "
+        f"{req.side} | {req.type} z={req.zscore} (smart={req.tp_smart})"
+    )
+    return {"id": trigger_id, "ok": True}
+
+
+@app.delete("/api/triggers/{trigger_id}")
+async def delete_trigger(trigger_id: int):
+    """Cancel an active trigger."""
+    ok = db.cancel_trigger(trigger_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Active trigger {trigger_id} not found")
+    log.info(f"Trigger {trigger_id} cancelled")
+    return {"ok": True}
 
 
 @app.get("/api/db/history")
