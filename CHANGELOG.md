@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-03-12 — Фиксы: позиции, PnL, sparkline
+
+### Что изменилось
+
+**Backend:**
+- Новый эндпоинт `GET /api/all_positions` — один вызов Binance, возвращает `{strategy_positions: [...enriched], exchange_positions: [...raw]}`; устраняет двойной вызов `get_positions()` при каждом обновлении UI
+
+**Frontend:**
+- `loadAllPositions()` заменяет раздельные `loadStrategyPositions()` + `refreshPositions()` — один запрос вместо двух
+- **Auto-refresh позиций каждые 5 сек** через `setInterval(() => loadAllPositions(), 5000)`
+- `renderStrategyPositions` — in-place DOM updates: строки имеют `id="pos-row-{id}"`, PnL-ячейка — `id="pnl-cell-{id}"`; при обновлении меняется только PnL, строки не пересоздаются
+- `_loadSparkline` — sparkline и z-score обновляются без перемигивания: при повторном вызове обновляет данные графика через `chart.data.datasets[0].data = ...; chart.update('none')` вместо destroy + new Chart
+- Исправлен знак PnL: `(pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2)` — отрицательные значения теперь показываются корректно
+
+---
+
 ## 2026-03-12 — Редизайн UI: торговый терминал + независимые TP/SL ордера
 
 ### Что изменилось

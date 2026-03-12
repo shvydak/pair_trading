@@ -1420,6 +1420,8 @@ window.addEventListener('DOMContentLoaded', () => {
   loadStrategyPositions();
   loadOrdersTab();
   restoreAnalysisState();
+  // Auto-refresh positions every 5s (same cadence as PriceCache)
+  setInterval(() => { loadStrategyPositions(); refreshPositions(); }, 5000);
 });
 
 // ------------------------------------------------------------------ //
@@ -2286,19 +2288,26 @@ function renderBacktest(data) {
 // ------------------------------------------------------------------ //
 //  Positions
 // ------------------------------------------------------------------ //
-async function refreshPositions() {
+async function loadAllPositions() {
   try {
-    const [posRes, balRes] = await Promise.all([
-      fetch(`${API}/api/positions`),
+    const [allRes, balRes] = await Promise.all([
+      fetch(`${API}/api/all_positions`),
       fetch(`${API}/api/balance`),
     ]);
-    const posData = await posRes.json();
-    const balData = await balRes.json();
+    const allData = allRes.ok ? await allRes.json() : {};
+    const balData = balRes.ok ? await balRes.json() : {};
+
     state.balances = balData.assets || null;
     renderBalanceCards(state.balances);
 
+    // Strategy positions (enriched)
+    renderStrategyPositions(allData.strategy_positions || []);
+    const el = document.getElementById('strategy-pos-updated');
+    if (el) el.textContent = t('updated') + ' ' + new Date().toLocaleTimeString();
+
+    // Exchange positions (raw)
     const tbody = document.getElementById('positions-body');
-    const positions = posData.positions || [];
+    const positions = allData.exchange_positions || [];
     if (positions.length === 0) {
       tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-8">${t('no_positions')}</td></tr>`;
       return;
@@ -2323,6 +2332,10 @@ async function refreshPositions() {
     showToast(t('toast_positions_fail') + e.message, 'error');
   }
 }
+
+// Keep legacy wrappers so existing call-sites work without changes
+function refreshPositions() { return loadAllPositions(); }
+function loadStrategyPositions() { return loadAllPositions(); }
 
 function renderBalanceCards(assets = {}) {
   ['USDT', 'USDC'].forEach(asset => {
@@ -2350,17 +2363,6 @@ function renderBalanceCards(assets = {}) {
 // Map posId → position object for button callbacks
 const _stratPosMap = {};
 
-async function loadStrategyPositions() {
-  try {
-    const res = await fetch(`${API}/api/db/positions/enriched`);
-    if (!res.ok) return;
-    const data = await res.json();
-    renderStrategyPositions(data.positions || []);
-    const el = document.getElementById('strategy-pos-updated');
-    if (el) el.textContent = t('updated') + ' ' + new Date().toLocaleTimeString();
-  } catch(e) { /* silently fail */ }
-}
-
 function _symShort(ccxt) {
   if (!ccxt) return ccxt;
   // "BTC/USDT:USDT" → "BTCUSDT"
@@ -2383,11 +2385,12 @@ function _formatDuration(openedAt) {
   return isRu ? `${m}м` : `${m}m`;
 }
 
+
 function renderStrategyPositions(positions) {
   const tbody = document.getElementById('strategy-positions-body');
   if (!tbody) return;
 
-  // Clear old map
+  // Update position map
   Object.keys(_stratPosMap).forEach(k => delete _stratPosMap[k]);
 
   if (positions.length === 0) {
@@ -2395,8 +2398,30 @@ function renderStrategyPositions(positions) {
     return;
   }
 
-  tbody.innerHTML = positions.map(pos => {
+  const currentIds = new Set(positions.map(p => p.id));
+  const renderedIds = new Set([...tbody.querySelectorAll('tr[id^="pos-row-"]')].map(r => +r.id.replace('pos-row-', '')));
+
+  // Remove rows for positions that no longer exist
+  renderedIds.forEach(id => {
+    if (!currentIds.has(id)) document.getElementById(`pos-row-${id}`)?.remove();
+  });
+
+  positions.forEach(pos => {
     _stratPosMap[pos.id] = pos;
+    const existingRow = document.getElementById(`pos-row-${pos.id}`);
+
+    if (existingRow) {
+      // In-place update of dynamic cells only — no canvas recreation
+      const pnl = pos.unrealized_pnl;
+      const pnlClass = pnl === null ? 'text-muted' : pnl >= 0 ? 'text-green-400' : 'text-red-400';
+      const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2);
+      const pnlCell = document.getElementById(`pnl-cell-${pos.id}`);
+      if (pnlCell) { pnlCell.className = `${pnlClass} font-mono text-xs font-medium`; pnlCell.textContent = pnlStr; }
+      _loadSparkline(pos); // refresh z-score + chart data in-place
+      return; // skip full rebuild
+    }
+
+    // New row — build full HTML
     const isLong = pos.side === 'long_spread';
     const sideClass = isLong ? 'text-green-400' : 'text-red-400';
     const sideLabel = isLong
@@ -2404,12 +2429,13 @@ function renderStrategyPositions(positions) {
       : (currentLang === 'ru' ? '▼ Шорт' : '▼ Short');
     const pnl = pos.unrealized_pnl;
     const pnlClass = pnl === null ? 'text-muted' : pnl >= 0 ? 'text-green-400' : 'text-red-400';
-    const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(pnl), 2);
-    const canvasId = `sparkline-${pos.id}`;
+    const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2);
     const s1 = _symShort(pos.symbol1);
     const s2 = _symShort(pos.symbol2);
 
-    return `<tr>
+    const tr = document.createElement('tr');
+    tr.id = `pos-row-${pos.id}`;
+    tr.innerHTML = `
       <td>
         <div class="font-medium text-white text-xs leading-tight">${s1}</div>
         <div class="text-muted text-[10px] leading-tight">${s2}</div>
@@ -2422,11 +2448,11 @@ function renderStrategyPositions(positions) {
       <td class="font-mono text-xs text-muted">${pos.entry_zscore !== null && pos.entry_zscore !== undefined ? (pos.entry_zscore >= 0 ? '+' : '') + fmt(pos.entry_zscore, 2) : '–'}</td>
       <td>
         <div class="flex items-center gap-1.5">
-          <canvas id="${canvasId}" width="90" height="28" style="display:block;flex-shrink:0"></canvas>
+          <canvas id="sparkline-${pos.id}" width="90" height="28" style="display:block;flex-shrink:0"></canvas>
           <span id="z-cur-${pos.id}" class="font-mono text-xs text-muted" style="min-width:32px">…</span>
         </div>
       </td>
-      <td class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
+      <td id="pnl-cell-${pos.id}" class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
       <td class="text-muted text-xs">${_formatDuration(pos.opened_at)}</td>
       <td class="font-mono text-xs">
         ${pos.liq_price1 != null ? `<div class="text-orange-400 leading-tight">${fmt(pos.liq_price1, 4)}</div>` : ''}
@@ -2481,14 +2507,13 @@ function renderStrategyPositions(positions) {
           <div class="tooltip-box" data-i18n-html="tip_tp_sl"></div>
         </div>
       </td>
-    </tr>`;
-  }).join('');
-
-  // Load sparklines asynchronously
-  positions.forEach(pos => _loadSparkline(pos));
+    `;
+    tbody.appendChild(tr);
+    // Load sparkline only for newly created rows
+    _loadSparkline(pos);
+  });
 
   // Re-init tooltips for dynamically rendered rows
-  // applyLocale() must run AFTER render so data-i18n-html tooltip boxes get their content
   applyLocale();
   initTooltips();
 }
@@ -2520,9 +2545,15 @@ async function _loadSparkline(pos) {
     const minZ = Math.min(...sparkData);
     const maxZ = Math.max(...sparkData);
 
-    // Destroy old chart if any
+    // Update existing chart in-place to avoid flash; create if first time
     const existing = Chart.getChart(canvas);
-    if (existing) existing.destroy();
+    if (existing) {
+      existing.data.datasets[0].data = sparkData;
+      existing.options.scales.y.min = minZ - 0.2;
+      existing.options.scales.y.max = maxZ + 0.2;
+      existing.update('none');
+      return;
+    }
 
     new Chart(canvas, {
       type: 'line',

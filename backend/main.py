@@ -663,6 +663,51 @@ async def get_positions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/all_positions")
+async def get_all_positions():
+    """
+    Single endpoint: fetch exchange positions once, return both
+    strategy DB positions (enriched with live data) and raw exchange positions.
+    Avoids double get_positions() calls from the frontend.
+    """
+    db_positions = db.get_open_positions()
+
+    try:
+        live_positions = await client.get_positions()
+        live_map = {p["symbol"]: p for p in live_positions}
+    except Exception:
+        live_positions = []
+        live_map = {}
+
+    enriched = []
+    for pos in db_positions:
+        sym1, sym2 = pos["symbol1"], pos["symbol2"]
+        live1 = live_map.get(sym1, {})
+        live2 = live_map.get(sym2, {})
+        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
+        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
+        pnl = None
+        if (mark_price1 and pos.get("entry_price1")
+                and mark_price2 and pos.get("entry_price2")):
+            sign = 1 if pos["side"] == "long_spread" else -1
+            p1 = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
+            p2 = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
+            pnl = round(p1 + p2, 4)
+        enriched.append({
+            **pos,
+            "mark_price1": mark_price1,
+            "mark_price2": mark_price2,
+            "unrealized_pnl": pnl,
+            "liq_price1": live1.get("liquidation_price"),
+            "liq_price2": live2.get("liquidation_price"),
+        })
+
+    return _clean({
+        "strategy_positions": enriched,
+        "exchange_positions": live_positions,
+    })
+
+
 @app.get("/api/balance")
 async def get_balance(asset: Optional[str] = Query(None)):
     """Return futures balance for a specific asset or all supported assets."""

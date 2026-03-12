@@ -85,6 +85,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET | `/api/db/history` | Closed trade history from SQLite (`?limit=100`) |
 | GET | `/api/db/positions/enriched` | Open positions from DB enriched with live Binance mark prices + unrealized PnL |
 | DELETE | `/api/db/positions/{id}` | Delete a DB position record (does NOT close exchange positions) |
+| GET | `/api/all_positions` | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
 | GET | `/api/triggers` | All active TP/SL triggers (standalone, independent of positions) |
 | POST | `/api/triggers` | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart}` |
 | DELETE | `/api/triggers/{id}` | Cancel an active trigger |
@@ -211,13 +212,15 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - **Guide nav**: redesigned as sidebar-style list on left of drawer (not a cramped top bar); numbered sections with readable text
 
 ### Positions Tab
-- Three sections: **Strategy Positions** (DB+live enriched), **Exchange Positions** (raw Binance), **Trade Journal** (collapsible closed trades)
-- `loadStrategyPositions()` → `GET /api/db/positions/enriched` → `renderStrategyPositions(positions)` → rows with sparklines
-- `_loadSparkline(pos)` — async; fetches `/api/history?timeframe=1h&limit=100&zscore_window=20`; creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z value
+- Two sections: **Strategy Positions** (DB+live enriched), **Exchange Positions** (raw Binance); Trade Journal in bottom panel Journal tab
+- `loadAllPositions()` — single call to `GET /api/all_positions` + `GET /api/balance`; renders both strategy and exchange tables; replaces old separate `loadStrategyPositions()` + `refreshPositions()` calls
+- **Auto-refresh**: `setInterval(() => loadAllPositions(), 5000)` — positions update every 5 s automatically
+- `renderStrategyPositions(positions)` — **in-place DOM updates**: existing rows (`id="pos-row-{id}"`) only update the PnL cell (`id="pnl-cell-{id}"`) and call `_loadSparkline` to refresh chart data; no full rebuild, no flash; new rows are appended once, removed when position closes
+- `_loadSparkline(pos)` — async; fetches `/api/history?timeframe=1h&limit=100&zscore_window=20`; on first call creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z; on subsequent calls **updates chart data in-place** (`chart.data.datasets[0].data = ...; chart.update('none')`) — no destroy/recreate, no canvas flicker
 - `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers
-- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePosMarket(pos)` POST `/api/trade` action=close; `◎ S` → `_closePosSmart(pos)` POST `/api/trade/smart` action=close; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
-- `toggleJournal()` / `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table with colored rows
-- `pollExecution` on terminal state → calls `loadStrategyPositions()` + `refreshPositions()` after 2s delay
+- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePos(id,'market')`; `◎ S` → `_closePos(id,'smart')`; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
+- `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table in Journal tab
+- `pollExecution` on terminal state → calls `loadAllPositions()` after 2s delay
 
 ### Trading Section (sidebar)
 - **Leverage input**: `#leverage-input` (1–20x); passed to both market and smart execution
@@ -321,17 +324,20 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **Smart execution stuck in PASSIVE**: passive_s too long, or orders not visible in `fetch_order` — check log events in execution monitor
 - **Rollback FAILED**: market order for the filled leg also failed — requires manual action; logged as ERROR with "MANUAL ACTION REQUIRED"
 - **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — position was closed manually on exchange or via another interface. Use 🗑 button to remove the stale DB record, OR press `✕ M` (backend will detect no open positions and still clean up DB).
+- **PnL showing positive when it should be negative**: Frontend format bug — `(pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2)`. If you see wrong sign, check this pattern in `renderStrategyPositions`.
+- **Sparkline flashing every 5 s**: Caused by `chart.destroy() + new Chart()` on each refresh. Fix: use `chart.data.datasets[0].data = ...; chart.update('none')` when the Chart.js instance already exists on the canvas.
 
 ## Tests (`tests/`)
 
-104 unit-тестов, все проходят ~1.7 сек. Запуск: `.venv/bin/pytest tests/ -v`
+106 unit-тестов, все проходят ~1.7 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
 | `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
-| `test_db.py` | 21 | save/find/close/delete positions, TP/SL triggers, trade journal, duplicate guard |
+| `test_db.py` | 23 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
+| `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
 
