@@ -1224,7 +1224,6 @@
   <!-- Bottom Tabs -->
   <div class="flex gap-0 border-b border-border px-4 shrink-0">
     <button onclick="setBottomTab('positions')" id="btab-positions" class="tab-btn active px-4 py-2 text-xs font-medium text-white border-b-2 border-accent transition" data-i18n="tab_positions">Positions</button>
-    <button onclick="setBottomTab('orders')" id="btab-orders" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_orders">TP/SL Orders</button>
     <button onclick="setBottomTab('alerts')" id="btab-alerts" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition">🔔 Alerts<span id="alerts-badge" class="hidden ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-yellow-500 text-black leading-none"></span></button>
     <button onclick="setBottomTab('journal')" id="btab-journal" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_journal">Journal</button>
     <div class="flex-1"></div>
@@ -1295,32 +1294,6 @@
           </tbody>
         </table>
       </div>
-    </div>
-  </div>
-
-  <!-- Orders Pane -->
-  <div id="bpane-orders" class="btab-pane hidden flex-1 overflow-y-auto p-3">
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-xs font-semibold text-muted uppercase" data-i18n="tab_orders">TP/SL Orders</span>
-    </div>
-    <div class="overflow-x-auto">
-      <table id="triggers-table">
-        <thead>
-          <tr>
-            <th data-i18n="orders_col_pair">Pair</th>
-            <th data-i18n="orders_col_side">Side</th>
-            <th data-i18n="orders_col_type">Type</th>
-            <th data-i18n="orders_col_zscore">Z-score</th>
-            <th data-i18n="orders_col_smart">Smart</th>
-            <th>Status</th>
-            <th data-i18n="orders_col_created">Created</th>
-            <th data-i18n="th_actions">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="triggers-body">
-          <tr><td colspan="8" class="text-center text-muted py-4" data-i18n="no_active_triggers">No active triggers.</td></tr>
-        </tbody>
-      </table>
     </div>
   </div>
 
@@ -1459,7 +1432,6 @@ window.addEventListener('DOMContentLoaded', () => {
   // Bottom panel: load positions tab by default
   setBottomTab('positions');
   loadStrategyPositions();
-  loadOrdersTab();
   restoreAnalysisState();
   // Auto-refresh positions every 5s (same cadence as PriceCache)
   setInterval(() => { loadStrategyPositions(); refreshPositions(); }, 5000);
@@ -1525,8 +1497,6 @@ function setBottomTab(name) {
   if (name === 'positions') {
     loadStrategyPositions();
     refreshPositions();
-  } else if (name === 'orders') {
-    loadOrdersTab();
   } else if (name === 'alerts') {
     loadAlertsTab();
   } else if (name === 'journal') {
@@ -1825,18 +1795,8 @@ async function updateWatchlistZScores() {
 }
 
 // ------------------------------------------------------------------ //
-//  Orders/Triggers tab
+//  Alerts tab
 // ------------------------------------------------------------------ //
-async function loadOrdersTab() {
-  try {
-    const res = await fetch(`${API}/api/triggers`);
-    if (!res.ok) return;
-    const data = await res.json();
-    // TP/SL only — alerts have their own tab
-    renderTriggers((data.triggers || []).filter(t => t.type !== 'alert'));
-  } catch {}
-}
-
 async function loadAlertsTab() {
   try {
     const res = await fetch(`${API}/api/triggers`);
@@ -1970,55 +1930,6 @@ function _loadAlertIntoAnalysis(trig) {
   runAnalyze();
 }
 
-function renderTriggers(triggers) {
-  const tbody = document.getElementById('triggers-body');
-  if (!tbody) return;
-  if (triggers.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-4">${t('no_active_triggers')}</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = triggers.map(tr => {
-    const isAlert = tr.type === 'alert';
-    const isTP = tr.type === 'tp';
-    const typeColor = isAlert ? 'text-yellow' : isTP ? 'text-green' : 'text-red';
-    const sideLabel = tr.side === 'long_spread' ? t('trade_long') : tr.side === 'short_spread' ? t('trade_short') : '↕';
-    const statusBadge = tr.status === 'active'
-      ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">active</span>'
-      : tr.status === 'triggered'
-      ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-yellow-900 text-yellow-300">triggered</span>'
-      : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">cancelled</span>';
-    const created = tr.created_at ? new Date(tr.created_at).toLocaleString() : '-';
-    const cancelBtn = tr.status === 'active'
-      ? `<button onclick="cancelTrigger(${tr.id})" class="text-red-400 hover:text-red-300 text-[10px] uppercase">${t('exec_cancel')}</button>`
-      : '';
-    return `<tr class="border-b border-border/30">
-      <td class="text-xs">${tr.symbol1}<br/><span class="text-muted">${tr.symbol2}</span></td>
-      <td class="text-xs">${sideLabel}</td>
-      <td class="text-xs ${typeColor} font-semibold">${isAlert ? '🔔 ALERT' : tr.type.toUpperCase()}</td>
-      <td class="text-xs font-mono">${tr.zscore.toFixed(2)}</td>
-      <td class="text-xs">${isAlert ? '—' : tr.tp_smart ? '◎' : '-'}</td>
-      <td>${statusBadge}</td>
-      <td class="text-xs text-muted">${created}</td>
-      <td>${cancelBtn}</td>
-    </tr>`;
-  }).join('');
-}
-
-async function cancelTrigger(triggerId) {
-  try {
-    const res = await fetch(`${API}/api/triggers/${triggerId}`, { method: 'DELETE' });
-    if (res.ok) {
-      showToast(t('toast_trigger_cancelled'), 'ok');
-      loadOrdersTab();
-    } else {
-      const data = await res.json();
-      showToast(t('toast_trigger_error') + (data.detail || res.status), 'error');
-    }
-  } catch (e) {
-    showToast(t('toast_trigger_error') + e.message, 'error');
-  }
-}
-
 async function addAlertTrigger(idx) {
   const items = getWatchlist();
   const w = items[idx];
@@ -2062,29 +1973,6 @@ async function addAlertTrigger(idx) {
     }
   } catch (e) {
     showToast('Ошибка: ' + e.message, 'error');
-  }
-}
-
-async function createTriggerFromPosition(sym1, sym2, side, type, zscore, tpSmart) {
-  try {
-    const res = await fetch(`${API}/api/triggers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        symbol1: sym1, symbol2: sym2,
-        side, type, zscore: parseFloat(zscore),
-        tp_smart: Boolean(tpSmart),
-      }),
-    });
-    if (res.ok) {
-      showToast(t('toast_trigger_created'), 'ok');
-      loadOrdersTab();
-    } else {
-      const data = await res.json();
-      showToast(t('toast_trigger_error') + (data.detail || res.status), 'error');
-    }
-  } catch (e) {
-    showToast(t('toast_trigger_error') + e.message, 'error');
   }
 }
 
@@ -2779,6 +2667,26 @@ function _formatDuration(openedAt) {
 }
 
 
+function _tpslBadgesHtml(pos) {
+  let html = '';
+  if (pos.tp_zscore != null) {
+    html += `<div class="flex items-center gap-1 bg-green-950 border border-green-700 rounded px-1.5 py-0.5">
+      <span class="text-[10px] text-green-400 font-semibold">${t('tp_label')} z=${pos.tp_zscore}</span>
+      ${pos.tp_smart ? `<span class="text-[10px] text-accent" title="${t('tp_smart_btn_title')}">◎</span>` : ''}
+      <button onclick="_cancelTrigger(${pos.id},'tp')" title="${t('cancel_trigger_btn')}"
+        class="text-green-600 hover:text-green-300 transition text-[10px] leading-none ml-0.5">✕</button>
+    </div>`;
+  }
+  if (pos.sl_zscore != null) {
+    html += `<div class="flex items-center gap-1 bg-red-950 border border-red-700 rounded px-1.5 py-0.5">
+      <span class="text-[10px] text-red-400 font-semibold">${t('sl_label')} z=${pos.sl_zscore}</span>
+      <button onclick="_cancelTrigger(${pos.id},'sl')" title="${t('cancel_trigger_btn')}"
+        class="text-red-600 hover:text-red-300 transition text-[10px] leading-none ml-0.5">✕</button>
+    </div>`;
+  }
+  return html;
+}
+
 function renderStrategyPositions(positions) {
   const tbody = document.getElementById('strategy-positions-body');
   if (!tbody) return;
@@ -2803,6 +2711,8 @@ function renderStrategyPositions(positions) {
   });
 
   positions.forEach(pos => {
+    // Default tp_smart=true when no TP is set yet (user hasn't saved a preference)
+    if (pos.tp_zscore == null) pos.tp_smart = true;
     _stratPosMap[pos.id] = pos;
     const existingRow = document.getElementById(`pos-row-${pos.id}`);
 
@@ -2813,6 +2723,9 @@ function renderStrategyPositions(positions) {
       const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2);
       const pnlCell = document.getElementById(`pnl-cell-${pos.id}`);
       if (pnlCell) { pnlCell.className = `${pnlClass} font-mono text-xs font-medium`; pnlCell.textContent = pnlStr; }
+      // Update TP/SL badges immediately
+      const badgesEl = document.getElementById(`tpsl-badges-${pos.id}`);
+      if (badgesEl) badgesEl.innerHTML = _tpslBadgesHtml(pos);
       _loadSparkline(pos); // refresh z-score + chart data in-place
       return; // skip full rebuild
     }
@@ -2873,20 +2786,8 @@ function renderStrategyPositions(positions) {
             title="${t('delete_db_btn')}">🗑</button>
         </div>
         <!-- Active trigger "orders" (shown when set) -->
-        <div class="flex flex-wrap gap-1 mt-1.5">
-          ${pos.tp_zscore != null ? `
-          <div class="flex items-center gap-1 bg-green-950 border border-green-700 rounded px-1.5 py-0.5">
-            <span class="text-[10px] text-green-400 font-semibold">${t('tp_label')} z=${pos.tp_zscore}</span>
-            ${pos.tp_smart ? `<span class="text-[10px] text-accent" title="${t('tp_smart_btn_title')}">◎</span>` : ''}
-            <button onclick="_cancelTrigger(${pos.id},'tp')" title="${t('cancel_trigger_btn')}"
-              class="text-green-600 hover:text-green-300 transition text-[10px] leading-none ml-0.5">✕</button>
-          </div>` : ''}
-          ${pos.sl_zscore != null ? `
-          <div class="flex items-center gap-1 bg-red-950 border border-red-700 rounded px-1.5 py-0.5">
-            <span class="text-[10px] text-red-400 font-semibold">${t('sl_label')} z=${pos.sl_zscore}</span>
-            <button onclick="_cancelTrigger(${pos.id},'sl')" title="${t('cancel_trigger_btn')}"
-              class="text-red-600 hover:text-red-300 transition text-[10px] leading-none ml-0.5">✕</button>
-          </div>` : ''}
+        <div id="tpsl-badges-${pos.id}" class="flex flex-wrap gap-1 mt-1.5">
+          ${_tpslBadgesHtml(pos)}
         </div>
         <!-- Set new triggers -->
         <div class="flex items-center gap-1 mt-1 tooltip-container">
@@ -2895,7 +2796,7 @@ function renderStrategyPositions(positions) {
             class="w-12 bg-surface border border-border rounded px-1 py-0.5 text-[10px] text-white text-center focus:outline-none focus:border-green-400" />
           <button id="tp-smart-btn-${pos.id}" onclick="_toggleTpSmart(${pos.id})"
             title="${t('tp_smart_btn_title')}"
-            class="px-1 py-0.5 rounded text-[10px] border transition whitespace-nowrap border-border text-muted hover:border-accent hover:text-accent">◎</button>
+            class="px-1 py-0.5 rounded text-[10px] border transition whitespace-nowrap ${pos.tp_smart ? 'border-accent text-accent bg-surface' : 'border-border text-muted hover:border-accent hover:text-accent'}">◎</button>
           <span class="text-[10px] text-red-400 font-semibold">${t('sl_label')}</span>
           <input id="sl-input-${pos.id}" type="number" step="0.1" min="0" max="10" placeholder="–"
             class="w-12 bg-surface border border-border rounded px-1 py-0.5 text-[10px] text-white text-center focus:outline-none focus:border-red-400" />
@@ -3101,6 +3002,8 @@ function _toggleTpSmart(posId) {
         : 'border-border text-muted hover:border-accent hover:text-accent'
     }`;
   }
+  // If TP is already saved — auto-save the new tp_smart value immediately
+  if (pos.tp_zscore != null) _setTriggers(posId);
 }
 
 async function _cancelTrigger(posId, which) {
@@ -3153,6 +3056,7 @@ async function _setTriggers(posId) {
     }
     updateTriggerLines(tp, sl);
     showToast(t('toast_triggers_ok'), 'success');
+    loadAllPositions();
   } catch(e) {
     showToast(t('toast_triggers_err') + e.message, 'error');
   }
