@@ -48,6 +48,28 @@ cp .env.example .env
 
 > Binance keys must have **Futures Trading** permission enabled. IP restriction is recommended.
 
+### 3b. Configure Telegram notifications (optional)
+
+1. Open [@BotFather](https://t.me/BotFather) in Telegram → `/newbot` → copy the **token**
+2. Find out your chat ID — send any message to [@userinfobot](https://t.me/userinfobot)
+3. Add to `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=1234567890:AAF...
+TELEGRAM_CHAT_ID=123456789
+```
+
+Restart the backend — the bot is ready. You will receive notifications for:
+- TP/SL trigger fired (before close)
+- Position closed (with PnL)
+- Position opened (toggle with `TELEGRAM_NOTIFY_OPENS=true/false`)
+- Z-score approaching entry threshold (add via 🔔 button on a watchlist pair)
+- Smart execution rollback or critical error
+
+**Z-score alerts**: hover over a pair in the Watchlist → click 🔔 → an alert trigger is created at 90% of the pair's Entry Z-score. It resets automatically when z-score returns below `TELEGRAM_ALERT_RESET_Z` (default `0.5`), so it can fire again on the next approach.
+
+**Future bot commands** (foundation already in place): `/start`, `/status`
+
 ### 4. Start the backend
 
 ```bash

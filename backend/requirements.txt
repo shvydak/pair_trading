@@ -10,3 +10,4 @@ scipy
 aiohttp
 python-dotenv
 pytest
+aiogram

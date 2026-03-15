@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Optional
 
 from logger import get_logger
+import telegram_bot as tg_bot
 
 log = get_logger("order_manager")
 
@@ -248,6 +249,10 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 )
                 ctx.db_id = ctx.close_db_id
                 ctx.evt(f"Position closed in DB id={ctx.close_db_id} pnl={pnl}")
+                asyncio.create_task(tg_bot.notify_position_closed(
+                    ctx.leg1.symbol, ctx.leg2.symbol, ctx.spread_side,
+                    pnl, ctx.exit_zscore, reason="smart",
+                ))
             else:
                 pos_id = db_module.save_open_position(
                     symbol1=ctx.leg1.symbol,
@@ -268,6 +273,11 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 )
                 ctx.db_id = pos_id
                 ctx.evt(f"Saved to DB id={pos_id}")
+                asyncio.create_task(tg_bot.notify_position_opened(
+                    ctx.leg1.symbol, ctx.leg2.symbol, ctx.spread_side,
+                    ctx.entry_zscore, ctx.leg1.avg_price, ctx.leg2.avg_price,
+                    ctx.size_usd, ctx.leverage,
+                ))
         else:
             # Partial fill → rollback
             filled_leg = None
@@ -282,6 +292,9 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                     f"Incomplete fill — leg1={ctx.leg1.status} leg2={ctx.leg2.status}. "
                     f"Rolling back {filled_leg.symbol}"
                 )
+                asyncio.create_task(tg_bot.notify_rollback(
+                    ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id,
+                ))
                 await _rollback_leg(filled_leg, client, ctx)
             else:
                 ctx.evt("Execution ended — nothing filled, no rollback needed")
@@ -292,6 +305,9 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
         ctx.status = ExecStatus.FAILED
         ctx.evt(f"FATAL: {exc}")
         log.error("Execution %s failed: %s", ctx.exec_id, exc, exc_info=True)
+        asyncio.create_task(tg_bot.notify_execution_failed(
+            ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id, str(exc),
+        ))
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

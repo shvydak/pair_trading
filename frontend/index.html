@@ -1677,6 +1677,7 @@ function renderWatchlist() {
             <span class="text-[10px] text-muted truncate">${w.sym2}</span>
           </div>
         </div>
+        <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px] shrink-0" title="Telegram алерт">🔔</button>
         <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px] shrink-0 ml-1" title="${t('remove_from_watchlist')}">✕</button>
       </div>
       <div class="flex items-center justify-between mt-0.5">
@@ -1763,9 +1764,10 @@ function renderTriggers(triggers) {
     return;
   }
   tbody.innerHTML = triggers.map(tr => {
+    const isAlert = tr.type === 'alert';
     const isTP = tr.type === 'tp';
-    const typeColor = isTP ? 'text-green' : 'text-red';
-    const sideLabel = tr.side === 'long_spread' ? t('trade_long') : t('trade_short');
+    const typeColor = isAlert ? 'text-yellow' : isTP ? 'text-green' : 'text-red';
+    const sideLabel = tr.side === 'long_spread' ? t('trade_long') : tr.side === 'short_spread' ? t('trade_short') : '↕';
     const statusBadge = tr.status === 'active'
       ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">active</span>'
       : tr.status === 'triggered'
@@ -1778,9 +1780,9 @@ function renderTriggers(triggers) {
     return `<tr class="border-b border-border/30">
       <td class="text-xs">${tr.symbol1}<br/><span class="text-muted">${tr.symbol2}</span></td>
       <td class="text-xs">${sideLabel}</td>
-      <td class="text-xs ${typeColor} font-semibold">${tr.type.toUpperCase()}</td>
+      <td class="text-xs ${typeColor} font-semibold">${isAlert ? '🔔 ALERT' : tr.type.toUpperCase()}</td>
       <td class="text-xs font-mono">${tr.zscore.toFixed(2)}</td>
-      <td class="text-xs">${tr.tp_smart ? '◎' : '-'}</td>
+      <td class="text-xs">${isAlert ? '—' : tr.tp_smart ? '◎' : '-'}</td>
       <td>${statusBadge}</td>
       <td class="text-xs text-muted">${created}</td>
       <td>${cancelBtn}</td>
@@ -1800,6 +1802,41 @@ async function cancelTrigger(triggerId) {
     }
   } catch (e) {
     showToast(t('toast_trigger_error') + e.message, 'error');
+  }
+}
+
+async function addAlertTrigger(idx) {
+  const items = getWatchlist();
+  const w = items[idx];
+  if (!w) return;
+  const entryZ = parseFloat(w.entryZ) || 0;
+  if (!entryZ) {
+    showToast('Укажите Entry Z-score для этой пары в вотчлисте', 'error');
+    return;
+  }
+  try {
+    const res = await fetch(`${API}/api/triggers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol1: w.sym1,
+        symbol2: w.sym2,
+        side: 'both',
+        type: 'alert',
+        zscore: entryZ,
+        tp_smart: false,
+      }),
+    });
+    if (res.ok) {
+      showToast('🔔 Telegram алерт добавлен', 'ok');
+      setBottomTab('orders');
+      loadOrdersTab();
+    } else {
+      const data = await res.json();
+      showToast('Ошибка: ' + (data.detail || res.status), 'error');
+    }
+  } catch (e) {
+    showToast('Ошибка: ' + e.message, 'error');
   }
 }
 

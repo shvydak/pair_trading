@@ -18,6 +18,7 @@ pair_trading/
 │   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
 │   ├── db.py                # SQLite persistence — open_positions + closed_trades + triggers
+│   ├── telegram_bot.py      # Telegram notifications + bot (aiogram v3); lifecycle: setup/start_polling/stop
 │   ├── logger.py            # RotatingFileHandler setup → logs/pair_trading.log
 │   └── requirements.txt
 ├── frontend/
@@ -29,7 +30,8 @@ pair_trading/
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
 │   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
 │   ├── test_triggers.py     # 40 tests — triggers table CRUD
-│   └── test_watchlist.py    #  8 tests — WatchlistItem model validation
+│   ├── test_watchlist.py    #  8 tests — WatchlistItem model validation
+│   └── test_telegram_bot.py # 56 tests — telegram_bot formatters, config, send(), notify_*
 ├── logs/
 │   └── pair_trading.log     # Rotating log (10 MB × 5 files)
 ├── pair_trading.db          # SQLite trade journal (auto-created on first run)
@@ -55,7 +57,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 ### Tests
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 121 tests
+.venv/bin/pytest tests/ -v        # all 177 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -330,6 +332,56 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - monitor_position_triggers runs every **5 s** (same as price_cache refresh) — every cache update is checked immediately
 - Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
 
+## Telegram Bot (`telegram_bot.py`)
+
+### Configuration (`.env`)
+```
+TELEGRAM_BOT_TOKEN=       # from @BotFather
+TELEGRAM_CHAT_ID=         # your chat/user ID (get via @userinfobot)
+TELEGRAM_NOTIFY_OPENS=true        # send notification when position is opened
+TELEGRAM_ALERT_RESET_Z=0.5        # abs(z) below which alert state resets (ready to fire again)
+```
+
+### Lifecycle (integrated in `main.py` lifespan)
+```python
+await tg_bot.setup()                           # init Bot + Dispatcher
+asyncio.create_task(tg_bot.start_polling())    # long-polling background task
+# ... after yield ...
+await tg_bot.stop()                            # stop polling + close session
+```
+
+### Notification functions
+| Function | When called | Respects toggle |
+|---|---|---|
+| `notify_position_opened(sym1, sym2, side, entry_z, price1, price2, size_usd, leverage)` | Market open (main.py) + smart open terminal state (order_manager.py) | `TELEGRAM_NOTIFY_OPENS` |
+| `notify_position_closed(sym1, sym2, side, pnl, exit_z, reason)` | `_do_market_close`, `/api/trade` close, smart close terminal state | always |
+| `notify_trigger_fired(sym1, sym2, side, trigger_type, current_z, threshold_z)` | Monitor — before TP/SL close starts | always |
+| `notify_alert(sym1, sym2, current_z, threshold_z)` | Monitor — alert trigger at 90% of threshold | always |
+| `notify_rollback(sym1, sym2, exec_id)` | order_manager.py — partial fill rollback | always |
+| `notify_execution_failed(sym1, sym2, exec_id, reason)` | order_manager.py — unrecoverable error | always |
+
+- `_fire(text)` — schedules `asyncio.create_task(send(text))`, non-blocking
+- `send(text)` — never raises; exceptions are logged and swallowed so trading is unaffected
+
+### Alert triggers (`type="alert"` in `triggers` table)
+- Created via 🔔 button on watchlist items → `POST /api/triggers` with `type="alert"`, `side="both"`, `zscore=entryZ`
+- Monitor handles "alert" type separately (before tp/sl logic, with `continue` — never closes positions)
+- **Hysteresis** (in-memory `alert_states: dict[str, str]` in monitor):
+  - `"idle"` → `abs(current_z) >= 0.9 * abs(trig_z)` → send notification → `"alerted"`
+  - `"alerted"` → `abs(current_z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
+- `alert_states` cleaned up alongside `monitored_keys` in monitor cleanup loop
+- Alert trigger is never marked `"triggered"` in DB — stays `"active"` until user cancels via DELETE
+
+### Bot commands (implemented, foundation for future control)
+- `/start` — welcome message + feature list
+- `/status` — confirms system is running
+
+### Design notes
+- Uses `aiogram` v3 (native asyncio, no event-loop conflicts with FastAPI/uvicorn)
+- `aiogram` added to `backend/requirements.txt`
+- Polling runs as `asyncio.create_task()` — same event loop as the rest of the app
+- If `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are empty → bot silently disabled, zero overhead
+
 ## Common Issues & Fixes
 - **Empty symbols list**: ccxt returns Binance perpetuals as `type: "swap"`, not `"future"` — filter includes both
 - **`pip` not found**: use `.venv/bin/pip` — Homebrew Python blocks system installs
@@ -345,10 +397,11 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — position was closed manually on exchange or via another interface. Use 🗑 button to remove the stale DB record, OR press `✕ M` (backend will detect no open positions and still clean up DB).
 - **PnL showing positive when it should be negative**: Frontend format bug — `(pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2)`. If you see wrong sign, check this pattern in `renderStrategyPositions`.
 - **Sparkline flashing every 5 s**: Caused by `chart.destroy() + new Chart()` on each refresh. Fix: use `chart.data.datasets[0].data = ...; chart.update('none')` when the Chart.js instance already exists on the canvas.
+- **`_do_smart_close_trigger` TypeError (FIXED)**: Was passing `sym1=`, `side1=`, `qty1=` kwargs to `ExecContext` dataclass which expects `exec_id=`, `leg1=LegState(...)`, `leg2=LegState(...)`. Fixed — exec_id is now created before ctx, spread_side passed correctly.
 
 ## Tests (`tests/`)
 
-121 unit-тест, все проходят ~1.8 сек. Запуск: `.venv/bin/pytest tests/ -v`
+177 unit-тестов, все проходят ~2.8 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
@@ -358,10 +411,11 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
 | `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |
 | `test_watchlist.py` | 8 | WatchlistItem Pydantic model: defaults, custom fields, required fields validation |
+| `test_telegram_bot.py` | 56 | Formatters, is_configured, send() safety, all notify_* content (via `_fire` mock); uses `asyncio.run()` — no pytest-asyncio needed |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
 
-**Не покрыто намеренно**: `order_manager.py` (asyncio + Binance мок), `binance_client.py` (внешний API), баланс/номинал в `/api/pre_trade_check` (нужен мок BinanceClient).
+**Не покрыто намеренно**: `order_manager.py` (asyncio + Binance мок), `binance_client.py` (внешний API), баланс/номинал в `/api/pre_trade_check` (нужен мок BinanceClient), alert-гистерезис в мониторе (embedded in monitor loop).
 
 ## User Preferences
 - Русский язык по умолчанию в UI

@@ -17,6 +17,7 @@ from strategy import PairTradingStrategy
 import db
 from logger import get_logger
 from order_manager import ExecConfig, ExecContext, LegState, run_execution
+import telegram_bot as tg_bot
 
 load_dotenv()
 
@@ -186,7 +187,9 @@ def _require_tradeable_pair(meta1: dict, meta2: dict) -> str:
     )
 
 
-async def _do_market_close(pos: dict, exit_zscore: Optional[float] = None) -> dict:
+async def _do_market_close(
+    pos: dict, exit_zscore: Optional[float] = None, reason: str = "auto"
+) -> dict:
     """Close both legs of a DB position at market. Returns result dict."""
     sym1 = pos["symbol1"]
     sym2 = pos["symbol2"]
@@ -221,6 +224,9 @@ async def _do_market_close(pos: dict, exit_zscore: Optional[float] = None) -> di
             4,
         )
     db.close_position(pos["id"], price1, price2, pnl, exit_zscore)
+    asyncio.create_task(tg_bot.notify_position_closed(
+        pos["symbol1"], pos["symbol2"], pos["side"], pnl, exit_zscore, reason=reason,
+    ))
     return {"pnl": pnl, "price1": price1, "price2": price2}
 
 
@@ -241,19 +247,20 @@ async def _do_smart_close_trigger(pos: dict, exit_zscore: Optional[float] = None
     qty1 = abs(p1["size"]) if p1 else pos["qty1"]
     qty2 = abs(p2["size"]) if p2 else pos["qty2"]
 
+    exec_id = uuid.uuid4().hex[:8]
     cfg = ExecConfig(passive_s=10.0, aggressive_s=20.0, allow_market=True)
     ctx = ExecContext(
-        sym1=sym1, sym2=sym2,
-        side1=side1, side2=side2,
-        qty1=qty1, qty2=qty2,
+        exec_id=exec_id,
+        leg1=LegState(symbol=sym1, side=side1, qty=qty1),
+        leg2=LegState(symbol=sym2, side=side2, qty=qty2),
         config=cfg,
+        spread_side=spread_side,
         is_close=True,
         close_db_id=pos["id"],
         entry_price1=pos.get("entry_price1"),
         entry_price2=pos.get("entry_price2"),
         exit_zscore=exit_zscore,
     )
-    exec_id = uuid.uuid4().hex[:8]
     active_executions[exec_id] = ctx
     _exec_created_at[exec_id] = time.monotonic()
     asyncio.create_task(run_execution(ctx, client, db))
@@ -279,7 +286,8 @@ async def monitor_position_triggers() -> None:
     """
     await asyncio.sleep(15)  # wait for startup + first cache fill
     monitored_keys: dict[str, tuple] = {}  # tag → cache_key
-    closing_tags: set[str] = set()  # tags currently being closed (smart)
+    closing_tags: set[str] = set()          # tags currently being closed (smart)
+    alert_states: dict[str, str] = {}       # tag → "idle" | "alerted" (hysteresis)
 
     while True:
         try:
@@ -334,10 +342,15 @@ async def monitor_position_triggers() -> None:
                             trigger = "sl"
 
                     if trigger:
+                        threshold = tp if trigger == "tp" else sl
                         log.info(
                             f"TRIGGER {trigger.upper()} | pos={pos_id} "
                             f"{pos['symbol1']}/{pos['symbol2']} | z={current_z:.3f} | "
                             f"tp={tp} sl={sl}"
+                        )
+                        await tg_bot.notify_trigger_fired(
+                            pos["symbol1"], pos["symbol2"], pos["side"],
+                            trigger, current_z, threshold,
                         )
                         # Safety: check that the position still exists on the exchange.
                         live_positions = await client.get_positions()
@@ -363,7 +376,7 @@ async def monitor_position_triggers() -> None:
                                 f"exec_id={exec_id}"
                             )
                         else:
-                            result = await _do_market_close(pos, exit_zscore=current_z)
+                            result = await _do_market_close(pos, exit_zscore=current_z, reason=trigger)
                             log.info(
                                 f"AUTO-CLOSE {trigger.upper()} | pos={pos_id} | "
                                 f"pnl={result['pnl']}"
@@ -407,8 +420,23 @@ async def monitor_position_triggers() -> None:
                     current_z = float(zscore_series.dropna().iloc[-1])
 
                     side = trig["side"]
-                    trig_type = trig["type"]  # "tp" or "sl"
+                    trig_type = trig["type"]  # "tp" | "sl" | "alert"
                     trig_z = trig["zscore"]
+
+                    # ── Alert trigger: notify-only, no position close ────────
+                    if trig_type == "alert":
+                        tag_state = alert_states.get(tag, "idle")
+                        if tag_state == "idle" and abs(current_z) >= 0.9 * abs(trig_z):
+                            log.info(
+                                f"ALERT | trig_id={trig_id} | {sym1}/{sym2} | "
+                                f"z={current_z:.3f} threshold={trig_z}"
+                            )
+                            await tg_bot.notify_alert(sym1, sym2, current_z, trig_z)
+                            alert_states[tag] = "alerted"
+                        elif tag_state == "alerted" and abs(current_z) <= tg_bot.ALERT_RESET_Z:
+                            alert_states[tag] = "idle"
+                        continue  # never close position for alert type
+
                     fired = False
 
                     if trig_type == "tp":
@@ -427,6 +455,9 @@ async def monitor_position_triggers() -> None:
                             f"STANDALONE TRIGGER FIRED | trig_id={trig_id} | "
                             f"{sym1}/{sym2} | {side} | {trig_type} z={trig_z} | "
                             f"current_z={current_z:.3f}"
+                        )
+                        await tg_bot.notify_trigger_fired(
+                            sym1, sym2, side, trig_type, current_z, trig_z,
                         )
                         # Safety: check live positions on exchange
                         live_positions = await client.get_positions()
@@ -453,7 +484,7 @@ async def monitor_position_triggers() -> None:
                                     f"exec_id={exec_id}"
                                 )
                             else:
-                                result = await _do_market_close(db_pos, exit_zscore=current_z)
+                                result = await _do_market_close(db_pos, exit_zscore=current_z, reason=trig_type)
                                 log.info(
                                     f"AUTO-CLOSE via trigger | trig_id={trig_id} | "
                                     f"pnl={result['pnl']}"
@@ -479,6 +510,7 @@ async def monitor_position_triggers() -> None:
             for t in list(monitored_keys.keys()):
                 if t not in current_tags:
                     price_cache.unsubscribe(monitored_keys.pop(t))
+                    alert_states.pop(t, None)
 
         except Exception as e:
             log.warning(f"monitor: outer error: {e}")
@@ -497,11 +529,14 @@ async def monitor_position_triggers() -> None:
 
 async def lifespan(app: FastAPI):
     db.init_db()
+    await tg_bot.setup()
     asyncio.create_task(price_cache.run())
     asyncio.create_task(monitor_position_triggers())
+    asyncio.create_task(tg_bot.start_polling())
     log.info("Pair Trading backend started")
     yield
     await client.close()
+    await tg_bot.stop()
     log.info("Pair Trading backend stopped")
 
 
@@ -1354,6 +1389,11 @@ async def execute_trade(req: TradeRequest):
                 f"z={req.entry_zscore} | lev={req.leverage}x | "
                 f"sizing={req.sizing_method} | db_id={pos_id}"
             )
+            asyncio.create_task(tg_bot.notify_position_opened(
+                sym1, sym2, req.side,
+                req.entry_zscore, price1, price2,
+                req.size_usd, req.leverage,
+            ))
 
             return _clean({"status": "ok", "db_id": pos_id, "order1": order1, "order2": order2})
 
@@ -1396,6 +1436,10 @@ async def execute_trade(req: TradeRequest):
                 f"pnl={pnl} | z_exit={req.exit_zscore} | "
                 f"db_id={db_pos['id'] if db_pos else 'n/a'}"
             )
+            if db_pos:
+                asyncio.create_task(tg_bot.notify_position_closed(
+                    sym1, sym2, db_pos["side"], pnl, req.exit_zscore, reason="manual",
+                ))
 
             return _clean({"status": "ok", "pnl": pnl, "order1": order1, "order2": order2})
 
