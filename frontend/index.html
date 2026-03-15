@@ -1218,6 +1218,7 @@
   <div class="flex gap-0 border-b border-border px-4 shrink-0">
     <button onclick="setBottomTab('positions')" id="btab-positions" class="tab-btn active px-4 py-2 text-xs font-medium text-white border-b-2 border-accent transition" data-i18n="tab_positions">Positions</button>
     <button onclick="setBottomTab('orders')" id="btab-orders" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_orders">TP/SL Orders</button>
+    <button onclick="setBottomTab('alerts')" id="btab-alerts" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition">🔔 Alerts</button>
     <button onclick="setBottomTab('journal')" id="btab-journal" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_journal">Journal</button>
     <div class="flex-1"></div>
     <button onclick="toggleBottomPanel()" class="text-muted hover:text-white text-xs px-2 transition" title="Toggle panel">
@@ -1311,6 +1312,32 @@
         </thead>
         <tbody id="triggers-body">
           <tr><td colspan="8" class="text-center text-muted py-4" data-i18n="no_active_triggers">No active triggers.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Alerts Pane -->
+  <div id="bpane-alerts" class="btab-pane hidden flex-1 overflow-y-auto p-3">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-semibold text-muted uppercase">🔔 Telegram Alerts</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table id="alerts-table">
+        <thead>
+          <tr>
+            <th data-i18n="orders_col_pair">Pair</th>
+            <th>Timeframe</th>
+            <th data-i18n="orders_col_zscore">Z-score</th>
+            <th>Z-window</th>
+            <th>Threshold</th>
+            <th>Status</th>
+            <th data-i18n="orders_col_created">Created</th>
+            <th data-i18n="th_actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="alerts-body">
+          <tr><td colspan="8" class="text-center text-muted py-4">No active alerts.</td></tr>
         </tbody>
       </table>
     </div>
@@ -1469,7 +1496,7 @@ function setMode(mode) {
 //  Bottom panel tabs
 // ------------------------------------------------------------------ //
 function setBottomTab(name) {
-  ['positions', 'orders', 'journal'].forEach(t => {
+  ['positions', 'orders', 'alerts', 'journal'].forEach(t => {
     const pane = document.getElementById('bpane-' + t);
     const btn = document.getElementById('btab-' + t);
     if (!pane || !btn) return;
@@ -1489,6 +1516,8 @@ function setBottomTab(name) {
     refreshPositions();
   } else if (name === 'orders') {
     loadOrdersTab();
+  } else if (name === 'alerts') {
+    loadAlertsTab();
   } else if (name === 'journal') {
     loadTradeJournal();
   }
@@ -1752,8 +1781,84 @@ async function loadOrdersTab() {
     const res = await fetch(`${API}/api/triggers`);
     if (!res.ok) return;
     const data = await res.json();
-    renderTriggers(data.triggers || []);
+    // TP/SL only — alerts have their own tab
+    renderTriggers((data.triggers || []).filter(t => t.type !== 'alert'));
   } catch {}
+}
+
+async function loadAlertsTab() {
+  try {
+    const res = await fetch(`${API}/api/triggers`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderAlerts((data.triggers || []).filter(t => t.type === 'alert'));
+  } catch {}
+}
+
+function renderAlerts(alerts) {
+  const tbody = document.getElementById('alerts-body');
+  if (!tbody) return;
+  if (alerts.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-4">No active alerts.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = alerts.map(tr => {
+    const statusBadge = tr.status === 'active'
+      ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">active</span>'
+      : tr.status === 'triggered'
+      ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-yellow-900 text-yellow-300">triggered</span>'
+      : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-400">cancelled</span>';
+    const created = tr.created_at ? new Date(tr.created_at).toLocaleString() : '-';
+    const cancelBtn = tr.status === 'active'
+      ? `<button onclick="cancelAlert(${tr.id})" class="text-red-400 hover:text-red-300 text-[10px] uppercase">${t('exec_cancel')}</button>`
+      : '';
+    const tf = tr.timeframe || '1h';
+    const zw = tr.zscore_window || 20;
+    const pct = Math.round((tr.alert_pct ?? 1.0) * 100);
+    const triggerZ = Math.abs(tr.zscore) * (tr.alert_pct ?? 1.0);
+    return `<tr class="border-b border-border/30 hover:bg-white/5 cursor-pointer" onclick="_loadAlertIntoAnalysis(${JSON.stringify(tr).replace(/"/g, '&quot;')})">
+      <td class="text-xs font-medium">${tr.symbol1}<br/><span class="text-muted">${tr.symbol2}</span></td>
+      <td class="text-xs font-mono text-muted">${tf}</td>
+      <td class="text-xs font-mono text-yellow-400">±${Math.abs(tr.zscore).toFixed(2)}</td>
+      <td class="text-xs font-mono text-muted">${zw}</td>
+      <td class="text-xs font-mono"><span class="text-white">${pct}%</span><br/><span class="text-muted text-[10px]">z = ±${triggerZ.toFixed(2)}</span></td>
+      <td>${statusBadge}</td>
+      <td class="text-xs text-muted">${created}</td>
+      <td onclick="event.stopPropagation()">${cancelBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function cancelAlert(triggerId) {
+  try {
+    const res = await fetch(`${API}/api/triggers/${triggerId}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast(t('toast_trigger_cancelled'), 'ok');
+      loadAlertsTab();
+    } else {
+      const data = await res.json();
+      showToast(t('toast_trigger_error') + (data.detail || res.status), 'error');
+    }
+  } catch (e) {
+    showToast(t('toast_trigger_error') + e.message, 'error');
+  }
+}
+
+function _loadAlertIntoAnalysis(trig) {
+  if (typeof trig === 'string') {
+    try { trig = JSON.parse(trig); } catch { return; }
+  }
+  document.getElementById('sym1-input').value = trig.symbol1.split(':')[0];
+  document.getElementById('sym2-input').value = trig.symbol2.split(':')[0];
+  const tf = trig.timeframe || '1h';
+  const zw = trig.zscore_window || 20;
+  setTimeframe(tf);
+  document.getElementById('zwindow-input').value = zw;
+  const entryZInput = document.getElementById('entry-z-input');
+  if (entryZInput) entryZInput.value = Math.abs(trig.zscore).toFixed(2);
+  updatePairContext();
+  switchTab('spread');
+  runAnalyze();
 }
 
 function renderTriggers(triggers) {
@@ -1814,6 +1919,15 @@ async function addAlertTrigger(idx) {
     showToast('Укажите Entry Z-score для этой пары в вотчлисте', 'error');
     return;
   }
+  // Ask user for alert threshold percentage (default 100%)
+  const pctStr = window.prompt(
+    `Алерт при каком % от порога (Z = ${entryZ})?\n` +
+    `100% = при достижении ${entryZ}, 90% = при ${(entryZ * 0.9).toFixed(2)} и т.д.`,
+    '100'
+  );
+  if (pctStr === null) return; // cancelled
+  const pct = Math.min(200, Math.max(1, parseFloat(pctStr) || 100));
+  const alertPct = pct / 100;
   try {
     const res = await fetch(`${API}/api/triggers`, {
       method: 'POST',
@@ -1825,12 +1939,14 @@ async function addAlertTrigger(idx) {
         type: 'alert',
         zscore: entryZ,
         tp_smart: false,
+        timeframe: w.timeframe || '1h',
+        zscore_window: parseInt(w.zwindow) || 20,
+        alert_pct: alertPct,
       }),
     });
     if (res.ok) {
-      showToast('🔔 Telegram алерт добавлен', 'ok');
-      setBottomTab('orders');
-      loadOrdersTab();
+      showToast(`🔔 Telegram алерт добавлен (при ${pct}% от порога)`, 'ok');
+      setBottomTab('alerts');
     } else {
       const data = await res.json();
       showToast('Ошибка: ' + (data.detail || res.status), 'error');

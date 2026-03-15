@@ -57,7 +57,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 ### Tests
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 177 tests
+.venv/bin/pytest tests/ -v        # all 185 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -298,8 +298,9 @@ Centralised OHLCV data feed shared by **all** consumers (WebSocket, monitor, wat
 - Three tables:
   - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, tp_smart, timeframe, candle_limit, zscore_window, opened_at
   - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
-  - `triggers` — standalone TP/SL orders, independent of positions; columns: symbol1/2, side, type (tp|sl), zscore, tp_smart, status (active|triggered|cancelled), created_at, triggered_at
+  - `triggers` — standalone TP/SL/alert orders, independent of positions; columns: symbol1/2, side, type (tp|sl|alert), zscore, tp_smart, status (active|triggered|cancelled), timeframe, zscore_window, alert_pct, created_at, triggered_at
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
+- Trigger functions: `save_trigger(sym1, sym2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct)` → id, `get_active_triggers()`, `get_triggers_for_pair(sym1, sym2)`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None
 - Trigger functions: `save_trigger(sym1, sym2, side, type, zscore, tp_smart)` → id, `get_active_triggers()`, `get_triggers_for_pair(sym1, sym2)`, `cancel_trigger(id)`, `trigger_fired(id)`
 - Triggers survive position deletion — user manages them explicitly via `/api/triggers` endpoints
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicate DB records
@@ -356,7 +357,7 @@ await tg_bot.stop()                            # stop polling + close session
 | `notify_position_opened(sym1, sym2, side, entry_z, price1, price2, size_usd, leverage)` | Market open (main.py) + smart open terminal state (order_manager.py) | `TELEGRAM_NOTIFY_OPENS` |
 | `notify_position_closed(sym1, sym2, side, pnl, exit_z, reason)` | `_do_market_close`, `/api/trade` close, smart close terminal state | always |
 | `notify_trigger_fired(sym1, sym2, side, trigger_type, current_z, threshold_z)` | Monitor — before TP/SL close starts | always |
-| `notify_alert(sym1, sym2, current_z, threshold_z)` | Monitor — alert trigger at 90% of threshold | always |
+| `notify_alert(sym1, sym2, current_z, threshold_z)` | Monitor — alert trigger at `alert_pct * trig_z` threshold | always |
 | `notify_rollback(sym1, sym2, exec_id)` | order_manager.py — partial fill rollback | always |
 | `notify_execution_failed(sym1, sym2, exec_id, reason)` | order_manager.py — unrecoverable error | always |
 
@@ -364,13 +365,18 @@ await tg_bot.stop()                            # stop polling + close session
 - `send(text)` — never raises; exceptions are logged and swallowed so trading is unaffected
 
 ### Alert triggers (`type="alert"` in `triggers` table)
-- Created via 🔔 button on watchlist items → `POST /api/triggers` with `type="alert"`, `side="both"`, `zscore=entryZ`
-- Monitor handles "alert" type separately (before tp/sl logic, with `continue` — never closes positions)
+- Created via 🔔 button on watchlist items → `POST /api/triggers`; user chooses `alert_pct` (1–200%, default 100%) via browser prompt
+- Stored with `timeframe`, `zscore_window`, `alert_pct` from the watchlist item at creation time
+- Monitor subscribes to PriceCache using each trigger's own `timeframe`/`zscore_window` (not global `_MONITOR_TIMEFRAME`)
+- Fires when `abs(current_z) >= alert_pct * abs(trig_z)`
+- **Dedup**: `POST /api/triggers` with `type="alert"` cancels any existing active alert with same (sym1, sym2, zscore) before inserting; different zscore = different alert (allowed to coexist)
 - **Hysteresis** (in-memory `alert_states: dict[str, str]` in monitor):
-  - `"idle"` → `abs(current_z) >= 0.9 * abs(trig_z)` → send notification → `"alerted"`
+  - `"idle"` → threshold crossed → send notification → `"alerted"`
   - `"alerted"` → `abs(current_z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
 - `alert_states` cleaned up alongside `monitored_keys` in monitor cleanup loop
-- Alert trigger is never marked `"triggered"` in DB — stays `"active"` until user cancels via DELETE
+- Alert trigger stays `status="active"` in DB — never transitions to `"triggered"`; user cancels manually
+- Separate **🔔 Alerts** tab in bottom panel: `loadAlertsTab()` / `renderAlerts()`; click row → `_loadAlertIntoAnalysis(trig)` restores pair + timeframe + zscore_window + entry-z and calls `runAnalyze()`
+- `loadOrdersTab()` only shows `tp`/`sl` types — alerts are excluded
 
 ### Bot commands (implemented, foundation for future control)
 - `/start` — welcome message + feature list
@@ -401,12 +407,12 @@ await tg_bot.stop()                            # stop polling + close session
 
 ## Tests (`tests/`)
 
-177 unit-тестов, все проходят ~2.8 сек. Запуск: `.venv/bin/pytest tests/ -v`
+185 unit-тестов, все проходят ~2.9 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
 | `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
-| `test_db.py` | 30 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window) |
+| `test_db.py` | 37 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
 | `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |

@@ -308,3 +308,78 @@ def test_analysis_params_not_in_closed_trades(tmp_db):
     assert "timeframe" not in trade or trade.get("timeframe") is None
     assert "candle_limit" not in trade or trade.get("candle_limit") is None
     assert "zscore_window" not in trade or trade.get("zscore_window") is None
+
+
+# ---------------------------------------------------------------------------
+# Alert triggers — timeframe/zscore_window + find_active_alert
+# ---------------------------------------------------------------------------
+
+def test_save_alert_trigger_defaults(tmp_db):
+    """Alert trigger saves with default timeframe/zscore_window/alert_pct."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    trigs = tmp_db.get_active_triggers()
+    trig = next(t for t in trigs if t["id"] == tid)
+    assert trig["timeframe"] == "1h"
+    assert trig["zscore_window"] == 20
+    assert trig["alert_pct"] == 1.0
+
+
+def test_save_alert_trigger_custom_params(tmp_db):
+    """Alert trigger stores custom timeframe/zscore_window/alert_pct."""
+    tid = tmp_db.save_trigger(
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 1.8,
+        timeframe="5m", zscore_window=50, alert_pct=0.9,
+    )
+    trigs = tmp_db.get_active_triggers()
+    trig = next(t for t in trigs if t["id"] == tid)
+    assert trig["timeframe"] == "5m"
+    assert trig["zscore_window"] == 50
+    assert trig["alert_pct"] == pytest.approx(0.9)
+
+
+def test_save_alert_trigger_alert_pct_75(tmp_db):
+    """alert_pct=0.75 is stored correctly."""
+    tid = tmp_db.save_trigger(
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0,
+        alert_pct=0.75,
+    )
+    trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
+    assert trig["alert_pct"] == pytest.approx(0.75)
+
+
+def test_find_active_alert_returns_match(tmp_db):
+    """find_active_alert finds an existing active alert by (sym1, sym2, zscore)."""
+    tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
+    assert result is not None
+    assert result["zscore"] == 2.0
+    assert result["type"] == "alert"
+
+
+def test_find_active_alert_none_when_missing(tmp_db):
+    """find_active_alert returns None when no matching alert exists."""
+    result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
+    assert result is None
+
+
+def test_find_active_alert_different_zscore_no_match(tmp_db):
+    """find_active_alert does not match a different zscore."""
+    tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 3.0)
+    assert result is None
+
+
+def test_find_active_alert_ignores_cancelled(tmp_db):
+    """find_active_alert does not return cancelled alerts."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    tmp_db.cancel_trigger(tid)
+    result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
+    assert result is None
+
+
+def test_find_active_alert_multiple_same_zscore(tmp_db):
+    """find_active_alert returns one match when multiple exist for same zscore."""
+    tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
+    assert result is not None

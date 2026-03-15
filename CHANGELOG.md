@@ -2,6 +2,91 @@
 
 ---
 
+## 2026-03-15 — Telegram алерты: отдельная вкладка, настраиваемый порог, timeframe-aware мониторинг
+
+### Что добавлено
+
+**Backend:**
+- `db.py`: новые колонки в таблице `triggers` — `timeframe TEXT DEFAULT '1h'`, `zscore_window INTEGER DEFAULT 20`, `alert_pct REAL DEFAULT 1.0`
+- `db.py`: новая функция `find_active_alert(sym1, sym2, zscore)` — поиск существующего активного алерта для dedup-логики
+- `db.py`: `save_trigger()` принимает `timeframe`, `zscore_window`, `alert_pct`
+- `main.py`: `TriggerCreateRequest` расширен полями `timeframe`, `zscore_window`, `alert_pct`
+- `main.py`: `POST /api/triggers` для `type="alert"` — заменяет дубликат (same sym1/sym2/zscore) вместо создания второй записи; разные zscore — разные алерты
+- `main.py`: монитор теперь использует `trig["timeframe"]` / `trig["zscore_window"]` для подписки на PriceCache и расчёта z-score (раньше — фиксированные `1h`/`20`)
+- `main.py`: монитор использует `alert_pct * abs(trig_z)` как порог вместо захардкоженных 90%
+
+**Frontend:**
+- Новая вкладка **🔔 Alerts** в нижней панели (между TP/SL и Journal)
+- `loadAlertsTab()` / `renderAlerts(alerts)` — отдельный рендер алертов из `GET /api/triggers` (только `type=alert`)
+- `loadOrdersTab()` теперь показывает только `tp`/`sl` — алерты вынесены из этой вкладки
+- В таблице Alerts: Pair, Timeframe, Z-score, Z-window, **Threshold** (процент + реальный z-score срабатывания), Status, Created, Cancel
+- Клик на строку алерта → `_loadAlertIntoAnalysis(trig)` — загружает пару в основной график с сохранёнными параметрами (sym1/sym2, timeframe, zscore_window, entry-z)
+- При создании алерта (кнопка 🔔 в watchlist) — prompt с вопросом «при каком % от порога?», по умолчанию **100%**; диапазон 1–200%
+- После создания алерта — автоматический переход на вкладку Alerts
+
+**Tests:**
+- `test_db.py`: +9 новых тестов — `save_trigger` defaults/custom для timeframe/zscore_window/alert_pct, `find_active_alert` (match, miss, different zscore, cancelled, multiple)
+
+### Исправленные баги
+
+- **Монитор использовал фиксированный `1h`/`20` для всех standalone-триггеров** — теперь каждый триггер хранит собственные параметры и монитор подписывается на PriceCache с ними; z-score в мониторе совпадает с z-score, который видит пользователь в watchlist
+- **Алерт срабатывал жёстко на 90%** — теперь настраивается при создании (default 100%)
+- **Дубли алертов** — при создании алерта с тем же (sym1, sym2, zscore) старый автоматически отменяется
+
+### Итого тестов: 185
+
+---
+
+## 2026-03-15 — Telegram Bot: уведомления + алерты из watchlist
+
+### Что добавлено
+
+**`backend/telegram_bot.py`** (новый файл, ~260 строк):
+- Интеграция через `aiogram v3` (asyncio-native, пригоден для будущего bot-управления)
+- `setup()` / `start_polling()` / `stop()` — lifecycle, вызывается из `main.py` lifespan
+- `send(text)` — никогда не выбрасывает исключение; ошибки логируются, торговля не прерывается
+- `_fire(text)` — `asyncio.create_task(send(text))`, non-blocking
+- Функции уведомлений:
+
+| Функция | Триггер |
+|---|---|
+| `notify_position_opened` | `/api/trade` open + order_manager OPEN state |
+| `notify_position_closed` | `_do_market_close` + `/api/trade` close + smart close |
+| `notify_trigger_fired` | monitor — перед закрытием по TP/SL |
+| `notify_alert` | monitor — при достижении порога z-score алерта |
+| `notify_rollback` | order_manager — частичное исполнение, откат |
+| `notify_execution_failed` | order_manager — критическая ошибка |
+
+- `notify_position_opened` управляется флагом `TELEGRAM_NOTIFY_OPENS`
+- `/start` и `/status` команды-заглушки (основа для будущего bot-управления)
+
+**`.env` / `.env.example`** — новые переменные:
+```
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_NOTIFY_OPENS=true
+TELEGRAM_ALERT_RESET_Z=0.5
+```
+
+**Алерты (тип `"alert"` в таблице `triggers`):**
+- Создаются кнопкой 🔔 в watchlist
+- Monitor обрабатывает алерты отдельно, никогда не закрывает позиции
+- Гистерезис: `alert_states: dict[str, str]` — `"idle"` → пересечение порога → `"alerted"` → z возвращается ниже `ALERT_RESET_Z` → `"idle"`
+
+**`tests/test_telegram_bot.py`** (новый файл, 56 тестов):
+- Форматтеры (`_fmt_pair`, `_fmt_side`, `_fmt_pnl`), `is_configured`, `send()`, все `notify_*`
+- Паттерн: `_capture_fire(monkeypatch)` заменяет `_fire` синхронным коллектором
+- Без `pytest-asyncio` — используется `asyncio.run()`
+
+### Исправленные баги
+
+- **`_do_smart_close_trigger` передавал неправильные kwargs** в `ExecContext`: `sym1=`, `side1=`, `qty1=` → исправлено на `exec_id=`, `leg1=LegState(...)`, `leg2=LegState(...)`
+- **`_fmt_pnl(-50.0)` возвращал `"$-50.00"` вместо `"-$50.00"`** — исправлено через `f"-${abs(pnl):.2f}"`
+
+### Итого тестов: 177 (→185 после следующего релиза)
+
+---
+
 ## 2026-03-12 — Фиксы: позиции, PnL, sparkline
 
 ### Что изменилось

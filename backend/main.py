@@ -400,10 +400,12 @@ async def monitor_position_triggers() -> None:
 
                 sym1, sym2 = trig["symbol1"], trig["symbol2"]
 
-                # Subscribe to cache on first encounter
+                # Subscribe to cache on first encounter (use trigger's own params)
+                trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
+                trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
                 if tag not in monitored_keys:
-                    limit = max(_MONITOR_ZSCORE_WINDOW * 3, 60)
-                    key = price_cache.subscribe(sym1, sym2, _MONITOR_TIMEFRAME, limit)
+                    limit = max(trig_zw * 3, 60)
+                    key = price_cache.subscribe(sym1, sym2, trig_tf, limit)
                     monitored_keys[tag] = key
 
                 entry = price_cache.get(monitored_keys[tag])
@@ -416,7 +418,7 @@ async def monitor_position_triggers() -> None:
                     # For standalone triggers we need a hedge ratio from the data
                     hedge = strategy.calculate_hedge_ratio(p1, p2)
                     spread = strategy.calculate_spread(p1, p2, hedge)
-                    zscore_series = strategy.calculate_zscore(spread, window=_MONITOR_ZSCORE_WINDOW)
+                    zscore_series = strategy.calculate_zscore(spread, window=trig_zw)
                     current_z = float(zscore_series.dropna().iloc[-1])
 
                     side = trig["side"]
@@ -425,8 +427,9 @@ async def monitor_position_triggers() -> None:
 
                     # ── Alert trigger: notify-only, no position close ────────
                     if trig_type == "alert":
+                        alert_pct = trig.get("alert_pct") or 1.0
                         tag_state = alert_states.get(tag, "idle")
-                        if tag_state == "idle" and abs(current_z) >= 0.9 * abs(trig_z):
+                        if tag_state == "idle" and abs(current_z) >= alert_pct * abs(trig_z):
                             log.info(
                                 f"ALERT | trig_id={trig_id} | {sym1}/{sym2} | "
                                 f"z={current_z:.3f} threshold={trig_z}"
@@ -922,10 +925,13 @@ async def set_triggers(position_id: int, req: TriggerRequest):
 class TriggerCreateRequest(BaseModel):
     symbol1: str
     symbol2: str
-    side: str       # long_spread | short_spread
-    type: str       # tp | sl
+    side: str           # long_spread | short_spread
+    type: str           # tp | sl | alert
     zscore: float
     tp_smart: bool = False
+    timeframe: str = "1h"
+    zscore_window: int = 20
+    alert_pct: float = 1.0   # fraction of zscore at which alert fires (1.0 = 100%)
 
 
 @app.get("/api/triggers")
@@ -936,9 +942,17 @@ async def get_triggers():
 
 @app.post("/api/triggers")
 async def create_trigger(req: TriggerCreateRequest):
-    """Create a new TP/SL trigger."""
+    """Create a new TP/SL/alert trigger. For alerts: replace duplicate (same sym+zscore)."""
     sym1 = _normalise_symbol(req.symbol1)
     sym2 = _normalise_symbol(req.symbol2)
+
+    # For alert type: cancel existing alert with same (sym1, sym2, zscore) before creating
+    if req.type == "alert":
+        existing = db.find_active_alert(sym1, sym2, req.zscore)
+        if existing:
+            db.cancel_trigger(existing["id"])
+            log.info(f"Alert replaced: cancelled old id={existing['id']} for {sym1}/{sym2} z={req.zscore}")
+
     trigger_id = db.save_trigger(
         symbol1=sym1,
         symbol2=sym2,
@@ -946,10 +960,14 @@ async def create_trigger(req: TriggerCreateRequest):
         type=req.type,
         zscore=req.zscore,
         tp_smart=req.tp_smart,
+        timeframe=req.timeframe,
+        zscore_window=req.zscore_window,
+        alert_pct=req.alert_pct,
     )
     log.info(
         f"Trigger created: id={trigger_id} | {sym1}/{sym2} | "
-        f"{req.side} | {req.type} z={req.zscore} (smart={req.tp_smart})"
+        f"{req.side} | {req.type} z={req.zscore} pct={req.alert_pct} "
+        f"tf={req.timeframe} w={req.zscore_window}"
     )
     return {"id": trigger_id, "ok": True}
 

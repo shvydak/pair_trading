@@ -79,16 +79,19 @@ def init_db() -> None:
 def _migrate() -> None:
     """Add columns introduced after initial schema."""
     with _conn() as conn:
-        for col, typedef in [
-            ("tp_zscore",     "REAL"),
-            ("sl_zscore",     "REAL"),
-            ("tp_smart",      "INTEGER DEFAULT 0"),
-            ("timeframe",     "TEXT DEFAULT '1h'"),
-            ("candle_limit",  "INTEGER DEFAULT 500"),
-            ("zscore_window", "INTEGER DEFAULT 20"),
+        for table, col, typedef in [
+            ("open_positions", "tp_zscore",     "REAL"),
+            ("open_positions", "sl_zscore",     "REAL"),
+            ("open_positions", "tp_smart",      "INTEGER DEFAULT 0"),
+            ("open_positions", "timeframe",     "TEXT DEFAULT '1h'"),
+            ("open_positions", "candle_limit",  "INTEGER DEFAULT 500"),
+            ("open_positions", "zscore_window", "INTEGER DEFAULT 20"),
+            ("triggers",       "timeframe",     "TEXT DEFAULT '1h'"),
+            ("triggers",       "zscore_window", "INTEGER DEFAULT 20"),
+            ("triggers",       "alert_pct",     "REAL DEFAULT 1.0"),
         ]:
             try:
-                conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {typedef}")
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
             except Exception:
                 pass  # column already exists
 
@@ -238,21 +241,41 @@ def save_trigger(
     type: str,
     zscore: float,
     tp_smart: bool = False,
+    timeframe: str = "1h",
+    zscore_window: int = 20,
+    alert_pct: float = 1.0,
 ) -> int:
-    """Save a new TP/SL trigger. Returns the trigger id."""
+    """Save a new TP/SL/alert trigger. Returns the trigger id."""
     with _conn() as conn:
         cur = conn.execute(
             """
             INSERT INTO triggers
-              (symbol1, symbol2, side, type, zscore, tp_smart, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+              (symbol1, symbol2, side, type, zscore, tp_smart, status,
+               timeframe, zscore_window, alert_pct, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
             """,
             (
                 symbol1, symbol2, side, type, zscore, int(tp_smart),
+                timeframe, zscore_window, alert_pct,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
         return cur.lastrowid
+
+
+def find_active_alert(symbol1: str, symbol2: str, zscore: float) -> Optional[dict]:
+    """Return existing active alert trigger for (sym1, sym2, zscore), or None."""
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM triggers
+            WHERE symbol1 = ? AND symbol2 = ? AND type = 'alert'
+              AND zscore = ? AND status = 'active'
+            LIMIT 1
+            """,
+            (symbol1, symbol2, zscore),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_active_triggers() -> list[dict]:
