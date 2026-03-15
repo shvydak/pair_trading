@@ -1218,7 +1218,7 @@
   <div class="flex gap-0 border-b border-border px-4 shrink-0">
     <button onclick="setBottomTab('positions')" id="btab-positions" class="tab-btn active px-4 py-2 text-xs font-medium text-white border-b-2 border-accent transition" data-i18n="tab_positions">Positions</button>
     <button onclick="setBottomTab('orders')" id="btab-orders" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_orders">TP/SL Orders</button>
-    <button onclick="setBottomTab('alerts')" id="btab-alerts" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition">🔔 Alerts</button>
+    <button onclick="setBottomTab('alerts')" id="btab-alerts" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition">🔔 Alerts<span id="alerts-badge" class="hidden ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-yellow-500 text-black leading-none"></span></button>
     <button onclick="setBottomTab('journal')" id="btab-journal" class="tab-btn px-4 py-2 text-xs font-medium text-muted border-b-2 border-transparent hover:text-white transition" data-i18n="tab_journal">Journal</button>
     <div class="flex-1"></div>
     <button onclick="toggleBottomPanel()" class="text-muted hover:text-white text-xs px-2 transition" title="Toggle panel">
@@ -1333,11 +1333,12 @@
             <th>Threshold</th>
             <th>Status</th>
             <th data-i18n="orders_col_created">Created</th>
+            <th>Last fired</th>
             <th data-i18n="th_actions">Actions</th>
           </tr>
         </thead>
         <tbody id="alerts-body">
-          <tr><td colspan="8" class="text-center text-muted py-4">No active alerts.</td></tr>
+          <tr><td colspan="9" class="text-center text-muted py-4">No active alerts.</td></tr>
         </tbody>
       </table>
     </div>
@@ -1455,6 +1456,9 @@ window.addEventListener('DOMContentLoaded', () => {
   restoreAnalysisState();
   // Auto-refresh positions every 5s (same cadence as PriceCache)
   setInterval(() => { loadStrategyPositions(); refreshPositions(); }, 5000);
+  // Check for recently fired alerts on startup and every 60s
+  checkRecentAlerts();
+  setInterval(checkRecentAlerts, 60000);
 });
 
 // ------------------------------------------------------------------ //
@@ -1792,14 +1796,64 @@ async function loadAlertsTab() {
     if (!res.ok) return;
     const data = await res.json();
     renderAlerts((data.triggers || []).filter(t => t.type === 'alert'));
+    // Clear badge when user opens the tab
+    _setAlertsBadge(0);
   } catch {}
+}
+
+let _lastAlertToastId = null;
+async function checkRecentAlerts() {
+  try {
+    const res = await fetch(`${API}/api/alerts/recent?minutes=60`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const alerts = data.alerts || [];
+    _setAlertsBadge(alerts.length);
+    if (alerts.length > 0) {
+      const newest = alerts[0];
+      // Show toast only once per unique alert fire (keyed by id + last_fired_at)
+      const toastKey = `${newest.id}:${newest.last_fired_at}`;
+      if (toastKey !== _lastAlertToastId) {
+        _lastAlertToastId = toastKey;
+        const pair = newest.symbol1.split(':')[0] + ' / ' + newest.symbol2.split(':')[0];
+        const ago = _timeAgo(newest.last_fired_at);
+        showToast(
+          `🔔 Алерт: ${pair} — ${ago}`,
+          'ok',
+          8000,
+          () => setBottomTab('alerts')
+        );
+      }
+    }
+  } catch {}
+}
+
+function _setAlertsBadge(count) {
+  const badge = document.getElementById('alerts-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function _timeAgo(isoStr) {
+  if (!isoStr) return '';
+  const diffMs = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'только что';
+  if (mins < 60) return `${mins} мин назад`;
+  const hours = Math.floor(mins / 60);
+  return `${hours} ч назад`;
 }
 
 function renderAlerts(alerts) {
   const tbody = document.getElementById('alerts-body');
   if (!tbody) return;
   if (alerts.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-4">No active alerts.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">No active alerts.</td></tr>`;
     return;
   }
   tbody.innerHTML = alerts.map(tr => {
@@ -1816,14 +1870,22 @@ function renderAlerts(alerts) {
     const zw = tr.zscore_window || 20;
     const pct = Math.round((tr.alert_pct ?? 1.0) * 100);
     const triggerZ = Math.abs(tr.zscore) * (tr.alert_pct ?? 1.0);
-    return `<tr class="border-b border-border/30 hover:bg-white/5 cursor-pointer" onclick="_loadAlertIntoAnalysis(${JSON.stringify(tr).replace(/"/g, '&quot;')})">
-      <td class="text-xs font-medium">${tr.symbol1}<br/><span class="text-muted">${tr.symbol2}</span></td>
+    const firedAgo = tr.last_fired_at ? _timeAgo(tr.last_fired_at) : null;
+    const firedMs = tr.last_fired_at ? (Date.now() - new Date(tr.last_fired_at).getTime()) : Infinity;
+    const isRecent = firedMs < 3600000; // fired within last hour
+    const rowBg = isRecent ? 'bg-yellow-900/20 hover:bg-yellow-900/30' : 'hover:bg-white/5';
+    const firedCell = firedAgo
+      ? `<span class="${isRecent ? 'text-yellow-400 font-medium' : 'text-muted'} text-[10px]">${isRecent ? '⚡ ' : ''}${firedAgo}</span>`
+      : '<span class="text-muted text-[10px]">—</span>';
+    return `<tr class="border-b border-border/30 ${rowBg} cursor-pointer transition" onclick="_loadAlertIntoAnalysis(${JSON.stringify(tr).replace(/"/g, '&quot;')})">
+      <td class="text-xs font-medium">${tr.symbol1.split(':')[0]}<br/><span class="text-muted">${tr.symbol2.split(':')[0]}</span></td>
       <td class="text-xs font-mono text-muted">${tf}</td>
       <td class="text-xs font-mono text-yellow-400">±${Math.abs(tr.zscore).toFixed(2)}</td>
       <td class="text-xs font-mono text-muted">${zw}</td>
       <td class="text-xs font-mono"><span class="text-white">${pct}%</span><br/><span class="text-muted text-[10px]">z = ±${triggerZ.toFixed(2)}</span></td>
       <td>${statusBadge}</td>
       <td class="text-xs text-muted">${created}</td>
+      <td class="text-xs">${firedCell}</td>
       <td onclick="event.stopPropagation()">${cancelBtn}</td>
     </tr>`;
   }).join('');
@@ -2247,7 +2309,6 @@ async function runAnalyze() {
     updateLastUpdate();
     saveAnalysisState();
     _updatePositionAnnotations();
-    showToast(t('toast_analyze_done'), 'success');
     switchTab('spread');
   } catch(e) {
     enableTrading(false);
@@ -3823,7 +3884,7 @@ function setLoading(btn, loading, text) {
 }
 
 let _toastTimer;
-function showToast(msg, type = 'info') {
+function showToast(msg, type = 'info', duration = 4000, onClick = null) {
   const toast = document.getElementById('toast');
   const icon  = document.getElementById('toast-icon');
   const msgEl = document.getElementById('toast-msg');
@@ -3833,14 +3894,17 @@ function showToast(msg, type = 'info') {
     error:   '<svg width="16" height="16" fill="none" stroke="#f85149" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
     warn:    '<svg width="16" height="16" fill="none" stroke="#d29922" stroke-width="2" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
     info:    '<svg width="16" height="16" fill="none" stroke="#58a6ff" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+    ok:      '<svg width="16" height="16" fill="none" stroke="#3fb950" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>',
   };
 
   icon.innerHTML = icons[type] || icons.info;
   msgEl.textContent = msg;
   toast.classList.remove('hidden');
+  toast.style.cursor = onClick ? 'pointer' : '';
+  toast.onclick = onClick ? () => { toast.classList.add('hidden'); onClick(); } : null;
 
   clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => toast.classList.add('hidden'), 4000);
+  _toastTimer = setTimeout(() => toast.classList.add('hidden'), duration);
 }
 
 // ------------------------------------------------------------------ //

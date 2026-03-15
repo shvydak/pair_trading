@@ -89,6 +89,7 @@ def _migrate() -> None:
             ("triggers",       "timeframe",     "TEXT DEFAULT '1h'"),
             ("triggers",       "zscore_window", "INTEGER DEFAULT 20"),
             ("triggers",       "alert_pct",     "REAL DEFAULT 1.0"),
+            ("triggers",       "last_fired_at", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
@@ -315,3 +316,28 @@ def trigger_fired(trigger_id: int) -> bool:
             (datetime.now(timezone.utc).isoformat(), trigger_id),
         )
         return cur.rowcount > 0
+
+
+def alert_fired(trigger_id: int) -> bool:
+    """Record that an alert notification was sent. Keeps status='active' for hysteresis."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE triggers SET last_fired_at = ? WHERE id = ? AND status = 'active'",
+            (datetime.now(timezone.utc).isoformat(), trigger_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_recent_alerts(minutes: int = 60) -> list[dict]:
+    """Return active alert triggers that fired within the last N minutes."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM triggers
+            WHERE type = 'alert' AND status = 'active'
+              AND last_fired_at >= datetime('now', ?)
+            ORDER BY last_fired_at DESC
+            """,
+            (f"-{minutes} minutes",),
+        ).fetchall()
+        return [dict(r) for r in rows]

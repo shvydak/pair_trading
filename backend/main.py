@@ -435,6 +435,7 @@ async def monitor_position_triggers() -> None:
                                 f"z={current_z:.3f} threshold={trig_z}"
                             )
                             await tg_bot.notify_alert(sym1, sym2, current_z, trig_z)
+                            db.alert_fired(trig_id)
                             alert_states[tag] = "alerted"
                         elif tag_state == "alerted" and abs(current_z) <= tg_bot.ALERT_RESET_Z:
                             alert_states[tag] = "idle"
@@ -938,6 +939,12 @@ class TriggerCreateRequest(BaseModel):
 async def get_triggers():
     """Return all active triggers."""
     return {"triggers": _clean(db.get_active_triggers())}
+
+
+@app.get("/api/alerts/recent")
+async def get_recent_alerts(minutes: int = Query(60)):
+    """Return active alert triggers that fired within the last N minutes."""
+    return {"alerts": _clean(db.get_recent_alerts(minutes))}
 
 
 @app.post("/api/triggers")
