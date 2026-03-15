@@ -948,6 +948,9 @@ class TradeRequest(BaseModel):
     leverage: int = 1                 # futures leverage to set before trade
     entry_zscore: Optional[float] = None
     exit_zscore: Optional[float] = None
+    timeframe: str = "1h"
+    candle_limit: int = 500
+    zscore_window: int = 20
 
 
 class SmartTradeRequest(BaseModel):
@@ -963,6 +966,9 @@ class SmartTradeRequest(BaseModel):
     leverage: int = 1
     entry_zscore: Optional[float] = None
     exit_zscore: Optional[float] = None
+    timeframe: str = "1h"
+    candle_limit: int = 500
+    zscore_window: int = 20
     # Execution parameters
     passive_s: float = 10.0
     aggressive_s: float = 20.0
@@ -1219,6 +1225,9 @@ async def start_smart_trade(req: SmartTradeRequest):
                 size_usd=req.size_usd,
                 sizing_method=req.sizing_method,
                 leverage=req.leverage,
+                timeframe=req.timeframe,
+                candle_limit=req.candle_limit,
+                zscore_window=req.zscore_window,
             )
             log.info(f"Smart execution started: {exec_id} | {sym1}/{sym2} | {req.side}")
 
@@ -1334,6 +1343,9 @@ async def execute_trade(req: TradeRequest):
                 size_usd=req.size_usd,
                 sizing_method=req.sizing_method,
                 leverage=req.leverage,
+                timeframe=req.timeframe,
+                candle_limit=req.candle_limit,
+                zscore_window=req.zscore_window,
             )
             log.info(
                 f"OPEN {req.side} | {sym1}/{sym2} | "

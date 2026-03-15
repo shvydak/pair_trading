@@ -80,9 +80,12 @@ def _migrate() -> None:
     """Add columns introduced after initial schema."""
     with _conn() as conn:
         for col, typedef in [
-            ("tp_zscore", "REAL"),
-            ("sl_zscore", "REAL"),
-            ("tp_smart",  "INTEGER DEFAULT 0"),
+            ("tp_zscore",     "REAL"),
+            ("sl_zscore",     "REAL"),
+            ("tp_smart",      "INTEGER DEFAULT 0"),
+            ("timeframe",     "TEXT DEFAULT '1h'"),
+            ("candle_limit",  "INTEGER DEFAULT 500"),
+            ("zscore_window", "INTEGER DEFAULT 20"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {typedef}")
@@ -103,6 +106,9 @@ def save_open_position(
     size_usd: Optional[float] = None,
     sizing_method: Optional[str] = None,
     leverage: Optional[int] = None,
+    timeframe: str = "1h",
+    candle_limit: int = 500,
+    zscore_window: int = 20,
 ) -> int:
     with _conn() as conn:
         existing = conn.execute(
@@ -119,13 +125,15 @@ def save_open_position(
             INSERT INTO open_positions
               (symbol1, symbol2, side, qty1, qty2, hedge_ratio,
                entry_zscore, entry_price1, entry_price2,
-               size_usd, sizing_method, leverage, opened_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               size_usd, sizing_method, leverage,
+               timeframe, candle_limit, zscore_window, opened_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 symbol1, symbol2, side, qty1, qty2, hedge_ratio,
                 entry_zscore, entry_price1, entry_price2,
                 size_usd, sizing_method, leverage,
+                timeframe, candle_limit, zscore_window,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )

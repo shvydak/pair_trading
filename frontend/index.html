@@ -2093,6 +2093,7 @@ async function runAnalyze() {
     connectWebSocket(sym1, sym2, zwindow);
     updateLastUpdate();
     saveAnalysisState();
+    _updatePositionAnnotations();
     showToast(t('toast_analyze_done'), 'success');
     switchTab('spread');
   } catch(e) {
@@ -2569,6 +2570,8 @@ function renderStrategyPositions(positions) {
 
     const tr = document.createElement('tr');
     tr.id = `pos-row-${pos.id}`;
+    tr.style.cursor = 'pointer';
+    tr.onclick = (e) => { if (!e.target.closest('button, input, canvas')) _loadPosIntoAnalysis(pos.id); };
     tr.innerHTML = `
       <td>
         <div class="font-medium text-white text-xs leading-tight">${s1}</div>
@@ -2650,6 +2653,8 @@ function renderStrategyPositions(positions) {
   // Re-init tooltips for dynamically rendered rows
   applyLocale();
   initTooltips();
+  // Refresh entry/TP/SL annotations on chart if it's already rendered
+  _updatePositionAnnotations();
 }
 
 async function _loadSparkline(pos) {
@@ -2659,7 +2664,9 @@ async function _loadSparkline(pos) {
   try {
     const params = new URLSearchParams({
       symbol1: pos.symbol1, symbol2: pos.symbol2,
-      timeframe: '1h', limit: 100, zscore_window: 20,
+      timeframe:    pos.timeframe     || '1h',
+      limit:        pos.candle_limit  || 100,
+      zscore_window: pos.zscore_window || 20,
     });
     const res = await fetch(`${API}/api/history?${params}`);
     if (!res.ok) return;
@@ -2729,6 +2736,9 @@ function _loadPosIntoAnalysis(posId) {
   state.pendingTriggers = { tp: pos.tp_zscore ?? null, sl: pos.sl_zscore ?? null };
   if (pos.sizing_method) setSizingMethod(pos.sizing_method);
   if (pos.leverage)      document.getElementById('leverage-input').value = pos.leverage;
+  if (pos.timeframe)     setTimeframe(pos.timeframe);
+  if (pos.candle_limit)  document.getElementById('limit-input').value = pos.candle_limit;
+  if (pos.zscore_window) document.getElementById('zwindow-input').value = pos.zscore_window;
   updatePairContext();
   switchTab('spread');
   runAnalyze();
@@ -2979,6 +2989,52 @@ function updateThresholdLines() {
   state.spreadChart.update('none');
 }
 
+function _updatePositionAnnotations() {
+  if (!state.spreadChart || !state.historyData) return;
+  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+
+  // Find open position matching the current chart pair
+  const pos = Object.values(_stratPosMap).find(p =>
+    _symShort(p.symbol1) === sym1 && _symShort(p.symbol2) === sym2
+  );
+
+  const ann = state.spreadChart.options.plugins.annotation.annotations;
+
+  // ── TP / SL lines from position ────────────────────────────────────
+  const tp = pos?.tp_zscore ?? null;
+  const sl = pos?.sl_zscore ?? null;
+  ann.tpHigh.display = !!tp; ann.tpHigh.yMin = tp || 0;       ann.tpHigh.yMax = tp || 0;
+  ann.tpLow.display  = !!tp; ann.tpLow.yMin  = tp ? -tp : 0;  ann.tpLow.yMax  = tp ? -tp : 0;
+  ann.slHigh.display = !!sl; ann.slHigh.yMin = sl || 0;       ann.slHigh.yMax = sl || 0;
+  ann.slLow.display  = !!sl; ann.slLow.yMin  = sl ? -sl : 0;  ann.slLow.yMax  = sl ? -sl : 0;
+
+  // ── Entry vertical line ────────────────────────────────────────────
+  if (pos?.opened_at && state.historyData.timestamps?.length) {
+    const entryMs = new Date(pos.opened_at).getTime();
+    const timestamps = state.historyData.timestamps;
+    let closestIdx = 0, minDiff = Infinity;
+    timestamps.forEach((ts, i) => {
+      const diff = Math.abs(new Date(ts).getTime() - entryMs);
+      if (diff < minDiff) { minDiff = diff; closestIdx = i; }
+    });
+    ann.entryLine = {
+      type: 'line', xScaleID: 'x',
+      xMin: closestIdx, xMax: closestIdx,
+      borderColor: 'rgba(88,166,255,0.55)', borderWidth: 1.5, borderDash: [4, 3],
+      label: {
+        content: currentLang === 'ru' ? 'Вход' : 'Entry',
+        enabled: true, position: 'start',
+        color: '#58a6ff', font: { size: 9 }, padding: 2,
+      },
+    };
+  } else {
+    delete ann.entryLine;
+  }
+
+  state.spreadChart.update('none');
+}
+
 function updateTriggerLines(tp, sl) {
   if (!state.spreadChart) return;
   const ann = state.spreadChart.options.plugins.annotation.annotations;
@@ -3125,6 +3181,9 @@ async function executeTrade(action, side) {
         atr2: state.atr2,
         leverage,
         entry_zscore: state.historyData?.stats?.current_zscore ?? null,
+        timeframe:    state.timeframe || '1h',
+        candle_limit: parseInt(document.getElementById('limit-input').value) || 500,
+        zscore_window: parseInt(document.getElementById('zwindow-input').value) || 20,
       })
     });
     const data = await res.json();
@@ -3258,6 +3317,9 @@ async function startSmartExecution(side) {
         atr2: state.atr2,
         leverage,
         entry_zscore: state.historyData?.stats?.current_zscore ?? null,
+        timeframe:    state.timeframe || '1h',
+        candle_limit: parseInt(document.getElementById('limit-input').value) || 500,
+        zscore_window: parseInt(document.getElementById('zwindow-input').value) || 20,
         passive_s: passiveS,
         aggressive_s: aggressiveS,
         allow_market: allowMarket,

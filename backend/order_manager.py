@@ -103,6 +103,9 @@ class ExecContext:
     size_usd:      Optional[float] = None
     sizing_method: Optional[str]   = None
     leverage:      int             = 1
+    timeframe:     str             = "1h"
+    candle_limit:  int             = 500
+    zscore_window: int             = 20
 
     # Close-mode fields
     is_close:      bool            = False
@@ -259,6 +262,9 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                     size_usd=ctx.size_usd,
                     sizing_method=ctx.sizing_method,
                     leverage=ctx.leverage,
+                    timeframe=ctx.timeframe,
+                    candle_limit=ctx.candle_limit,
+                    zscore_window=ctx.zscore_window,
                 )
                 ctx.db_id = pos_id
                 ctx.evt(f"Saved to DB id={pos_id}")
