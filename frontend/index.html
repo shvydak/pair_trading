@@ -422,6 +422,7 @@
       wl_no_items: 'No pairs in watchlist',
       wl_sym1_ph: 'Symbol 1',
       wl_sym2_ph: 'Symbol 2',
+      wl_add_current: '★ Add to Watchlist',
       add_tp_btn: 'Add TP',
       add_sl_btn: 'Add SL',
       trigger_zscore_ph: 'Z-score',
@@ -673,6 +674,7 @@
       wl_no_items: 'Нет пар в списке',
       wl_sym1_ph: 'Символ 1',
       wl_sym2_ph: 'Символ 2',
+      wl_add_current: '★ В Watchlist',
       add_tp_btn: 'TP',
       add_sl_btn: 'SL',
       trigger_zscore_ph: 'Z-score',
@@ -770,7 +772,7 @@
 <div id="trade-mode" class="flex flex-1 overflow-hidden min-h-0">
 
   <!-- ===== LEFT: WATCHLIST ===== -->
-  <div id="watchlist-panel" class="w-44 shrink-0 border-r border-border flex flex-col bg-panel overflow-hidden">
+  <div id="watchlist-panel" class="w-48 shrink-0 border-r border-border flex flex-col bg-panel overflow-hidden">
     <div class="flex items-center justify-between px-2 py-2 border-b border-border">
       <span class="text-xs font-semibold text-muted uppercase tracking-wide" data-i18n="watchlist_title">Watchlist</span>
       <button onclick="showAddWatchlistModal()" class="text-accent hover:text-white text-sm font-bold px-1" title="Add pair">+</button>
@@ -942,6 +944,10 @@
         <button id="analyze-btn" onclick="runAnalyze()"
           class="w-full py-2 rounded-md text-sm font-semibold bg-accent text-surface hover:bg-blue-400 transition flex items-center justify-center gap-1">
           <span data-i18n="analyze_btn">Analyze Pair</span>
+        </button>
+        <button onclick="addCurrentPairToWatchlist()"
+          class="w-full py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:text-white hover:border-accent transition flex items-center justify-center gap-1">
+          <span data-i18n="wl_add_current">★ Add to Watchlist</span>
         </button>
       </div>
     </div>
@@ -1550,16 +1556,42 @@ function addWatchlistItem() {
   const s1 = document.getElementById('wl-sym1').value.trim().toUpperCase();
   const s2 = document.getElementById('wl-sym2').value.trim().toUpperCase();
   if (!s1 || !s2) return;
-  const items = getWatchlist();
-  const exists = items.some(w => w.sym1 === s1 && w.sym2 === s2);
-  if (!exists) {
-    items.push({ sym1: s1, sym2: s2, zscore: null });
-    saveWatchlist(items);
-  }
+  _addToWatchlist(s1, s2, null);
   document.getElementById('wl-sym1').value = '';
   document.getElementById('wl-sym2').value = '';
   document.getElementById('watchlist-add-form').classList.add('hidden');
+}
+
+function addCurrentPairToWatchlist() {
+  const s1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const s2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  if (!s1 || !s2) return;
+  const params = {
+    timeframe:    state.timeframe || '1h',
+    limit:        document.getElementById('limit-input').value || '500',
+    zwindow:      document.getElementById('zwindow-input').value || '20',
+    entryZ:       parseFloat(document.getElementById('entry-z-input').value) || 2,
+    exitZ:        parseFloat(document.getElementById('exit-z-input').value) || 1,
+    posSize:      document.getElementById('pos-size-input').value || '100',
+    sizing:       sizingMethod || 'ols',
+    leverage:     document.getElementById('leverage-input').value || '1',
+    marketFilter: state.marketFilter || 'ALL',
+  };
+  _addToWatchlist(s1, s2, params);
+}
+
+function _addToWatchlist(s1, s2, params) {
+  const items = getWatchlist();
+  const idx = items.findIndex(w => w.sym1 === s1 && w.sym2 === s2);
+  if (idx >= 0) {
+    // Update params but preserve live data
+    if (params) items[idx] = { ...items[idx], ...params };
+  } else {
+    items.push({ sym1: s1, sym2: s2, zscore: null, spread: null, ...(params || {}) });
+  }
+  saveWatchlist(items);
   renderWatchlist();
+  updateWatchlistZScores();
 }
 
 function removeWatchlistItem(idx) {
@@ -1569,7 +1601,25 @@ function removeWatchlistItem(idx) {
   renderWatchlist();
 }
 
-function loadPairIntoAnalysis(sym1, sym2) {
+function loadPairFromWatchlist(idx) {
+  const items = getWatchlist();
+  const w = items[idx];
+  if (!w) return;
+  loadPairIntoAnalysis(w.sym1, w.sym2, w);
+}
+
+function loadPairIntoAnalysis(sym1, sym2, item) {
+  if (item) {
+    if (item.marketFilter) setMarketFilter(item.marketFilter);
+    if (item.timeframe) setTimeframe(item.timeframe);
+    if (item.limit) document.getElementById('limit-input').value = item.limit;
+    if (item.zwindow) document.getElementById('zwindow-input').value = item.zwindow;
+    if (item.entryZ) document.getElementById('entry-z-input').value = item.entryZ;
+    if (item.exitZ) document.getElementById('exit-z-input').value = item.exitZ;
+    if (item.posSize) document.getElementById('pos-size-input').value = item.posSize;
+    if (item.sizing) setSizingMethod(item.sizing);
+    if (item.leverage) document.getElementById('leverage-input').value = item.leverage;
+  }
   document.getElementById('sym1-input').value = sym1;
   document.getElementById('sym2-input').value = sym2;
   handleSymbolInputChange();
@@ -1585,41 +1635,108 @@ function renderWatchlist() {
     list.innerHTML = `<div class="text-center text-muted text-[10px] py-6">${t('wl_no_items')}</div>`;
     return;
   }
-  list.innerHTML = items.map((w, i) => `
-    <div class="px-2 py-1.5 border-b border-border hover:bg-card cursor-pointer transition flex items-center justify-between group" onclick="loadPairIntoAnalysis('${w.sym1}','${w.sym2}')">
-      <div class="flex flex-col min-w-0">
-        <span class="text-[10px] font-medium text-white truncate">${w.sym1}</span>
-        <span class="text-[10px] text-muted truncate">${w.sym2}</span>
+  list.innerHTML = items.map((w, i) => {
+    const az = w.zscore != null ? Math.abs(w.zscore) : null;
+    const entryZ = parseFloat(w.entryZ) || 2;
+
+    // Row highlight based on proximity to entryZ threshold
+    let rowBorder = '';
+    let alertDot = '';
+    if (az != null) {
+      if (az >= entryZ) {
+        rowBorder = 'border-l-2 border-l-[#f85149]';
+        alertDot = `<span class="inline-block w-1.5 h-1.5 rounded-full bg-red animate-pulse shrink-0"></span>`;
+      } else if (az >= entryZ * 0.75) {
+        rowBorder = 'border-l-2 border-l-[#d29922]';
+        alertDot = `<span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow shrink-0"></span>`;
+      }
+    }
+
+    // Z-score color
+    const zColor = az != null
+      ? (az >= entryZ ? 'text-red font-bold' : az >= entryZ * 0.75 ? 'text-yellow font-semibold' : w.zscore > 0 ? 'text-green' : 'text-red')
+      : 'text-muted';
+
+    // Direction arrow (from previous update)
+    const zArrow = w._zDir > 0 ? ' ↑' : w._zDir < 0 ? ' ↓' : '';
+
+    const tf = w.timeframe || '';
+    const zDisplay = w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '—';
+    const spreadDisplay = w.spread != null ? w.spread.toFixed(4) : '—';
+
+    return `
+    <div class="px-2 py-1.5 border-b border-border ${rowBorder} hover:bg-card cursor-pointer transition group" onclick="loadPairFromWatchlist(${i})">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-1 min-w-0 flex-1">
+          ${alertDot}
+          <div class="flex flex-col min-w-0">
+            <div class="flex items-center gap-1">
+              <span class="text-[10px] font-medium text-white truncate">${w.sym1}</span>
+              ${tf ? `<span class="text-[9px] text-muted shrink-0">${tf}</span>` : ''}
+            </div>
+            <span class="text-[10px] text-muted truncate">${w.sym2}</span>
+          </div>
+        </div>
+        <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px] shrink-0 ml-1" title="${t('remove_from_watchlist')}">✕</button>
       </div>
-      <div class="flex items-center gap-1.5">
-        <span class="text-[10px] font-mono ${w.zscore != null ? (w.zscore > 0 ? 'text-green' : w.zscore < 0 ? 'text-red' : 'text-muted') : 'text-muted'}">${w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '-'}</span>
-        <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px]" title="${t('remove_from_watchlist')}">x</button>
+      <div class="flex items-center justify-between mt-0.5">
+        <span class="text-[9px] text-muted">Z</span>
+        <span class="text-[10px] font-mono ${zColor}">${zDisplay}${zArrow}</span>
       </div>
-    </div>
-  `).join('');
+      <div class="flex items-center justify-between">
+        <span class="text-[9px] text-muted">Sprd</span>
+        <span class="text-[10px] font-mono text-muted">${spreadDisplay}</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 let _wlInterval = null;
 function startWatchlistUpdater() {
   if (_wlInterval) clearInterval(_wlInterval);
-  _wlInterval = setInterval(updateWatchlistZScores, 30000);
+  updateWatchlistZScores(); // immediate first call
+  _wlInterval = setInterval(updateWatchlistZScores, 5000);
 }
 
 async function updateWatchlistZScores() {
   const items = getWatchlist();
   if (items.length === 0) return;
+
+  const payload = items.map(w => ({
+    sym1:         w.sym1,
+    sym2:         w.sym2,
+    timeframe:    w.timeframe    || '1h',
+    limit:        parseInt(w.limit)   || 100,
+    zscore_window: parseInt(w.zwindow) || 20,
+  }));
+
+  let data;
+  try {
+    const res = await fetch(`${API}/api/watchlist/data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return;
+    data = await res.json();
+  } catch { return; }
+
   let changed = false;
-  for (const w of items) {
-    try {
-      const res = await fetch(`${API}/api/history?symbol1=${encodeURIComponent(w.sym1)}&symbol2=${encodeURIComponent(w.sym2)}&timeframe=1h&limit=100&zscore_window=20`);
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data.stats && data.stats.zscore != null) {
-        w.zscore = data.stats.zscore;
-        changed = true;
-      }
-    } catch {}
+  for (const row of data) {
+    const w = items.find(x => x.sym1 === row.sym1 && x.sym2 === row.sym2);
+    if (!w) continue;
+    if (row.current_zscore != null) {
+      const prevZ = w.zscore;
+      w.zscore = +row.current_zscore.toFixed(3);
+      w._zDir = prevZ != null ? Math.sign(w.zscore - prevZ) : 0;
+      changed = true;
+    }
+    if (row.spread != null && isFinite(row.spread)) {
+      w.spread = +row.spread.toFixed(5);
+      changed = true;
+    }
   }
+
   if (changed) {
     saveWatchlist(items);
     renderWatchlist();

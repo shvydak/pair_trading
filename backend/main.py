@@ -133,6 +133,10 @@ class PriceCache:
 
 price_cache = PriceCache()
 
+# Watchlist subscriptions: tag → cache_key
+# Tag format: "{sym1}|{sym2}|{tf}|{limit}"
+_watchlist_keys: dict[str, tuple] = {}
+
 
 def _pair_meta(meta1: dict, meta2: dict) -> dict:
     asset1 = meta1.get("margin_asset")
@@ -598,6 +602,78 @@ async def get_history(
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class WatchlistItem(BaseModel):
+    sym1: str
+    sym2: str
+    timeframe: str = "1h"
+    limit: int = 100
+    zscore_window: int = 20
+
+
+@app.post("/api/watchlist/data")
+async def get_watchlist_data(items: list[WatchlistItem]):
+    """
+    Subscribe watchlist pairs to PriceCache and return current z-score + spread.
+    Reconciles subscriptions: removes pairs that are no longer in the watchlist.
+    """
+    results = []
+    new_tags: set[str] = set()
+
+    for item in items:
+        sym1 = _normalise_symbol(item.sym1)
+        sym2 = _normalise_symbol(item.sym2)
+        tag = f"{sym1}|{sym2}|{item.timeframe}|{item.limit}"
+        new_tags.add(tag)
+
+        # Subscribe to PriceCache if not already tracked
+        if tag not in _watchlist_keys:
+            key = price_cache.subscribe(sym1, sym2, item.timeframe, item.limit)
+            _watchlist_keys[tag] = key
+        else:
+            key = _watchlist_keys[tag]
+
+        cached = price_cache.get(key)
+        if cached is None:
+            # Cache not populated yet — fetch directly and seed the cache
+            try:
+                df1, df2 = await asyncio.gather(
+                    client.fetch_ohlcv(sym1, item.timeframe, item.limit),
+                    client.fetch_ohlcv(sym2, item.timeframe, item.limit),
+                )
+                p1 = df1["close"]
+                p2 = df2["close"]
+                p1, p2 = p1.align(p2, join="inner")
+                price_cache._store[key] = {"price1": p1, "price2": p2}
+                cached = price_cache.get(key)
+            except Exception as e:
+                log.warning(f"watchlist fetch error {tag}: {e}")
+                results.append({"sym1": item.sym1, "sym2": item.sym2,
+                                 "current_zscore": None, "spread": None})
+                continue
+
+        p1 = cached["price1"]
+        p2 = cached["price2"]
+        hedge = strategy.calculate_hedge_ratio(p1, p2)
+        spread_series = strategy.calculate_spread(p1, p2, hedge)
+        zscore_series = strategy.calculate_zscore(spread_series, window=item.zscore_window)
+        zd = zscore_series.dropna()
+        current_z  = _safe_float(float(zd.iloc[-1])) if not zd.empty else None
+        last_spread = _safe_float(float(spread_series.iloc[-1])) if not spread_series.empty else None
+
+        results.append({
+            "sym1": item.sym1,
+            "sym2": item.sym2,
+            "current_zscore": current_z,
+            "spread": last_spread,
+        })
+
+    # Unsubscribe pairs removed from watchlist
+    for tag in set(_watchlist_keys) - new_tags:
+        price_cache.unsubscribe(_watchlist_keys.pop(tag))
+
+    return results
 
 
 @app.get("/api/backtest")

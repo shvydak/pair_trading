@@ -89,6 +89,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET | `/api/triggers` | All active TP/SL triggers (standalone, independent of positions) |
 | POST | `/api/triggers` | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart}` |
 | DELETE | `/api/triggers/{id}` | Cancel an active trigger |
+| POST | `/api/watchlist/data` | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair |
 | WS | `/ws/stream` | Live spread/price/Z-score updates every 5 seconds for the active analysed pair |
 
 ### `GET /api/pre_trade_check` — query params
@@ -187,11 +188,13 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - Backtest: кнопка "→ Открыть в Trade" вызывает `setMode('trade')`
 
 ### Watchlist
-- Хранится в `localStorage['pt_watchlist']` как `[{sym1, sym2}]`
-- Z-score обновляется каждые 30 сек через `GET /api/history?limit=60&zscore_window=20`
-- Цвет z-score: зелёный `|z|<1`, жёлтый `1≤|z|<2`, красный `|z|≥2`
-- `addWatchlistItem(sym1, sym2)`, `removeWatchlistItem(sym1, sym2)`, `renderWatchlist()`
-- Клик на пару → `loadPairIntoAnalysis(sym1, sym2)` → `runAnalyze()`
+- Хранится в `localStorage['pt_watchlist']` как `[{sym1, sym2, timeframe, limit, zwindow, entryZ, exitZ, posSize, sizing, leverage, marketFilter, zscore, spread, _zDir}]`
+- Кнопка **"★ Add to Watchlist"** под "Analyze Pair" добавляет текущую пару **со всеми параметрами анализа**
+- Клик на пару → `loadPairFromWatchlist(idx)` → `loadPairIntoAnalysis(sym1, sym2, item)` — восстанавливает **все** сохранённые параметры и запускает Analyze
+- Z-score и spread обновляются каждые **5 сек** через `POST /api/watchlist/data` (один запрос на весь watchlist, данные из PriceCache)
+- Индикация порога (`entryZ` пары): `|z| ≥ entryZ*0.75` → жёлтый `border-l-2`; `|z| ≥ entryZ` → красный `border-l-2` + мигающая точка
+- Направление z-score: `_zDir` (sign) → стрелка ↑/↓ рядом со значением z
+- `addWatchlistItem()` — ручная форма (только sym1/sym2, без параметров); `addCurrentPairToWatchlist()` — захватывает весь текущий стейт анализа; `_addToWatchlist(s1, s2, params)` — общая логика добавления/обновления
 
 ### TP/SL Ордера (новая система)
 - `loadOrdersTab()` → `GET /api/triggers` → рендерит таблицу
@@ -252,7 +255,14 @@ Public endpoints (symbols, history, backtest) work without API keys.
 Private endpoints (positions, balance, trade) require valid keys.
 
 ## Price Cache (`backend/main.py` — class `PriceCache`)
-Centralised OHLCV data feed shared by all consumers (WebSocket, monitor, future watchlist).
+Centralised OHLCV data feed shared by **all** consumers (WebSocket, monitor, watchlist).
+
+> **АРХИТЕКТУРНЫЙ ПРИНЦИП — соблюдать всегда:**
+> Любой компонент, которому нужны текущие цены/spread/z-score, **подписывается на PriceCache** и читает из него.
+> Прямые вызовы `client.fetch_ohlcv()` допустимы только в двух случаях:
+> 1. Исторические данные для анализа/бэктеста (`/api/history`, `/api/backtest`)
+> 2. Первичное заполнение кэша, если он ещё пуст (seed на первом вызове)
+> **Никогда не создавай новые polling-таймеры на фронтенде, делающие прямые запросы к `/api/history` для получения live-данных — всегда используй `/api/watchlist/data` или WebSocket.**
 
 - **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
 - **Entry**: `{"price1": pd.Series, "price2": pd.Series}` — raw close prices, aligned
@@ -260,9 +270,9 @@ Centralised OHLCV data feed shared by all consumers (WebSocket, monitor, future 
 - `price_cache.unsubscribe(key)` — decrements ref; entry removed when count reaches 0
 - `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
 - `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every 5 s via `fetch_ohlcv × 2`
-- **WebSocket**: subscribes on connect, reads from cache each 5 s loop, unsubscribes in `finally`
+- **WebSocket** (`/ws/stream`): subscribes on connect, reads from cache each 5 s loop, unsubscribes in `finally`
 - **monitor_position_triggers**: maintains `monitored_keys: dict[tag → cache_key]`; tags are `"pos_{id}"` (legacy) or `"trig_{id}"` (standalone); subscribes per trigger, unsubscribes on close/cancel
-- **Watchlist**: updates every 30s via JS fetch (not PriceCache); `subscribe()` / `unsubscribe()` pattern available for future server-push watchlist
+- **Watchlist** (`POST /api/watchlist/data`): maintains `_watchlist_keys: dict[tag → cache_key]` at module level; subscribes each pair on first call, unsubscribes pairs removed from watchlist; frontend polls every 5 s — one request for the whole watchlist; on cache miss seeds `price_cache._store[key]` directly before returning
 
 ## Logging & Persistence
 
