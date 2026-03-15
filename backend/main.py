@@ -308,11 +308,15 @@ async def monitor_position_triggers() -> None:
                 if tag in closing_tags:
                     continue  # smart close already in flight
 
+                # Use position's own timeframe/zscore_window (matches user's analysis)
+                pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
+                pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
+
                 # Subscribe to cache on first encounter
                 if tag not in monitored_keys:
-                    limit = max(_MONITOR_ZSCORE_WINDOW * 3, 60)
+                    limit = max(pos_zw * 3, 60)
                     key = price_cache.subscribe(
-                        pos["symbol1"], pos["symbol2"], _MONITOR_TIMEFRAME, limit
+                        pos["symbol1"], pos["symbol2"], pos_tf, limit
                     )
                     monitored_keys[tag] = key
 
@@ -325,7 +329,7 @@ async def monitor_position_triggers() -> None:
                     p2 = entry["price2"]
                     hedge = pos["hedge_ratio"]
                     spread = strategy.calculate_spread(p1, p2, hedge)
-                    zscore_series = strategy.calculate_zscore(spread, window=_MONITOR_ZSCORE_WINDOW)
+                    zscore_series = strategy.calculate_zscore(spread, window=pos_zw)
                     current_z = float(zscore_series.dropna().iloc[-1])
 
                     side = pos["side"]
