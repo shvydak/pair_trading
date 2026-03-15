@@ -367,6 +367,10 @@ async def monitor_position_triggers() -> None:
                             current_tags.discard(tag)
                             continue
 
+                        # Clear TP/SL in DB immediately — prevents re-firing on the
+                        # next monitor cycle regardless of closing_tags state.
+                        db.set_position_triggers(pos_id, None, None, False)
+
                         use_smart = trigger == "tp" and bool(pos.get("tp_smart"))
                         if use_smart:
                             exec_id = await _do_smart_close_trigger(pos, exit_zscore=current_z)
@@ -1302,6 +1306,12 @@ async def start_smart_trade(req: SmartTradeRequest):
     except Exception as e:
         log.error(f"Smart trade error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/executions")
+async def list_executions():
+    """Return all active execution contexts (for progress monitoring)."""
+    return {"executions": [_clean(ctx.to_dict()) for ctx in active_executions.values()]}
 
 
 @app.get("/api/execution/{exec_id}")

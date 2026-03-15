@@ -386,8 +386,11 @@
       tp_smart_btn_title: 'Smart limit close for TP (◎ = enabled, market = disabled)',
       toast_triggers_ok: 'TP/SL set.',
       toast_triggers_err: 'Trigger error: ',
-      toast_tp_hit: 'Take Profit triggered — position closed.',
-      toast_sl_hit: 'Stop Loss triggered — position closed.',
+      toast_tp_hit: 'Take Profit triggered — closing position...',
+      toast_sl_hit: 'Stop Loss triggered — closing position...',
+      toast_exec_closed: 'Position closed.',
+      toast_exec_rollback: 'Partial fill — manual action required.',
+      toast_exec_failed: 'Close failed — manual action required.',
 
       tip_market_filter: '<strong>Market Filter</strong><br/>Filters the symbol dropdown by margin type.<br/><br/><svg width="200" height="44" style="display:block;margin:6px 0"><rect x="0" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="45" y="16" text-anchor="middle" font-size="9" fill="#58a6ff">USDT-M</text><rect x="110" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="155" y="16" text-anchor="middle" font-size="9" fill="#3fb950">USDC-M</text><text x="45" y="34" text-anchor="middle" font-size="8" fill="#8b949e">maker 0.02%</text><text x="155" y="34" text-anchor="middle" font-size="8" fill="#3fb950">maker 0% ✓</text></svg><strong>USDT-M</strong> — standard perpetuals, most pairs available, maker fee ~0.02%.<br/><strong>USDC-M</strong> — newer market, fewer pairs, but <span style="color:#3fb950"><strong>maker fee = 0%</strong></span>. Perfect for Smart Limit mode.',
       tip_timeframe: '<strong>Timeframe</strong><br/>Candle interval used to build the spread chart and calculate z-score.<br/><br/><svg width="200" height="50" style="display:block;margin:6px 0"><line x1="0" y1="25" x2="200" y2="25" stroke="#30363d" stroke-width="1"/><path d="M0,25 C5,20 8,15 10,25 S13,35 15,25 S18,18 20,25 S22,32 25,25" fill="none" stroke="#58a6ff" stroke-width="1.5" opacity="0.5"/><path d="M0,25 C15,10 25,40 50,22 S75,30 100,25" fill="none" stroke="#58a6ff" stroke-width="1.5"/><path d="M0,30 C25,10 75,40 100,25 S150,10 200,28" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="20" y="45" font-size="8" fill="#8b949e">5m — noisy</text><text x="80" y="45" font-size="8" fill="#58a6ff">1h — balanced</text><text x="150" y="45" font-size="8" fill="#3fb950">4h — smooth</text></svg><strong>5m</strong> — scalping. Fast signals, many false positives. 0% fee on USDC-M makes it viable.<br/><strong>1h</strong> — best starting point. Balanced signal quality.<br/><strong>4h / 1d</strong> — swing trading. Fewer signals, but more reliable.',
@@ -638,8 +641,11 @@
       tp_smart_btn_title: 'Умное закрытие для TP (◎ = включено, маркет = выключено)',
       toast_triggers_ok: 'TP/SL сохранены.',
       toast_triggers_err: 'Ошибка триггера: ',
-      toast_tp_hit: 'Take Profit — позиция закрыта автоматически.',
-      toast_sl_hit: 'Stop Loss — позиция закрыта автоматически.',
+      toast_tp_hit: 'Take Profit достигнут — идёт закрытие...',
+      toast_sl_hit: 'Stop Loss достигнут — идёт закрытие...',
+      toast_exec_closed: 'Позиция закрыта.',
+      toast_exec_rollback: 'Частичное исполнение — требуется вмешательство.',
+      toast_exec_failed: 'Ошибка закрытия — требуется вмешательство.',
 
       tip_market_filter: '<strong>Фильтр рынка</strong><br/>Фильтрует список символов по типу маржи.<br/><br/><svg width="200" height="44" style="display:block;margin:6px 0"><rect x="0" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="45" y="16" text-anchor="middle" font-size="9" fill="#58a6ff">USDT-M</text><rect x="110" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="155" y="16" text-anchor="middle" font-size="9" fill="#3fb950">USDC-M</text><text x="45" y="34" text-anchor="middle" font-size="8" fill="#8b949e">мейкер 0.02%</text><text x="155" y="34" text-anchor="middle" font-size="8" fill="#3fb950">мейкер 0% ✓</text></svg><strong>USDT-M</strong> — стандартные бессрочные фьючерсы, больше пар, мейкер ~0.02%.<br/><strong>USDC-M</strong> — меньше пар, но <span style="color:#3fb950"><strong>мейкер 0%</strong></span>. Идеально для режима Smart Limit.',
       tip_timeframe: '<strong>Таймфрейм</strong><br/>Интервал свечей для построения спреда и z-score.<br/><br/><svg width="200" height="50" style="display:block;margin:6px 0"><line x1="0" y1="25" x2="200" y2="25" stroke="#30363d" stroke-width="1"/><path d="M0,25 C5,20 8,15 10,25 S13,35 15,25 S18,18 20,25 S22,32 25,25" fill="none" stroke="#58a6ff" stroke-width="1.5" opacity="0.5"/><path d="M0,25 C15,10 25,40 50,22 S75,30 100,25" fill="none" stroke="#58a6ff" stroke-width="1.5"/><path d="M0,30 C25,10 75,40 100,25 S150,10 200,28" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="20" y="45" font-size="8" fill="#8b949e">5m — шум</text><text x="75" y="45" font-size="8" fill="#58a6ff">1h — баланс</text><text x="145" y="45" font-size="8" fill="#3fb950">4h — плавно</text></svg><strong>5m</strong> — скальпинг. Быстрые сигналы, много ложных. Комиссия 0% на USDC-M делает его рабочим.<br/><strong>1h</strong> — лучший старт. Баланс качества и количества сигналов.<br/><strong>4h / 1d</strong> — свинг. Редкие, но надёжные сигналы.',
@@ -2667,6 +2673,98 @@ function _formatDuration(openedAt) {
 }
 
 
+// ------------------------------------------------------------------ //
+//  Smart close execution progress (monitor-triggered)
+// ------------------------------------------------------------------ //
+let _posExecMap = {};      // posId (number) → exec data object
+let _execPollTimer = null;
+
+function _execFillPct(leg) {
+  if (!leg || !leg.qty) return 0;
+  return Math.min(100, Math.round((leg.filled / leg.qty) * 100));
+}
+
+function _execStatusHtml(exec) {
+  if (!exec) return '';
+  const TERMINAL = ['OPEN', 'DONE', 'CANCELLED', 'FAILED'];
+  if (TERMINAL.includes(exec.status)) return '';
+  const s1 = (exec.leg1?.symbol || '').split(':')[0];
+  const s2 = (exec.leg2?.symbol || '').split(':')[0];
+  const p1 = _execFillPct(exec.leg1);
+  const p2 = _execFillPct(exec.leg2);
+  const phase = exec.status === 'PLACING' ? 'размещение'
+    : exec.status === 'PASSIVE' ? 'пассивный'
+    : exec.status === 'AGGRESSIVE' ? 'агрессивный'
+    : exec.status === 'FORCING' ? 'маркет'
+    : exec.status;
+  return `<div class="mt-1.5 p-1.5 rounded bg-yellow-950 border border-yellow-700">
+    <div class="flex items-center justify-between">
+      <span class="text-[10px] text-yellow-300 font-semibold">◎ Закрытие: ${phase}</span>
+      <button onclick="cancelCloseExec('${exec.exec_id}')"
+        class="text-red-400 hover:text-red-300 text-[10px] leading-none">✕</button>
+    </div>
+    <div class="text-[10px] text-muted mt-0.5">${s1}: ${p1}% · ${s2}: ${p2}%</div>
+  </div>`;
+}
+
+async function cancelCloseExec(execId) {
+  try {
+    await fetch(`${API}/api/execution/${execId}`, { method: 'DELETE' });
+  } catch {}
+}
+
+async function _pollExecutions() {
+  try {
+    const res = await fetch(`${API}/api/executions`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const execs = data.executions || [];
+
+    const TERMINAL = ['OPEN', 'DONE', 'CANCELLED', 'FAILED'];
+    const newMap = {};
+    for (const ex of execs) {
+      if (!ex.is_close || ex.close_db_id == null) continue;
+      const posId = ex.close_db_id;
+
+      const wasActive = _posExecMap[posId] && !TERMINAL.includes(_posExecMap[posId].status);
+      const nowTerminal = TERMINAL.includes(ex.status);
+
+      if (wasActive && nowTerminal) {
+        // Execution just finished — show final toast
+        if (ex.status === 'OPEN') {
+          showToast(t('toast_exec_closed'), 'success');
+        } else if (ex.status === 'DONE') {
+          showToast(t('toast_exec_rollback'), 'warn');
+        } else {
+          showToast(t('toast_exec_failed'), 'error');
+        }
+        loadAllPositions();
+      }
+
+      if (!nowTerminal) newMap[posId] = ex;
+    }
+
+    _posExecMap = newMap;
+
+    // Update exec-status divs in position rows
+    for (const [posId, exec] of Object.entries(_posExecMap)) {
+      const el = document.getElementById(`exec-status-${posId}`);
+      if (el) el.innerHTML = _execStatusHtml(exec);
+    }
+
+    // Stop poller when nothing active
+    if (Object.keys(_posExecMap).length === 0 && _execPollTimer) {
+      clearInterval(_execPollTimer);
+      _execPollTimer = null;
+    }
+  } catch {}
+}
+
+function startExecPoller() {
+  if (_execPollTimer) return;
+  _execPollTimer = setInterval(_pollExecutions, 2000);
+}
+
 function _tpslBadgesHtml(pos) {
   let html = '';
   if (pos.tp_zscore != null) {
@@ -2726,6 +2824,9 @@ function renderStrategyPositions(positions) {
       // Update TP/SL badges immediately
       const badgesEl = document.getElementById(`tpsl-badges-${pos.id}`);
       if (badgesEl) badgesEl.innerHTML = _tpslBadgesHtml(pos);
+      // Update smart close execution progress if any
+      const execEl = document.getElementById(`exec-status-${pos.id}`);
+      if (execEl) execEl.innerHTML = _execStatusHtml(_posExecMap[pos.id]);
       _loadSparkline(pos); // refresh z-score + chart data in-place
       return; // skip full rebuild
     }
@@ -2805,6 +2906,8 @@ function renderStrategyPositions(positions) {
             title="${t('set_triggers_btn')}">${t('set_triggers_btn')}</button>
           <div class="tooltip-box" data-i18n-html="tip_tp_sl"></div>
         </div>
+        <!-- Smart close execution progress (shown when monitor-triggered close is in flight) -->
+        <div id="exec-status-${pos.id}"></div>
       </td>
     `;
     tbody.appendChild(tr);
@@ -3031,8 +3134,10 @@ async function _cancelTrigger(posId, which) {
 }
 
 async function _setTriggers(posId) {
-  const tp = parseFloat(document.getElementById(`tp-input-${posId}`)?.value) || null;
-  const sl = parseFloat(document.getElementById(`sl-input-${posId}`)?.value) || null;
+  const _tpVal = document.getElementById(`tp-input-${posId}`)?.value;
+  const _slVal = document.getElementById(`sl-input-${posId}`)?.value;
+  const tp = _tpVal !== '' && _tpVal != null ? parseFloat(_tpVal) : null;
+  const sl = _slVal !== '' && _slVal != null ? parseFloat(_slVal) : null;
   const tp_smart = !!(_stratPosMap[posId]?.tp_smart);
   try {
     const res = await fetch(`${API}/api/db/positions/${posId}/triggers`, {
@@ -3707,11 +3812,11 @@ function _checkWsTriggers(currentZ) {
     const now = Date.now();
     if (now - _lastTriggerToast < 30000) continue; // debounce 30s
     if (pos.side === 'long_spread') {
-      if (tp && currentZ >= -tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; loadStrategyPositions(); }
-      else if (sl && currentZ <= -sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; loadStrategyPositions(); }
+      if (tp && currentZ >= -tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; startExecPoller(); }
+      else if (sl && currentZ <= -sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; startExecPoller(); }
     } else {
-      if (tp && currentZ <= tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; loadStrategyPositions(); }
-      else if (sl && currentZ >= sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; loadStrategyPositions(); }
+      if (tp && currentZ <= tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; startExecPoller(); }
+      else if (sl && currentZ >= sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; startExecPoller(); }
     }
   }
 }
