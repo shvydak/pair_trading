@@ -383,3 +383,74 @@ def test_find_active_alert_multiple_same_zscore(tmp_db):
     tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# alert_fired / get_recent_alerts
+# ---------------------------------------------------------------------------
+
+def test_alert_fired_updates_last_fired_at(tmp_db):
+    """alert_fired() sets last_fired_at on an active alert."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    result = tmp_db.alert_fired(tid)
+    assert result is True
+    trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
+    assert trig["last_fired_at"] is not None
+
+
+def test_alert_fired_keeps_status_active(tmp_db):
+    """alert_fired() must not change status — hysteresis needs the alert to stay active."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    tmp_db.alert_fired(tid)
+    trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
+    assert trig["status"] == "active"
+
+
+def test_alert_fired_returns_false_when_not_found(tmp_db):
+    """alert_fired() returns False for unknown id."""
+    assert tmp_db.alert_fired(9999) is False
+
+
+def test_alert_fired_returns_false_when_cancelled(tmp_db):
+    """alert_fired() does not update a cancelled trigger."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    tmp_db.cancel_trigger(tid)
+    assert tmp_db.alert_fired(tid) is False
+
+
+def test_get_recent_alerts_returns_fired(tmp_db):
+    """get_recent_alerts() returns an alert that just fired."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    tmp_db.alert_fired(tid)
+    results = tmp_db.get_recent_alerts(minutes=60)
+    assert len(results) == 1
+    assert results[0]["id"] == tid
+
+
+def test_get_recent_alerts_excludes_unfired(tmp_db):
+    """Alerts that have never fired are not returned."""
+    tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    assert tmp_db.get_recent_alerts(minutes=60) == []
+
+
+def test_get_recent_alerts_excludes_cancelled(tmp_db):
+    """Cancelled alerts are not returned even if they fired recently."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    tmp_db.alert_fired(tid)
+    tmp_db.cancel_trigger(tid)
+    assert tmp_db.get_recent_alerts(minutes=60) == []
+
+
+def test_get_recent_alerts_excludes_tp_sl_type(tmp_db):
+    """get_recent_alerts() only returns type='alert', not tp/sl."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "long_spread", "tp", 2.0)
+    tmp_db.alert_fired(tid)  # set last_fired_at even on tp type
+    assert tmp_db.get_recent_alerts(minutes=60) == []
+
+
+def test_get_recent_alerts_multiple(tmp_db):
+    """Multiple fired alerts are all returned."""
+    for sym2 in ["ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT"]:
+        tid = tmp_db.save_trigger("BTC/USDT:USDT", sym2, "both", "alert", 2.0)
+        tmp_db.alert_fired(tid)
+    assert len(tmp_db.get_recent_alerts(minutes=60)) == 3

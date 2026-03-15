@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-03-15 — Notification center + кнопка Alert в панели настройки пары
+
+### Что добавлено
+
+**Backend:**
+- `db.py`: колонка `last_fired_at TEXT` в triggers; `alert_fired(id)` — записывает timestamp срабатывания, сохраняет `status='active'` (гистерезис продолжает работать); `get_recent_alerts(minutes=60)` — алерты, сработавшие за последние N минут
+- `main.py`: монитор вызывает `db.alert_fired(trig_id)` при каждом срабатывании; новый endpoint `GET /api/alerts/recent?minutes=60`
+
+**Frontend:**
+- **Notification center**: при загрузке страницы и каждые 60 с вызывается `checkRecentAlerts()` → кликабельный toast с парой и временем (`🔔 Алерт: BNB/USDC / SOL/USDC — 5 мин назад`), клик открывает вкладку Alerts
+- **Badge** на кнопке 🔔 Alerts — жёлтый кружок с количеством; исчезает при открытии вкладки
+- **Подсветка строк** в таблице Alerts: жёлтый фон + `⚡ X мин назад` в колонке "Last fired" для срабатываний последнего часа
+- **Кнопка `🔔 Alert`** рядом с `★ В Watchlist` в панели Настройки пары — `addAlertFromPanel()` берёт sym1/sym2/timeframe/zscore_window/entry-z из текущего состояния анализа; позволяет создавать алерты без добавления пары в watchlist
+- Toast "Анализ завершён" убран — больше не вытесняет алерт-уведомление
+- `showToast()` расширен: параметры `duration` (мс) и `onClick` (callback при клике)
+
+**Tests:**
+- `test_db.py`: +9 новых тестов — `alert_fired` (updates last_fired_at, keeps status active, false on missing/cancelled), `get_recent_alerts` (returns fired, excludes unfired/cancelled/tp-sl/old, multiple)
+
+### Итого тестов: 194
+
+---
+
 ## 2026-03-15 — Telegram алерты: отдельная вкладка, настраиваемый порог, timeframe-aware мониторинг
 
 ### Что добавлено

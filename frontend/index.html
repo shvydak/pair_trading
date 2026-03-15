@@ -945,10 +945,17 @@
           class="w-full py-2 rounded-md text-sm font-semibold bg-accent text-surface hover:bg-blue-400 transition flex items-center justify-center gap-1">
           <span data-i18n="analyze_btn">Analyze Pair</span>
         </button>
-        <button onclick="addCurrentPairToWatchlist()"
-          class="w-full py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:text-white hover:border-accent transition flex items-center justify-center gap-1">
-          <span data-i18n="wl_add_current">★ Add to Watchlist</span>
-        </button>
+        <div class="flex gap-2">
+          <button onclick="addCurrentPairToWatchlist()"
+            class="flex-1 py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:text-white hover:border-accent transition flex items-center justify-center gap-1">
+            <span data-i18n="wl_add_current">★ Add to Watchlist</span>
+          </button>
+          <button onclick="addAlertFromPanel()"
+            class="flex-1 py-1.5 rounded-md text-xs font-medium border border-border text-muted hover:text-yellow hover:border-yellow-500 transition flex items-center justify-center gap-1"
+            title="Создать Telegram алерт с текущими параметрами анализа">
+            🔔 Alert
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1611,6 +1618,46 @@ function addCurrentPairToWatchlist() {
     marketFilter: state.marketFilter || 'ALL',
   };
   _addToWatchlist(s1, s2, params);
+}
+
+async function addAlertFromPanel() {
+  const s1 = document.getElementById('sym1-input').value.trim().toUpperCase();
+  const s2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  if (!s1 || !s2) { showToast(t('toast_enter_symbols'), 'warn'); return; }
+  const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 0;
+  if (!entryZ) { showToast('Укажите Entry Z-score', 'warn'); return; }
+  const timeframe   = state.timeframe || '1h';
+  const zscore_window = parseInt(document.getElementById('zwindow-input').value) || 20;
+
+  const pctStr = window.prompt(
+    `Алерт при каком % от порога (Z = ${entryZ})?\n` +
+    `100% = при достижении ${entryZ}, 90% = при ${(entryZ * 0.9).toFixed(2)} и т.д.`,
+    '100'
+  );
+  if (pctStr === null) return;
+  const pct = Math.min(200, Math.max(1, parseFloat(pctStr) || 100));
+  const alertPct = pct / 100;
+
+  try {
+    const res = await fetch(`${API}/api/triggers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol1: s1, symbol2: s2,
+        side: 'both', type: 'alert',
+        zscore: entryZ, tp_smart: false,
+        timeframe, zscore_window, alert_pct: alertPct,
+      }),
+    });
+    if (res.ok) {
+      showToast(`🔔 Алерт добавлен (${pct}% от порога)`, 'ok', 5000, () => setBottomTab('alerts'));
+    } else {
+      const data = await res.json();
+      showToast('Ошибка: ' + (data.detail || res.status), 'error');
+    }
+  } catch (e) {
+    showToast('Ошибка: ' + e.message, 'error');
+  }
 }
 
 function _addToWatchlist(s1, s2, params) {
