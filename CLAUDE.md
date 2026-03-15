@@ -25,10 +25,11 @@ pair_trading/
 ├── tests/
 │   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
 │   ├── test_strategy.py     # 40 tests — all strategy math
-│   ├── test_db.py           # 23 tests — SQLite persistence layer
+│   ├── test_db.py           # 30 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
 │   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
-│   └── test_triggers.py     # 40 tests — triggers table CRUD
+│   ├── test_triggers.py     # 40 tests — triggers table CRUD
+│   └── test_watchlist.py    #  8 tests — WatchlistItem model validation
 ├── logs/
 │   └── pair_trading.log     # Rotating log (10 MB × 5 files)
 ├── pair_trading.db          # SQLite trade journal (auto-created on first run)
@@ -54,7 +55,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 ### Tests
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 106 tests
+.venv/bin/pytest tests/ -v        # all 121 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -109,6 +110,9 @@ Returns `{ok: bool, checks: [{name, ok, detail}], sizes: {qty1, qty2, rounded_qt
 | `leverage` | int | `1` | Futures leverage to set before opening |
 | `entry_zscore` | float | null | Z-score at entry (saved to DB) |
 | `exit_zscore` | float | null | Z-score at exit (saved to DB) |
+| `timeframe` | str | `"1h"` | Timeframe used for analysis (saved to DB, used in sparkline) |
+| `candle_limit` | int | `500` | Candle count for analysis window (saved to DB) |
+| `zscore_window` | int | `20` | Rolling z-score window (saved to DB) |
 
 ### `POST /api/trade/smart` — SmartTradeRequest fields
 Same as TradeRequest plus `action: str = "open"` (supports `"close"` for smart close from positions table) and:
@@ -116,6 +120,9 @@ Same as TradeRequest plus `action: str = "open"` (supports `"close"` for smart c
 |-------|------|---------|-------------|
 | `action` | str | `"open"` | `"open"` \| `"close"` |
 | `exit_zscore` | float | null | Z-score at exit (for close action, saved to DB) |
+| `timeframe` | str | `"1h"` | Timeframe used for analysis (saved to DB, used in sparkline) |
+| `candle_limit` | int | `500` | Candle count for analysis window (saved to DB) |
+| `zscore_window` | int | `20` | Rolling z-score window (saved to DB) |
 | `passive_s` | float | `10.0` | Seconds to wait at bid/ask before chasing |
 | `aggressive_s` | float | `20.0` | Seconds at taker side before market fallback |
 | `allow_market` | bool | `true` | Use market order as final fallback |
@@ -219,9 +226,11 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `loadAllPositions()` — single call to `GET /api/all_positions` + `GET /api/balance`; renders both strategy and exchange tables; replaces old separate `loadStrategyPositions()` + `refreshPositions()` calls
 - **Auto-refresh**: `setInterval(() => loadAllPositions(), 5000)` — positions update every 5 s automatically
 - `renderStrategyPositions(positions)` — **in-place DOM updates**: existing rows (`id="pos-row-{id}"`) only update the PnL cell (`id="pnl-cell-{id}"`) and call `_loadSparkline` to refresh chart data; no full rebuild, no flash; new rows are appended once, removed when position closes
-- `_loadSparkline(pos)` — async; fetches `/api/history?timeframe=1h&limit=100&zscore_window=20`; on first call creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z; on subsequent calls **updates chart data in-place** (`chart.data.datasets[0].data = ...; chart.update('none')`) — no destroy/recreate, no canvas flicker
+- `_loadSparkline(pos)` — async; fetches `/api/history` using `pos.timeframe`, `pos.candle_limit`, `pos.zscore_window` from the DB record (falls back to `1h`/`100`/`20`); on first call creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z; on subsequent calls **updates chart data in-place** (`chart.data.datasets[0].data = ...; chart.update('none')`) — no destroy/recreate, no canvas flicker
 - `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers
-- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePos(id,'market')`; `◎ S` → `_closePos(id,'smart')`; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
+- Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage + **timeframe + candle_limit + zscore_window** from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePos(id,'market')`; `◎ S` → `_closePos(id,'smart')`; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
+- **Row click** — clicking anywhere on a position row (except buttons/inputs/canvas) calls `_loadPosIntoAnalysis(id)` — same as `↗` button
+- `_updatePositionAnnotations()` — called after `runAnalyze()` and after `renderStrategyPositions()`; finds the DB position matching the currently analysed pair (sym1+sym2); sets `entryLine` vertical annotation on the spread chart (xMin/xMax = index of closest timestamp to `pos.opened_at`); updates `tpHigh`/`tpLow`/`slHigh`/`slLow` horizontal annotations from `pos.tp_zscore`/`pos.sl_zscore` (hides them if null)
 - `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table in Journal tab
 - `pollExecution` on terminal state → calls `loadAllPositions()` after 2s delay
 
@@ -285,7 +294,7 @@ Centralised OHLCV data feed shared by **all** consumers (WebSocket, monitor, wat
 ### SQLite Persistence (`backend/db.py`)
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
 - Three tables:
-  - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, tp_smart, opened_at
+  - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, tp_smart, timeframe, candle_limit, zscore_window, opened_at
   - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
   - `triggers` — standalone TP/SL orders, independent of positions; columns: symbol1/2, side, type (tp|sl), zscore, tp_smart, status (active|triggered|cancelled), created_at, triggered_at
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
@@ -339,15 +348,16 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 ## Tests (`tests/`)
 
-106 unit-тестов, все проходят ~1.7 сек. Запуск: `.venv/bin/pytest tests/ -v`
+121 unit-тест, все проходят ~1.8 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
 | `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
-| `test_db.py` | 23 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard |
+| `test_db.py` | 30 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window) |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
 | `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |
+| `test_watchlist.py` | 8 | WatchlistItem Pydantic model: defaults, custom fields, required fields validation |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
 

@@ -228,3 +228,83 @@ def test_get_closed_trades_limit(tmp_db):
 
     assert len(tmp_db.get_closed_trades(limit=3)) == 3
     assert len(tmp_db.get_closed_trades(limit=10)) == 5
+
+
+# ---------------------------------------------------------------------------
+# Analysis params (timeframe, candle_limit, zscore_window)
+# ---------------------------------------------------------------------------
+
+def test_save_analysis_params_defaults(tmp_db):
+    """timeframe/candle_limit/zscore_window default to 1h/500/20."""
+    pos_id = _save(tmp_db)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["timeframe"] == "1h"
+    assert pos["candle_limit"] == 500
+    assert pos["zscore_window"] == 20
+
+
+def test_save_analysis_params_custom(tmp_db):
+    """Custom timeframe/candle_limit/zscore_window are persisted."""
+    _save(tmp_db, timeframe="4h", candle_limit=1000, zscore_window=50)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["timeframe"] == "4h"
+    assert pos["candle_limit"] == 1000
+    assert pos["zscore_window"] == 50
+
+
+def test_save_analysis_params_5m_timeframe(tmp_db):
+    """5m timeframe is stored and retrieved correctly."""
+    _save(tmp_db, timeframe="5m", candle_limit=200, zscore_window=10)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["timeframe"] == "5m"
+
+
+def test_save_analysis_params_1d_timeframe(tmp_db):
+    """1d timeframe is stored and retrieved correctly."""
+    _save(tmp_db, timeframe="1d", candle_limit=300, zscore_window=30)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["timeframe"] == "1d"
+
+
+def test_get_open_positions_includes_analysis_params(tmp_db):
+    """get_open_positions() returns analysis params for each row."""
+    _save(tmp_db, "BTC/USDT:USDT", "ETH/USDT:USDT",
+          timeframe="4h", candle_limit=750, zscore_window=40)
+    _save(tmp_db, "BTC/USDT:USDT", "LTC/USDT:USDT",
+          timeframe="1h", candle_limit=500, zscore_window=20)
+
+    positions = tmp_db.get_open_positions()
+    assert len(positions) == 2
+
+    by_sym2 = {p["symbol2"]: p for p in positions}
+    assert by_sym2["ETH/USDT:USDT"]["timeframe"] == "4h"
+    assert by_sym2["ETH/USDT:USDT"]["candle_limit"] == 750
+    assert by_sym2["ETH/USDT:USDT"]["zscore_window"] == 40
+    assert by_sym2["LTC/USDT:USDT"]["timeframe"] == "1h"
+    assert by_sym2["LTC/USDT:USDT"]["candle_limit"] == 500
+    assert by_sym2["LTC/USDT:USDT"]["zscore_window"] == 20
+
+
+def test_analysis_params_independent_per_position(tmp_db):
+    """Each position stores its own analysis params independently."""
+    _save(tmp_db, "BTC/USDT:USDT", "ETH/USDT:USDT",
+          timeframe="5m", candle_limit=200, zscore_window=10)
+    _save(tmp_db, "BTC/USDT:USDT", "LTC/USDT:USDT",
+          timeframe="1d", candle_limit=1500, zscore_window=60)
+
+    eth_pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    ltc_pos = tmp_db.find_open_position("BTC/USDT:USDT", "LTC/USDT:USDT")
+
+    assert eth_pos["timeframe"] != ltc_pos["timeframe"]
+    assert eth_pos["candle_limit"] != ltc_pos["candle_limit"]
+    assert eth_pos["zscore_window"] != ltc_pos["zscore_window"]
+
+
+def test_analysis_params_not_in_closed_trades(tmp_db):
+    """closed_trades table does not carry timeframe/candle_limit/zscore_window."""
+    pos_id = _save(tmp_db, timeframe="4h", candle_limit=800, zscore_window=30)
+    tmp_db.close_position(pos_id, 51000.0, 3100.0, 25.0)
+    trade = tmp_db.get_closed_trades()[0]
+    assert "timeframe" not in trade or trade.get("timeframe") is None
+    assert "candle_limit" not in trade or trade.get("candle_limit") is None
+    assert "zscore_window" not in trade or trade.get("zscore_window") is None
