@@ -1915,7 +1915,21 @@ function initTooltips() {
     if (container._tooltipInit) return; // already attached
     container._tooltipInit = true;
 
-    container.addEventListener('mouseenter', () => {
+    // If container has a label child, trigger only on the label (not the input).
+    // Otherwise trigger on the whole container (e.g. stats cards).
+    const trigger = container.querySelector('label') || container;
+
+    trigger.style.cursor = trigger.tagName === 'LABEL' ? 'default' : '';
+
+    // Explicitly hide when hovering any form control inside the container
+    container.querySelectorAll('input, select, textarea').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        box.classList.remove('visible');
+        box.classList.remove('arrow-below');
+      });
+    });
+
+    trigger.addEventListener('mouseenter', () => {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const pad = 8;
@@ -1930,7 +1944,7 @@ function initTooltips() {
       box.classList.add('visible');
 
       const boxH  = box.offsetHeight;
-      const rect  = container.getBoundingClientRect();
+      const rect  = trigger.getBoundingClientRect();
 
       // Horizontal: centre on trigger, clamp to viewport
       let left = rect.left + rect.width / 2 - boxW / 2;
@@ -1953,7 +1967,7 @@ function initTooltips() {
       box.classList.toggle('arrow-below', !showAbove);
     });
 
-    container.addEventListener('mouseleave', () => {
+    trigger.addEventListener('mouseleave', () => {
       box.classList.remove('visible');
       box.classList.remove('arrow-below');
     });
