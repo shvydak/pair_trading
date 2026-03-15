@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-03-16 — Исправление двойного триггера, монитор 2с, синхронизация z-score
+
+### Исправленные баги
+
+**Backend:**
+- **Двойной триггер** — монитор мог сработать дважды за один цикл (два Telegram-сообщения, открытие обратной позиции на бирже). Причина: `closing_tags.add(tag)` мог пропуститься при исключении. Фикс: `db.set_position_triggers(pos_id, None, None, False)` вызывается до старта закрытия — следующий цикл видит `tp is None and sl is None → continue`; защита на уровне БД, не памяти
+- **Монитор использовал хардкод `timeframe="1h"` и `zscore_window=20`** вместо параметров позиции из БД. TP/SL срабатывали при неверном уровне z-score (особенно критично при торговле на 5m с большим окном). Фикс: монитор читает `pos.get("timeframe")` и `pos.get("zscore_window")` из каждой позиции
+
+**Frontend:**
+- **Z-score в строке позиции не совпадал с шапкой** — `_loadSparkline` делал запрос с `pos.candle_limit` (из БД), а WebSocket использовал `state.historyLimit` (текущий анализ). Разный размер датасета → разный mean/std → разный z. Фикс: если пара совпадает с текущим анализом, `_loadSparkline` читает данные из `state.historyData` напрямую (без лишнего запроса), гарантируя идентичный z-score
+- **TP/SL badge не появлялся сразу** после выставления — `_setTriggers()` не обновлял UI. Фикс: `loadAllPositions()` вызывается после успешного сохранения
+- **Badge не обновлялся при отмене** — in-place ветка `renderStrategyPositions` обновляла только PnL-ячейку. Фикс: добавлен `id="tpsl-badges-{id}"` + `_tpslBadgesHtml()` helper, обновляется in-place
+- **TP=0 нельзя было сохранить** — `parseFloat('0') || null` → null (JS falsy). Фикс: явная проверка на пустую строку
+- **Кнопка ◎ (smart) всегда серая** по умолчанию — CSS класс был хардкодным. Фикс: класс зависит от `pos.tp_smart`; для новых позиций без TP `pos.tp_smart` устанавливается `true` (дефолтный режим)
+
+### Что изменено
+
+**Backend:**
+- `monitor_position_triggers` полностью переписан: больше не читает из `price_cache`, делает прямые `client.fetch_ohlcv` с маленьким лимитом (`max(zscore_window * 3, 60)`) каждые **2 с** вместо 5 с. `monitored_keys` и все вызовы `price_cache.subscribe/unsubscribe` в мониторе удалены
+- `PriceCache.FEED_INTERVAL`: 5 с → 2 с — watchlist и WebSocket обновляются вдвое чаще
+- WebSocket `/ws/stream`: `asyncio.sleep(5)` → `asyncio.sleep(2)`
+- Новый endpoint `GET /api/executions` — список всех активных контекстов исполнения (для frontend-мониторинга прогресса)
+- `order_manager.ExecContext.to_dict()` теперь включает `close_db_id`
+
+**Frontend:**
+- Z-score в строке позиции обновляется в реальном времени: `updateLiveData()` при каждом WS-сообщении обновляет `z-cur-{id}` для совпадающей пары — синхронно с шапкой
+- Удалена вкладка **«Ордера TP/SL»** (была источником путаницы: TP/SL позиций видны в строке позиции, алерты — во вкладке Alerts)
+- `_toggleTpSmart` автоматически сохраняет изменение если TP уже выставлен — нет нужды перевыставлять вручную
+- Прогресс smart-исполнения показывается inline в строке позиции (`id="exec-status-{id}"`)
+- Тосты: `toast_tp_hit`, `toast_sl_hit`, `toast_exec_closed`, `toast_exec_rollback`, `toast_exec_failed`
+
+### Тесты
+
+- `test_db.py`: +1 тест — `test_set_position_triggers_clear_all_resets_tp_smart` — паттерн анти-двойного-триггера: вызов `(None, None, False)` обнуляет и tp_zscore, и sl_zscore, и tp_smart
+
+### Итого тестов: 195
+
+---
+
 ## 2026-03-15 — Notification center + кнопка Alert в панели настройки пары
 
 ### Что добавлено

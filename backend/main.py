@@ -84,7 +84,7 @@ class PriceCache:
     Entry = {"price1": pd.Series, "price2": pd.Series}
     """
 
-    FEED_INTERVAL = 5  # seconds between refreshes
+    FEED_INTERVAL = 2  # seconds between refreshes
 
     def __init__(self) -> None:
         self._store: dict[tuple, dict] = {}
@@ -273,21 +273,18 @@ _MONITOR_TIMEFRAME = "1h"
 
 async def monitor_position_triggers() -> None:
     """
-    Background task: check TP/SL triggers every 5 s.
+    Background task: check TP/SL/alert triggers every 2 s.
 
     Two sources of triggers:
-    1. Legacy: tp_zscore/sl_zscore columns on open_positions (backward compat)
+    1. Legacy: tp_zscore/sl_zscore columns on open_positions
     2. New: rows in the `triggers` table with status='active'
 
-    Both use the same price_cache for z-score calculation.
-    Manages cache subscriptions keyed by a string tag:
-      - "pos_{id}" for legacy position triggers
-      - "trig_{id}" for standalone triggers
+    Fetches OHLCV directly (not via price_cache) with a small limit so it
+    can run every 2 s without hitting Binance rate limits.
     """
-    await asyncio.sleep(15)  # wait for startup + first cache fill
-    monitored_keys: dict[str, tuple] = {}  # tag → cache_key
-    closing_tags: set[str] = set()          # tags currently being closed (smart)
-    alert_states: dict[str, str] = {}       # tag → "idle" | "alerted" (hysteresis)
+    await asyncio.sleep(15)  # wait for startup
+    closing_tags: set[str] = set()     # tags currently being closed (smart)
+    alert_states: dict[str, str] = {}  # tag → "idle" | "alerted" (hysteresis)
 
     while True:
         try:
@@ -298,7 +295,7 @@ async def monitor_position_triggers() -> None:
             for pos in positions:
                 tp = pos.get("tp_zscore")
                 sl = pos.get("sl_zscore")
-                if not tp and not sl:
+                if tp is None and sl is None:
                     continue
 
                 pos_id = pos["id"]
@@ -308,25 +305,17 @@ async def monitor_position_triggers() -> None:
                 if tag in closing_tags:
                     continue  # smart close already in flight
 
-                # Use position's own timeframe/zscore_window (matches user's analysis)
                 pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
                 pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-
-                # Subscribe to cache on first encounter
-                if tag not in monitored_keys:
-                    limit = max(pos_zw * 3, 60)
-                    key = price_cache.subscribe(
-                        pos["symbol1"], pos["symbol2"], pos_tf, limit
-                    )
-                    monitored_keys[tag] = key
-
-                entry = price_cache.get(monitored_keys[tag])
-                if entry is None:
-                    continue  # cache not yet populated, skip this cycle
+                limit = max(pos_zw * 3, 60)
 
                 try:
-                    p1 = entry["price1"]
-                    p2 = entry["price2"]
+                    df1, df2 = await asyncio.gather(
+                        client.fetch_ohlcv(pos["symbol1"], pos_tf, limit),
+                        client.fetch_ohlcv(pos["symbol2"], pos_tf, limit),
+                    )
+                    p1, p2 = df1["close"], df2["close"]
+                    p1, p2 = p1.align(p2, join="inner")
                     hedge = pos["hedge_ratio"]
                     spread = strategy.calculate_spread(p1, p2, hedge)
                     zscore_series = strategy.calculate_zscore(spread, window=pos_zw)
@@ -335,14 +324,14 @@ async def monitor_position_triggers() -> None:
                     side = pos["side"]
                     trigger = None
                     if side == "long_spread":
-                        if tp and current_z >= -tp:
+                        if tp is not None and current_z >= -tp:
                             trigger = "tp"
-                        elif sl and current_z <= -sl:
+                        elif sl is not None and current_z <= -sl:
                             trigger = "sl"
                     else:  # short_spread
-                        if tp and current_z <= tp:
+                        if tp is not None and current_z <= tp:
                             trigger = "tp"
-                        elif sl and current_z >= sl:
+                        elif sl is not None and current_z >= sl:
                             trigger = "sl"
 
                     if trigger:
@@ -367,7 +356,6 @@ async def monitor_position_triggers() -> None:
                                 f"Removing stale DB record."
                             )
                             db.delete_open_position(pos_id)
-                            price_cache.unsubscribe(monitored_keys.pop(tag))
                             current_tags.discard(tag)
                             continue
 
@@ -389,9 +377,6 @@ async def monitor_position_triggers() -> None:
                                 f"AUTO-CLOSE {trigger.upper()} | pos={pos_id} | "
                                 f"pnl={result['pnl']}"
                             )
-                        # Unsubscribe immediately after market close
-                        if not use_smart:
-                            price_cache.unsubscribe(monitored_keys.pop(tag))
                             current_tags.discard(tag)
                 except Exception as e:
                     log.warning(f"monitor: error checking pos {pos_id}: {e}")
@@ -407,23 +392,17 @@ async def monitor_position_triggers() -> None:
                     continue
 
                 sym1, sym2 = trig["symbol1"], trig["symbol2"]
-
-                # Subscribe to cache on first encounter (use trigger's own params)
                 trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
                 trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                if tag not in monitored_keys:
-                    limit = max(trig_zw * 3, 60)
-                    key = price_cache.subscribe(sym1, sym2, trig_tf, limit)
-                    monitored_keys[tag] = key
-
-                entry = price_cache.get(monitored_keys[tag])
-                if entry is None:
-                    continue
+                limit = max(trig_zw * 3, 60)
 
                 try:
-                    p1 = entry["price1"]
-                    p2 = entry["price2"]
-                    # For standalone triggers we need a hedge ratio from the data
+                    df1, df2 = await asyncio.gather(
+                        client.fetch_ohlcv(sym1, trig_tf, limit),
+                        client.fetch_ohlcv(sym2, trig_tf, limit),
+                    )
+                    p1, p2 = df1["close"], df2["close"]
+                    p1, p2 = p1.align(p2, join="inner")
                     hedge = strategy.calculate_hedge_ratio(p1, p2)
                     spread = strategy.calculate_spread(p1, p2, hedge)
                     zscore_series = strategy.calculate_zscore(spread, window=trig_zw)
@@ -450,7 +429,6 @@ async def monitor_position_triggers() -> None:
                         continue  # never close position for alert type
 
                     fired = False
-
                     if trig_type == "tp":
                         if side == "long_spread" and current_z >= -trig_z:
                             fired = True
@@ -471,7 +449,6 @@ async def monitor_position_triggers() -> None:
                         await tg_bot.notify_trigger_fired(
                             sym1, sym2, side, trig_type, current_z, trig_z,
                         )
-                        # Safety: check live positions on exchange
                         live_positions = await client.get_positions()
                         live_syms = {p["symbol"] for p in live_positions if p.get("size")}
                         if sym1 not in live_syms and sym2 not in live_syms:
@@ -480,11 +457,9 @@ async def monitor_position_triggers() -> None:
                                 f"no live positions found — cancelling trigger."
                             )
                             db.trigger_fired(trig_id)
-                            price_cache.unsubscribe(monitored_keys.pop(tag))
                             current_tags.discard(tag)
                             continue
 
-                        # Find DB position for this pair
                         db_pos = db.find_open_position(sym1, sym2)
                         if db_pos:
                             use_smart = trig_type == "tp" and bool(trig.get("tp_smart"))
@@ -509,20 +484,13 @@ async def monitor_position_triggers() -> None:
 
                         db.trigger_fired(trig_id)
                         if not (db_pos and trig_type == "tp" and bool(trig.get("tp_smart"))):
-                            price_cache.unsubscribe(monitored_keys.pop(tag))
                             current_tags.discard(tag)
                 except Exception as e:
                     log.warning(f"monitor: error checking trigger {trig_id}: {e}")
 
             # ── Cleanup ─────────────────────────────────────────────────────
-            # Remove closing_tags that are no longer active
             closing_tags &= current_tags
-
-            # Unsubscribe tags that were closed/deleted/cancelled externally
-            for t in list(monitored_keys.keys()):
-                if t not in current_tags:
-                    price_cache.unsubscribe(monitored_keys.pop(t))
-                    alert_states.pop(t, None)
+            alert_states = {k: v for k, v in alert_states.items() if k in current_tags}
 
         except Exception as e:
             log.warning(f"monitor: outer error: {e}")
@@ -536,7 +504,7 @@ async def monitor_position_triggers() -> None:
                 active_executions.pop(eid, None)
                 _exec_created_at.pop(eid, None)
 
-        await asyncio.sleep(5)  # same cadence as price_cache refresh
+        await asyncio.sleep(2)
 
 
 async def lifespan(app: FastAPI):
@@ -1540,7 +1508,7 @@ async def websocket_stream(websocket: WebSocket):
                     await websocket.send_text(json.dumps(payload))
                 except Exception as inner_e:
                     await websocket.send_text(json.dumps({"error": str(inner_e)}))
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
     except WebSocketDisconnect:
         pass

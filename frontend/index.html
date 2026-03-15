@@ -2927,16 +2927,29 @@ async function _loadSparkline(pos) {
   const zLabel = document.getElementById(`z-cur-${pos.id}`);
   if (!canvas) return;
   try {
-    const params = new URLSearchParams({
-      symbol1: pos.symbol1, symbol2: pos.symbol2,
-      timeframe:    pos.timeframe     || '1h',
-      limit:        pos.candle_limit  || 100,
-      zscore_window: pos.zscore_window || 20,
-    });
-    const res = await fetch(`${API}/api/history?${params}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
+    // When this position matches the currently analyzed pair, reuse historyData
+    // so the z-score label is identical to the header value.
+    const normSym = s => s.split(':')[0].replace('/', '').toUpperCase();
+    const curSym1 = document.getElementById('sym1-input')?.value?.toUpperCase();
+    const curSym2 = document.getElementById('sym2-input')?.value?.toUpperCase();
+    const isCurrent = state.historyData?.zscore?.length &&
+      normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2;
+
+    let zscores;
+    if (isCurrent) {
+      zscores = (state.historyData.zscore || []).filter(v => v !== null && v !== undefined);
+    } else {
+      const params = new URLSearchParams({
+        symbol1: pos.symbol1, symbol2: pos.symbol2,
+        timeframe:    pos.timeframe     || '1h',
+        limit:        pos.candle_limit  || 100,
+        zscore_window: pos.zscore_window || 20,
+      });
+      const res = await fetch(`${API}/api/history?${params}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
+    }
     if (zscores.length === 0) return;
 
     const currentZ = zscores[zscores.length - 1];
@@ -3790,6 +3803,20 @@ function updateLiveData(msg) {
     if (z <= -2)      zEl.classList.add('text-green-400');
     else if (z >= 2)  zEl.classList.add('text-red-400');
     else              zEl.classList.add('text-yellow-400');
+    // Update z-score label in matching position rows in real-time
+    const normSym = s => s.split(':')[0].replace('/', '').toUpperCase();
+    const curSym1 = document.getElementById('sym1-input')?.value?.toUpperCase();
+    const curSym2 = document.getElementById('sym2-input')?.value?.toUpperCase();
+    for (const pos of Object.values(_stratPosMap)) {
+      if (normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2) {
+        const zLabel = document.getElementById(`z-cur-${pos.id}`);
+        if (zLabel) {
+          const zColor = Math.abs(z) >= 2.5 ? '#f85149' : Math.abs(z) >= 1.5 ? '#d29922' : '#8b949e';
+          zLabel.textContent = (z >= 0 ? '+' : '') + fmt(z, 2);
+          zLabel.style.color = zColor;
+        }
+      }
+    }
   }
   if (syncLiveHistory(msg)) {
     refreshLiveCharts();

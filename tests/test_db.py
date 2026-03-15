@@ -212,6 +212,18 @@ def test_set_position_triggers_tp_smart_default_false(tmp_db):
     assert not pos["tp_smart"]
 
 
+def test_set_position_triggers_clear_all_resets_tp_smart(tmp_db):
+    """Clearing triggers (None, None, False) also resets tp_smart — prevents double-trigger re-fire."""
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0, tp_smart=True)
+    # Pattern used by monitor before starting close to prevent double-trigger
+    tmp_db.set_position_triggers(pos_id, tp_zscore=None, sl_zscore=None, tp_smart=False)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["tp_zscore"] is None
+    assert pos["sl_zscore"] is None
+    assert not pos["tp_smart"]
+
+
 # ---------------------------------------------------------------------------
 # get_closed_trades
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ pair_trading/
 ├── tests/
 │   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
 │   ├── test_strategy.py     # 40 tests — all strategy math
-│   ├── test_db.py           # 30 tests — SQLite persistence layer
+│   ├── test_db.py           # 48 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
 │   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
 │   ├── test_triggers.py     # 40 tests — triggers table CRUD
@@ -93,8 +93,9 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | POST | `/api/triggers` | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct}` |
 | DELETE | `/api/triggers/{id}` | Cancel an active trigger |
 | GET | `/api/alerts/recent` | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center |
+| GET | `/api/executions` | All active execution contexts (for inline progress monitoring in position rows) |
 | POST | `/api/watchlist/data` | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair |
-| WS | `/ws/stream` | Live spread/price/Z-score updates every 5 seconds for the active analysed pair |
+| WS | `/ws/stream` | Live spread/price/Z-score updates every 2 seconds for the active analysed pair |
 
 ### `GET /api/pre_trade_check` — query params
 `symbol1`, `symbol2`, `size_usd`, `hedge_ratio`, `sizing_method`, `atr1`, `atr2`, `leverage`
@@ -188,8 +189,9 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - **Backtest mode** (`#backtest-mode`): charts с сигналами + правая панель с контролами + таблица сделок
 - **Bottom panel** (`#bottom-panel`): resizable (drag handle), три вкладки:
   - **Позиции** (`tab-positions`): Strategy Positions + Exchange Positions
-  - **Ордера TP/SL** (`tab-orders`): активные triggers из `/api/triggers`, кнопка ✕
+  - **🔔 Alerts** (`tab-alerts`): alert-триггеры из `/api/triggers` (только type=alert)
   - **Журнал** (`tab-journal`): закрытые сделки
+  - ~~Ордера TP/SL~~ — вкладка удалена; TP/SL позиции отображаются inline в строке позиции (badges)
 
 ### Режимы
 - `setMode('trade'|'backtest')` — переключает layout, сохраняет в `localStorage['pt_mode']`
@@ -228,9 +230,10 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - Two sections: **Strategy Positions** (DB+live enriched), **Exchange Positions** (raw Binance); Trade Journal in bottom panel Journal tab
 - `loadAllPositions()` — single call to `GET /api/all_positions` + `GET /api/balance`; renders both strategy and exchange tables; replaces old separate `loadStrategyPositions()` + `refreshPositions()` calls
 - **Auto-refresh**: `setInterval(() => loadAllPositions(), 5000)` — positions update every 5 s automatically
-- `renderStrategyPositions(positions)` — **in-place DOM updates**: existing rows (`id="pos-row-{id}"`) only update the PnL cell (`id="pnl-cell-{id}"`) and call `_loadSparkline` to refresh chart data; no full rebuild, no flash; new rows are appended once, removed when position closes
-- `_loadSparkline(pos)` — async; fetches `/api/history` using `pos.timeframe`, `pos.candle_limit`, `pos.zscore_window` from the DB record (falls back to `1h`/`100`/`20`); on first call creates Chart.js sparkline (last 50 z-score points, no axes) + colors current Z; on subsequent calls **updates chart data in-place** (`chart.data.datasets[0].data = ...; chart.update('none')`) — no destroy/recreate, no canvas flicker
-- `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers
+- `renderStrategyPositions(positions)` — **in-place DOM updates**: existing rows update PnL cell (`id="pnl-cell-{id}"`), TP/SL badges (`id="tpsl-badges-{id}"`), exec-status (`id="exec-status-{id}"`), and call `_loadSparkline`; no full rebuild, no flash
+- `_loadSparkline(pos)` — async; **if the position's pair matches the current analysis** (`normSym(pos.symbol1) === curSym1`), reads z-scores from `state.historyData` directly (no API call) — guarantees same value as the header; otherwise fetches `/api/history` using `pos.timeframe`/`pos.candle_limit`/`pos.zscore_window` from DB. Creates Chart.js sparkline on first call; updates data in-place on subsequent calls
+- `updateLiveData(msg)` — on each WebSocket message also updates `z-cur-{id}` for the matching position row in real-time (same cadence as the header, every 2 s)
+- `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers; `pos.tp_smart` defaults to `true` for positions without TP yet set
 - Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage + **timeframe + candle_limit + zscore_window** from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePos(id,'market')`; `◎ S` → `_closePos(id,'smart')`; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
 - **Row click** — clicking anywhere on a position row (except buttons/inputs/canvas) calls `_loadPosIntoAnalysis(id)` — same as `↗` button
 - `_updatePositionAnnotations()` — called after `runAnalyze()` and after `renderStrategyPositions()`; finds the DB position matching the currently analysed pair (sym1+sym2); sets `entryLine` vertical annotation on the spread chart (xMin/xMax = index of closest timestamp to `pos.opened_at`); updates `tpHigh`/`tpLow`/`slHigh`/`slLow` horizontal annotations from `pos.tp_zscore`/`pos.sl_zscore` (hides them if null)
@@ -267,13 +270,15 @@ Public endpoints (symbols, history, backtest) work without API keys.
 Private endpoints (positions, balance, trade) require valid keys.
 
 ## Price Cache (`backend/main.py` — class `PriceCache`)
-Centralised OHLCV data feed shared by **all** consumers (WebSocket, monitor, watchlist).
+Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
 
 > **АРХИТЕКТУРНЫЙ ПРИНЦИП — соблюдать всегда:**
-> Любой компонент, которому нужны текущие цены/spread/z-score, **подписывается на PriceCache** и читает из него.
-> Прямые вызовы `client.fetch_ohlcv()` допустимы только в двух случаях:
+> WebSocket и watchlist читают live-данные из PriceCache.
+> Монитор TP/SL (`monitor_position_triggers`) делает **прямые** `fetch_ohlcv` каждые 2 с — он намеренно NOT использует PriceCache, чтобы не быть ограниченным его циклом обновления.
+> Прямые вызовы `client.fetch_ohlcv()` допустимы только в трёх случаях:
 > 1. Исторические данные для анализа/бэктеста (`/api/history`, `/api/backtest`)
 > 2. Первичное заполнение кэша, если он ещё пуст (seed на первом вызове)
+> 3. Монитор TP/SL — маленькие запросы (`max(zw*3, 60)` свечей) каждые 2 с
 > **Никогда не создавай новые polling-таймеры на фронтенде, делающие прямые запросы к `/api/history` для получения live-данных — всегда используй `/api/watchlist/data` или WebSocket.**
 
 - **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
@@ -281,9 +286,9 @@ Centralised OHLCV data feed shared by **all** consumers (WebSocket, monitor, wat
 - `price_cache.subscribe(sym1, sym2, tf, limit) → key` — registers pair; reference-counted
 - `price_cache.unsubscribe(key)` — decrements ref; entry removed when count reaches 0
 - `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
-- `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every 5 s via `fetch_ohlcv × 2`
-- **WebSocket** (`/ws/stream`): subscribes on connect, reads from cache each 5 s loop, unsubscribes in `finally`
-- **monitor_position_triggers**: maintains `monitored_keys: dict[tag → cache_key]`; tags are `"pos_{id}"` (legacy) or `"trig_{id}"` (standalone); subscribes per trigger, unsubscribes on close/cancel
+- `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every **2 s** (`FEED_INTERVAL = 2`) via `fetch_ohlcv × 2`
+- **WebSocket** (`/ws/stream`): subscribes on connect, reads from cache each **2 s** loop, unsubscribes in `finally`
+- **monitor_position_triggers**: does **NOT** use PriceCache; fetches OHLCV directly every 2 s with small limit `max(zscore_window * 3, 60)`; no `monitored_keys` dict
 - **Watchlist** (`POST /api/watchlist/data`): maintains `_watchlist_keys: dict[tag → cache_key]` at module level; subscribes each pair on first call, unsubscribes pairs removed from watchlist; frontend polls every 5 s — one request for the whole watchlist; on cache miss seeds `price_cache._store[key]` directly before returning
 
 ## Logging & Persistence
@@ -330,7 +335,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 ## Pre-trade Check (`GET /api/pre_trade_check`)
 - Balance check formula: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Order of validation: balance → min_notional → lot_size → leverage (informational)
-- monitor_position_triggers runs every **5 s** (same as price_cache refresh) — every cache update is checked immediately
+- monitor_position_triggers runs every **2 s** — direct `fetch_ohlcv` with small limit; uses `pos.timeframe`/`pos.zscore_window` from DB (not hardcoded constants)
 - Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
 
 ## Telegram Bot (`telegram_bot.py`)
@@ -407,15 +412,18 @@ await tg_bot.stop()                            # stop polling + close session
 - **PnL showing positive when it should be negative**: Frontend format bug — `(pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2)`. If you see wrong sign, check this pattern in `renderStrategyPositions`.
 - **Sparkline flashing every 5 s**: Caused by `chart.destroy() + new Chart()` on each refresh. Fix: use `chart.data.datasets[0].data = ...; chart.update('none')` when the Chart.js instance already exists on the canvas.
 - **`_do_smart_close_trigger` TypeError (FIXED)**: Was passing `sym1=`, `side1=`, `qty1=` kwargs to `ExecContext` dataclass which expects `exec_id=`, `leg1=LegState(...)`, `leg2=LegState(...)`. Fixed — exec_id is now created before ctx, spread_side passed correctly.
+- **Double-trigger (FIXED)**: Monitor could fire TP/SL twice — sending duplicate Telegram messages and opening a reverse position. Root cause: `closing_tags.add(tag)` could be skipped on exception, and `closing_tags &= current_tags` cleanup could prematurely remove the guard. Fix: `db.set_position_triggers(pos_id, None, None, False)` called immediately before starting close — next cycle sees `tp is None and sl is None → continue`; DB-level guard, not memory-level.
+- **Monitor used hardcoded timeframe/zscore_window (FIXED)**: TP/SL fired at wrong z-score levels when position was opened with non-default params (e.g. 5m / window=50). Fixed: monitor reads `pos.get("timeframe")` and `pos.get("zscore_window")` from each DB record.
+- **Z-score discrepancy header vs position row (FIXED)**: `_loadSparkline` fetched with `pos.candle_limit` (DB), WebSocket used `state.historyLimit` (analysis) → different dataset → different mean/std → different z. Fixed: when pair matches current analysis, sparkline reads from `state.historyData` directly.
 
 ## Tests (`tests/`)
 
-194 unit-тестов, все проходят ~3.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
+195 unit-тестов, все проходят ~3.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
 | `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
-| `test_db.py` | 46 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts |
+| `test_db.py` | 48 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern** |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
 | `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |
