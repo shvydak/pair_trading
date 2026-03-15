@@ -2532,6 +2532,9 @@ function renderStrategyPositions(positions) {
   const currentIds = new Set(positions.map(p => p.id));
   const renderedIds = new Set([...tbody.querySelectorAll('tr[id^="pos-row-"]')].map(r => +r.id.replace('pos-row-', '')));
 
+  // Remove empty-state row if positions have arrived
+  tbody.querySelectorAll('tr:not([id^="pos-row-"])').forEach(r => r.remove());
+
   // Remove rows for positions that no longer exist
   renderedIds.forEach(id => {
     if (!currentIds.has(id)) document.getElementById(`pos-row-${id}`)?.remove();
