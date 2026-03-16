@@ -733,6 +733,7 @@
     if (lbl) {
       const connected = document.getElementById('ws-dot').classList.contains('bg-green-500');
       lbl.textContent = connected ? t('ws_live') : t('ws_disconnected');
+      lbl.style.color = connected ? C_GREEN : C_RED;
     }
     updatePairContext();
     if (state.apiStatus) renderApiStatus(state.apiStatus);
@@ -769,6 +770,16 @@
       <span id="ws-label" class="text-muted text-xs" data-i18n="ws_disconnected">Disconnected</span>
     </div>
     <div class="text-xs text-muted" id="last-update">-</div>
+    <!-- Binance status (compact) -->
+    <div class="flex items-center gap-1.5 border-l border-border pl-3">
+      <div id="api-status-content" class="flex items-center gap-1.5 text-xs text-muted">…</div>
+      <button onclick="checkApiStatus()" id="api-refresh-btn" title="Refresh"
+        class="text-muted hover:text-white transition rounded p-0.5">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.06-3.39L10 6h5V1l-1.35 1.35z"/>
+        </svg>
+      </button>
+    </div>
     <!-- Guide button -->
     <button onclick="openGuide()" class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border border-border text-muted hover:border-accent hover:text-accent transition">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
@@ -833,6 +844,17 @@
         <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_coint">p-val</span>
         <span id="stat-coint-pval" class="text-base font-bold text-white leading-none">-</span>
         <div class="tooltip-box" data-i18n-html="tip_coint"></div>
+      </div>
+      <!-- Long / Short buttons -->
+      <div class="ml-auto flex gap-1.5 items-center shrink-0">
+        <button id="long-btn" onclick="executeTrade('open','long_spread')" disabled
+          class="px-3 py-1.5 rounded text-sm font-semibold border border-green text-green hover:bg-green hover:text-surface transition opacity-40">
+          <span data-i18n="long_spread">Long</span>
+        </button>
+        <button id="short-btn" onclick="executeTrade('open','short_spread')" disabled
+          class="px-3 py-1.5 rounded text-sm font-semibold border border-red text-red hover:bg-red hover:text-surface transition opacity-40">
+          <span data-i18n="short_spread">Short</span>
+        </button>
       </div>
     </div>
 
@@ -1112,44 +1134,9 @@
       </div>
 
       <div id="trade-info" class="text-xs text-muted mb-3" data-i18n="trade_hint">Run Analyze first to enable trading.</div>
-      <div class="flex flex-col gap-2">
-        <div class="tooltip-container">
-          <button id="long-btn" onclick="executeTrade('open','long_spread')" disabled
-            class="w-full py-2 rounded-md text-sm font-semibold border border-green text-green hover:bg-green hover:text-surface transition flex items-center justify-center gap-1 opacity-40">
-            <span data-i18n="long_spread">Long Spread</span>
-            <span class="text-xs text-muted font-normal ml-1" data-i18n="long_spread_sub">(Buy S1 / Sell S2)</span>
-          </button>
-          <div class="tooltip-box" data-i18n-html="tip_long_spread"></div>
-        </div>
-        <div class="tooltip-container">
-          <button id="short-btn" onclick="executeTrade('open','short_spread')" disabled
-            class="w-full py-2 rounded-md text-sm font-semibold border border-red text-red hover:bg-red hover:text-surface transition flex items-center justify-center gap-1 opacity-40">
-            <span data-i18n="short_spread">Short Spread</span>
-            <span class="text-xs text-muted font-normal ml-1" data-i18n="short_spread_sub">(Sell S1 / Buy S2)</span>
-          </button>
-          <div class="tooltip-box" data-i18n-html="tip_short_spread"></div>
-        </div>
-        <button id="close-btn" onclick="executeTrade('close','long_spread')" disabled
-          class="w-full py-2 rounded-md text-sm font-semibold border border-border text-muted hover:border-accent hover:text-accent transition opacity-40">
-          <span data-i18n="close_all">Close All Positions</span>
-        </button>
-      </div>
 
     </section>
 
-    <!-- Binance Connection Status -->
-    <section class="bg-card rounded-lg p-4 border border-border">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-xs font-semibold text-muted uppercase tracking-wider" data-i18n="binance_section">Binance</h3>
-        <button onclick="checkApiStatus()" id="api-refresh-btn" title="Refresh"
-          class="text-muted hover:text-white transition rounded p-0.5">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.06-3.39L10 6h5V1l-1.35 1.35z"/>
-          </svg>
-        </button>
-      </div>
-      <div id="api-status-content" class="text-xs text-muted" data-i18n="api_checking">Checking…</div>
-    </section>
 
   </div> <!-- /trading-panel -->
 
@@ -4013,7 +4000,7 @@ function updateSizePreview() {
 function enableTrading(yes, sym1, sym2) {
   const pair = getCurrentPairMeta();
   const canTrade = yes && !!pair.tradeable;
-  ['long-btn','short-btn','close-btn'].forEach(id => {
+  ['long-btn','short-btn'].forEach(id => {
     const btn = document.getElementById(id);
     btn.disabled = !canTrade;
     btn.classList.toggle('opacity-40', !canTrade);
@@ -4397,6 +4384,7 @@ function setWsStatus(connected) {
   const lbl = document.getElementById('ws-label');
   dot.className = 'w-2 h-2 rounded-full inline-block ' + (connected ? 'bg-green-500 pulse' : 'bg-red-500');
   lbl.textContent = connected ? t('ws_live') : t('ws_disconnected');
+  lbl.style.color = connected ? C_GREEN : C_RED;
 }
 
 // ------------------------------------------------------------------ //
@@ -4450,36 +4438,19 @@ function renderApiStatus(data) {
   };
 
   if (data.connected) {
-    const balances = data.balances || {};
-    el.innerHTML = `
-      <div class="flex items-center gap-1.5 mb-2.5">
-        <span class="w-2 h-2 rounded-full bg-green-400 shrink-0"></span>
-        <span class="text-green-400 font-medium">${t('api_connected')}</span>
-      </div>
-      <div class="grid grid-cols-1 gap-2">
-        ${renderBalanceRow('USDT', balances.USDT)}
-        ${renderBalanceRow('USDC', balances.USDC)}
-      </div>`;
+    const b = data.balances || {};
+    const usdt = b.USDT?.free ?? null;
+    const usdc = b.USDC?.free ?? null;
+    const dot = `<span style="width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;flex-shrink:0"></span>`;
+    const bal = (label, val) =>
+      `<span class="text-muted">${label}</span><span class="font-mono" style="color:#e6edf3">$${fmt(val, 0)}</span>`;
+    el.innerHTML = `${dot}${bal('USDT·', usdt)}&nbsp;${bal('USDC·', usdc)}`;
   } else if (data.reason === 'no_keys') {
-    el.innerHTML = `
-      <div class="flex items-center gap-1.5 mb-2">
-        <span class="w-2 h-2 rounded-full bg-gray-500 shrink-0"></span>
-        <span class="text-muted">${t('api_no_keys')}</span>
-      </div>
-      <div class="text-muted/70 leading-relaxed">${t('api_no_keys_hint')}</div>`;
+    el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#6e7681;display:inline-block"></span><span class="text-muted">Binance</span>`;
   } else if (data.reason === 'auth_error') {
-    el.innerHTML = `
-      <div class="flex items-center gap-1.5 mb-2">
-        <span class="w-2 h-2 rounded-full bg-red-400 shrink-0"></span>
-        <span class="text-red-400">${t('api_auth_error')}</span>
-      </div>
-      <div class="text-red-300/70 leading-relaxed break-all">${data.message || ''}</div>`;
+    el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#f85149;display:inline-block"></span><span style="color:#f85149">${t('api_auth_error')}</span>`;
   } else {
-    el.innerHTML = `
-      <div class="flex items-center gap-1.5">
-        <span class="w-2 h-2 rounded-full bg-yellow-500 shrink-0"></span>
-        <span class="text-yellow-400">${t('api_network_error')}</span>
-      </div>`;
+    el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#d29922;display:inline-block"></span><span style="color:#d29922">${t('api_network_error')}</span>`;
   }
 }
 
