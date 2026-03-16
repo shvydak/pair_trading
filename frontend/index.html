@@ -77,6 +77,10 @@
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
     .pulse { animation: pulse 1.5s ease-in-out infinite; }
 
+    /* exec popup */
+    @keyframes slideUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+    .exec-popup-card { animation: slideUp 0.2s ease-out; pointer-events: auto; }
+
     /* number color helpers */
     .pos { color: #3fb950; }
     .neg { color: #f85149; }
@@ -1130,19 +1134,6 @@
         </button>
       </div>
 
-      <!-- Execution monitor (appears during smart execution) -->
-      <div id="exec-monitor" class="hidden mt-3 bg-surface rounded-md p-3 border border-border text-xs">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-muted font-semibold uppercase tracking-wider text-[10px]" data-i18n="exec_monitor">Execution Monitor</span>
-          <button onclick="cancelCurrentExecution()" class="text-red-400 hover:text-red-300 text-[10px] uppercase tracking-wide transition" data-i18n="exec_cancel">Cancel</button>
-        </div>
-        <div class="flex items-center gap-2 mb-2">
-          <span id="exec-status-badge" class="px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-900 text-yellow-300">PLACING</span>
-          <span id="exec-id-label" class="text-[10px] text-muted font-mono"></span>
-        </div>
-        <div id="exec-legs" class="space-y-1 mb-2 font-mono text-[11px]"></div>
-        <div id="exec-events" class="space-y-0.5 max-h-28 overflow-y-auto text-[10px] text-muted font-mono border-t border-border pt-1.5"></div>
-      </div>
     </section>
 
     <!-- Binance Connection Status -->
@@ -1383,8 +1374,11 @@
   </div>
 </div>
 
+<!-- Execution Popups Container -->
+<div id="exec-popups-container" class="fixed bottom-4 z-[200] flex flex-row flex-wrap gap-3 items-end pointer-events-none" style="left:50%;transform:translateX(-50%);max-width:calc(100vw - 32px)"></div>
+
 <!-- Toast notification -->
-<div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
+<div id="toast" class="fixed bottom-6 right-6 z-[210] hidden">
   <div class="bg-card border border-border rounded-lg px-4 py-3 shadow-xl text-sm flex items-center gap-2 min-w-48">
     <span id="toast-icon"></span>
     <span id="toast-msg"></span>
@@ -2709,96 +2703,306 @@ function _formatDuration(openedAt) {
 
 
 // ------------------------------------------------------------------ //
-//  Smart close execution progress (monitor-triggered)
+//  Execution Popup System
 // ------------------------------------------------------------------ //
-let _posExecMap = {};      // posId (number) → exec data object
-let _execPollTimer = null;
+const _execPopups        = new Map(); // execId → { card, minimized, data, countdownTimer }
+const _execHistory       = new Map(); // execId → finalData (for reopen in same session)
+const _execHistoryByDbId = new Map(); // db_id  → execId (for positions/journal 📋 btn)
+let   _posExecMap        = {};        // posId  → exec data (position row indicators)
+let   _execPollTimer     = null;
+
+const _EXEC_STATUS_COLORS = {
+  placing:    { badge: 'bg-yellow-900 text-yellow-300', dot: 'text-yellow-400' },
+  passive:    { badge: 'bg-blue-900 text-blue-300',     dot: 'text-blue-400'   },
+  aggressive: { badge: 'bg-orange-900 text-orange-300', dot: 'text-orange-400' },
+  forcing:    { badge: 'bg-red-900 text-red-300',       dot: 'text-red-400'    },
+  open:       { badge: 'bg-green-900 text-green-300',   dot: 'text-green-400'  },
+  rollback:   { badge: 'bg-red-900 text-red-300',       dot: 'text-red-400'    },
+  done:       { badge: 'bg-surface text-muted',         dot: 'text-muted'      },
+  cancelled:  { badge: 'bg-surface text-muted',         dot: 'text-muted'      },
+  failed:     { badge: 'bg-red-900 text-red-400',       dot: 'text-red-400'    },
+};
+const _EXEC_TERMINAL = new Set(['open', 'done', 'cancelled', 'failed']);
 
 function _execFillPct(leg) {
   if (!leg || !leg.qty) return 0;
   return Math.min(100, Math.round((leg.filled / leg.qty) * 100));
 }
 
-function _execStatusHtml(exec) {
-  if (!exec) return '';
-  const TERMINAL = ['OPEN', 'DONE', 'CANCELLED', 'FAILED'];
-  if (TERMINAL.includes(exec.status)) return '';
-  const s1 = (exec.leg1?.symbol || '').split(':')[0];
-  const s2 = (exec.leg2?.symbol || '').split(':')[0];
-  const p1 = _execFillPct(exec.leg1);
-  const p2 = _execFillPct(exec.leg2);
-  const phase = exec.status === 'PLACING' ? 'размещение'
-    : exec.status === 'PASSIVE' ? 'пассивный'
-    : exec.status === 'AGGRESSIVE' ? 'агрессивный'
-    : exec.status === 'FORCING' ? 'маркет'
-    : exec.status;
-  return `<div class="mt-1.5 p-1.5 rounded bg-yellow-950 border border-yellow-700">
-    <div class="flex items-center justify-between">
-      <span class="text-[10px] text-yellow-300 font-semibold">◎ Закрытие: ${phase}</span>
-      <button onclick="cancelCloseExec('${exec.exec_id}')"
-        class="text-red-400 hover:text-red-300 text-[10px] leading-none">✕</button>
+function _buildExecPopupCard(execId) {
+  const card = document.createElement('div');
+  card.id = `exec-popup-${execId}`;
+  card.className = 'exec-popup-card flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden';
+  card.style.width = '420px';
+  card.innerHTML = `
+    <div class="exec-pp-header flex items-center justify-between px-3 py-2.5 bg-[#1c2333] border-b border-border flex-shrink-0">
+      <div class="flex items-center gap-2 min-w-0 overflow-hidden">
+        <span class="exec-pp-dot text-yellow-400 text-xs flex-shrink-0">●</span>
+        <span class="exec-pp-pair text-sm font-semibold text-white truncate">…</span>
+        <span class="exec-pp-badge px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0 bg-yellow-900 text-yellow-300">PLACING</span>
+      </div>
+      <div class="flex items-center gap-0.5 flex-shrink-0 ml-2">
+        <span class="exec-pp-id text-[10px] text-muted font-mono mr-1">#${execId}</span>
+        <button class="exec-pp-min-btn text-muted hover:text-white w-6 h-6 flex items-center justify-center rounded hover:bg-surface transition text-sm leading-none" title="Свернуть">–</button>
+        <button class="exec-pp-close-btn text-muted hover:text-red-400 w-6 h-6 flex items-center justify-center rounded hover:bg-surface transition leading-none text-sm">✕</button>
+      </div>
     </div>
-    <div class="text-[10px] text-muted mt-0.5">${s1}: ${p1}% · ${s2}: ${p2}%</div>
-  </div>`;
+    <div class="exec-pp-body flex flex-col overflow-hidden">
+      <div class="exec-pp-legs px-3 py-2.5 space-y-2 flex-shrink-0 border-b border-border"></div>
+      <div class="exec-pp-events overflow-y-auto px-3 py-2 font-mono text-[11px] text-muted leading-5" style="height:380px"></div>
+      <div class="exec-pp-footer px-3 py-2.5 border-t border-border flex-shrink-0">
+        <button class="exec-pp-cancel-btn w-full py-1.5 rounded text-xs font-semibold border border-red-700 text-red-400 hover:bg-red-900/30 transition">✕ Отменить исполнение</button>
+      </div>
+    </div>
+    <div class="exec-pp-countdown hidden px-3 py-1.5 text-center text-[10px] text-muted bg-surface border-t border-border flex-shrink-0"></div>
+  `;
+  return card;
 }
 
-async function cancelCloseExec(execId) {
-  try {
-    await fetch(`${API}/api/execution/${execId}`, { method: 'DELETE' });
-  } catch {}
+function _openExecPopup(execId, initialData) {
+  if (_execPopups.has(execId)) {
+    const st = _execPopups.get(execId);
+    if (st.minimized) _setExecPopupMinimized(execId, false);
+    return;
+  }
+  const card = _buildExecPopupCard(execId);
+  document.getElementById('exec-popups-container').appendChild(card);
+  const st = { card, minimized: false, data: initialData || null, countdownTimer: null };
+  _execPopups.set(execId, st);
+
+  card.querySelector('.exec-pp-min-btn').onclick   = () => _setExecPopupMinimized(execId, !_execPopups.get(execId)?.minimized);
+  card.querySelector('.exec-pp-close-btn').onclick  = () => _execPopupCloseOrMinimize(execId);
+  card.querySelector('.exec-pp-cancel-btn').onclick = () => _cancelExecFromPopup(execId);
+
+  if (initialData) _updateExecPopup(execId, initialData);
+  _startExecPoller();
 }
 
-async function _pollExecutions() {
+function _execPopupCloseOrMinimize(execId) {
+  const st = _execPopups.get(execId);
+  if (!st) return;
+  const isTerminal = st.data && _EXEC_TERMINAL.has((st.data.status || '').toLowerCase());
+  if (isTerminal) {
+    _closeExecPopup(execId);
+  } else {
+    _setExecPopupMinimized(execId, true);
+    showToast(currentLang === 'ru' ? 'Исполнение продолжается в фоне' : 'Execution continues in background', 'info', 3000);
+  }
+}
+
+function _setExecPopupMinimized(execId, minimized) {
+  const st = _execPopups.get(execId);
+  if (!st) return;
+  st.minimized = minimized;
+  const body    = st.card.querySelector('.exec-pp-body');
+  const cdEl    = st.card.querySelector('.exec-pp-countdown');
+  const minBtn  = st.card.querySelector('.exec-pp-min-btn');
+  body.classList.toggle('hidden', minimized);
+  if (minimized) {
+    cdEl.classList.add('hidden');
+    minBtn.textContent = '↑';
+    minBtn.title = 'Развернуть';
+  } else {
+    if (st.data && _EXEC_TERMINAL.has((st.data.status || '').toLowerCase())) cdEl.classList.remove('hidden');
+    minBtn.textContent = '–';
+    minBtn.title = 'Свернуть';
+  }
+}
+
+function _closeExecPopup(execId) {
+  const st = _execPopups.get(execId);
+  if (!st) return;
+  if (st.countdownTimer) clearInterval(st.countdownTimer);
+  st.card.remove();
+  _execPopups.delete(execId);
+}
+
+function _showExecHistory(execId) {
+  const data = _execHistory.get(execId);
+  if (!data) return;
+  // Reopen as read-only (terminal state — no cancel button)
+  _openExecPopup(execId, data);
+}
+
+function _updateExecPopup(execId, data) {
+  const st = _execPopups.get(execId);
+  if (!st) return;
+  const prevStatus = (st.data?.status || '').toLowerCase();
+  const status     = (data.status || '').toLowerCase();
+  st.data = data;
+  const card   = st.card;
+  const colors = _EXEC_STATUS_COLORS[status] || _EXEC_STATUS_COLORS.placing;
+
+  // Pair label
+  const s1 = _symShort(data.leg1?.symbol || '');
+  const s2 = _symShort(data.leg2?.symbol || '');
+  const actionLabel = data.is_close
+    ? (currentLang === 'ru' ? '↙ Закрытие' : '↙ Close')
+    : (currentLang === 'ru' ? '↗ Открытие' : '↗ Open');
+  card.querySelector('.exec-pp-pair').textContent = `${s1} / ${s2}  ${actionLabel}`;
+
+  // Badge + dot
+  const badge = card.querySelector('.exec-pp-badge');
+  badge.className = `exec-pp-badge px-1.5 py-0.5 rounded text-[10px] font-bold flex-shrink-0 ${colors.badge}`;
+  badge.textContent = status.toUpperCase();
+  const dot = card.querySelector('.exec-pp-dot');
+  dot.className = `exec-pp-dot text-xs flex-shrink-0 ${colors.dot}`;
+  dot.textContent = _EXEC_TERMINAL.has(status) ? '■' : '●';
+
+  // Legs with progress bars
+  const legHtml = (leg, n) => {
+    if (!leg) return '';
+    const pct = leg.qty > 0 ? Math.min(100, Math.round(leg.filled / leg.qty * 100)) : 0;
+    const barColor   = leg.status === 'filled' ? '#3fb950' : leg.status === 'dust' ? '#d29922' : leg.status === 'failed' ? '#f85149' : '#58a6ff';
+    const statusCls  = leg.status === 'filled' ? 'text-green-400' : leg.status === 'dust' ? 'text-yellow-300' : leg.status === 'failed' ? 'text-red-400' : 'text-blue-300';
+    const sym        = (leg.symbol || '').split(':')[0];
+    const priceStr   = leg.avg_price ? ` @ ${leg.avg_price}` : '';
+    return `<div>
+      <div class="flex justify-between items-center mb-1">
+        <span class="text-xs text-muted">Leg ${n}: <span class="text-white font-mono">${sym}</span> <span class="text-[11px]">${leg.side}${priceStr}</span></span>
+        <span class="${statusCls} text-xs font-semibold">${pct}% <span class="text-[10px] font-normal opacity-70">${leg.status}</span></span>
+      </div>
+      <div class="h-1.5 rounded-full bg-border overflow-hidden">
+        <div class="h-full rounded-full transition-all duration-300" style="width:${pct}%;background:${barColor}"></div>
+      </div>
+    </div>`;
+  };
+  card.querySelector('.exec-pp-legs').innerHTML = legHtml(data.leg1, 1) + legHtml(data.leg2, 2);
+
+  // Events log — append-only to avoid scroll jump
+  const eventsEl = card.querySelector('.exec-pp-events');
+  const events   = data.events || [];
+  const currentCount = eventsEl.children.length;
+  if (events.length > currentCount) {
+    const wasAtBottom = eventsEl.scrollHeight - eventsEl.scrollTop <= eventsEl.clientHeight + 30;
+    for (let i = currentCount; i < events.length; i++) {
+      const div = document.createElement('div');
+      div.className = 'leading-5';
+      div.textContent = events[i];
+      eventsEl.appendChild(div);
+    }
+    if (wasAtBottom || currentCount === 0) eventsEl.scrollTop = eventsEl.scrollHeight;
+  }
+
+  // Terminal state — update footer, start auto-close
+  if (_EXEC_TERMINAL.has(status) && !_EXEC_TERMINAL.has(prevStatus)) {
+    const footer = card.querySelector('.exec-pp-footer');
+    if (status === 'open') {
+      const msg = data.is_close
+        ? (currentLang === 'ru' ? '✓ Позиция закрыта' : '✓ Position closed')
+        : (currentLang === 'ru' ? '✓ Позиция открыта' : '✓ Position opened');
+      footer.innerHTML = `<div class="text-center text-sm font-semibold text-green-400 py-0.5">${msg}</div>`;
+    } else if (status === 'done') {
+      footer.innerHTML = `<div class="text-center text-xs text-yellow-300 py-1">⚠ Rollback — проверьте позиции вручную</div>`;
+    } else if (status === 'failed') {
+      footer.innerHTML = `<div class="text-center text-xs text-red-400 py-1">✗ Ошибка исполнения — требуется вмешательство</div>`;
+    } else if (status === 'cancelled') {
+      footer.innerHTML = `<div class="text-center text-xs text-muted py-1">Исполнение отменено</div>`;
+    }
+
+    // Close btn now fully closes, hide minimize
+    card.querySelector('.exec-pp-close-btn').onclick = () => _closeExecPopup(execId);
+    card.querySelector('.exec-pp-min-btn').style.visibility = 'hidden';
+
+    // Auto-close countdown (15s)
+    let secs = 15;
+    const cdEl = card.querySelector('.exec-pp-countdown');
+    if (!st.minimized) cdEl.classList.remove('hidden');
+    cdEl.textContent = currentLang === 'ru' ? `Закроется через ${secs}с` : `Closes in ${secs}s`;
+    st.countdownTimer = setInterval(() => {
+      secs--;
+      if (secs <= 0) { clearInterval(st.countdownTimer); _closeExecPopup(execId); }
+      else cdEl.textContent = currentLang === 'ru' ? `Закроется через ${secs}с` : `Closes in ${secs}s`;
+    }, 1000);
+
+    // Toast
+    if (status === 'open') {
+      showToast(data.is_close
+        ? (currentLang === 'ru' ? 'Позиция закрыта' : 'Position closed')
+        : (currentLang === 'ru' ? 'Позиция открыта' : 'Position opened'), 'success');
+    } else if (status === 'done')   { showToast(t('toast_exec_rollback'), 'warn'); }
+    else if (status === 'failed')   { showToast(t('toast_exec_failed'),   'error'); }
+
+    // Save to history + index for 📋 reopen
+    _execHistory.set(execId, data);
+    if (data.is_close && data.close_db_id != null) _execHistoryByDbId.set(data.close_db_id, execId);
+    else if (!data.is_close && data.db_id != null)  _execHistoryByDbId.set(data.db_id, execId);
+    // Also index by sym pair for journal matching (last close for pair wins)
+    if (data.is_close) {
+      const symKey = `${_symShort(data.leg1?.symbol || '')}|${_symShort(data.leg2?.symbol || '')}`;
+      _execHistoryByDbId.set(symKey, execId);
+    }
+
+    setTimeout(() => loadAllPositions(), 2000);
+  }
+}
+
+// ── Unified execution poller ──────────────────────────────────────────────────
+async function _pollAllExecutions() {
   try {
     const res = await fetch(`${API}/api/executions`);
     if (!res.ok) return;
-    const data = await res.json();
+    const data  = await res.json();
     const execs = data.executions || [];
 
-    const TERMINAL = ['OPEN', 'DONE', 'CANCELLED', 'FAILED'];
-    const newMap = {};
+    // Update or auto-open (for TP/SL triggered execs)
     for (const ex of execs) {
-      if (!ex.is_close || ex.close_db_id == null) continue;
-      const posId = ex.close_db_id;
-
-      const wasActive = _posExecMap[posId] && !TERMINAL.includes(_posExecMap[posId].status);
-      const nowTerminal = TERMINAL.includes(ex.status);
-
-      if (wasActive && nowTerminal) {
-        // Execution just finished — show final toast
-        if (ex.status === 'OPEN') {
-          showToast(t('toast_exec_closed'), 'success');
-        } else if (ex.status === 'DONE') {
-          showToast(t('toast_exec_rollback'), 'warn');
-        } else {
-          showToast(t('toast_exec_failed'), 'error');
-        }
-        loadAllPositions();
-      }
-
-      if (!nowTerminal) newMap[posId] = ex;
+      if (_execPopups.has(ex.exec_id)) _updateExecPopup(ex.exec_id, ex);
+      else                              _openExecPopup(ex.exec_id, ex);
     }
 
+    // Update _posExecMap for position row exec-status indicators
+    const newMap = {};
+    for (const ex of execs) {
+      if (ex.is_close && ex.close_db_id != null && !_EXEC_TERMINAL.has((ex.status || '').toLowerCase()))
+        newMap[ex.close_db_id] = ex;
+    }
     _posExecMap = newMap;
-
-    // Update exec-status divs in position rows
     for (const [posId, exec] of Object.entries(_posExecMap)) {
       const el = document.getElementById(`exec-status-${posId}`);
       if (el) el.innerHTML = _execStatusHtml(exec);
     }
 
-    // Stop poller when nothing active
-    if (Object.keys(_posExecMap).length === 0 && _execPollTimer) {
+    // Stop poller when nothing active and no non-terminal popups
+    const hasActive          = execs.some(e => !_EXEC_TERMINAL.has((e.status || '').toLowerCase()));
+    const hasLivePopup       = [..._execPopups.values()].some(s => !_EXEC_TERMINAL.has((s.data?.status || '').toLowerCase()));
+    if (!hasActive && !hasLivePopup && _execPollTimer) {
       clearInterval(_execPollTimer);
       _execPollTimer = null;
     }
   } catch {}
 }
 
-function startExecPoller() {
+function _startExecPoller() {
   if (_execPollTimer) return;
-  _execPollTimer = setInterval(_pollExecutions, 2000);
+  _execPollTimer = setInterval(_pollAllExecutions, 2000);
 }
+function startExecPoller() { _startExecPoller(); }
+
+function _execStatusHtml(exec) {
+  if (!exec) return '';
+  if (_EXEC_TERMINAL.has((exec.status || '').toLowerCase())) return '';
+  const p1    = _execFillPct(exec.leg1);
+  const p2    = _execFillPct(exec.leg2);
+  const phase = exec.status === 'placing'    ? (currentLang === 'ru' ? 'размещение'  : 'placing')
+              : exec.status === 'passive'    ? (currentLang === 'ru' ? 'пассивный'   : 'passive')
+              : exec.status === 'aggressive' ? (currentLang === 'ru' ? 'агрессивный' : 'aggressive')
+              : exec.status === 'forcing'    ? (currentLang === 'ru' ? 'маркет'      : 'market')
+              : exec.status;
+  return `<div class="mt-1.5 p-1.5 rounded bg-yellow-950 border border-yellow-700 flex items-center justify-between gap-1">
+    <span class="text-[10px] text-yellow-300 font-semibold">◎ ${phase} · ${p1}%·${p2}%</span>
+    <button onclick="_openExecPopup('${exec.exec_id}')" class="text-[10px] text-accent hover:text-white flex-shrink-0" title="Открыть монитор">▶</button>
+  </div>`;
+}
+
+async function _cancelExecFromPopup(execId) {
+  if (!window.confirm(currentLang === 'ru' ? 'Отменить исполнение?' : 'Cancel execution?')) return;
+  try {
+    await fetch(`${API}/api/execution/${execId}`, { method: 'DELETE' });
+    showToast((currentLang === 'ru' ? 'Отмена запрошена: ' : 'Cancel requested: ') + execId, 'warn');
+  } catch(e) { showToast('Cancel error: ' + e.message, 'error'); }
+}
+async function cancelCloseExec(execId) { await _cancelExecFromPopup(execId); }
 
 function _tpslBadgesHtml(pos) {
   let html = '';
@@ -2934,6 +3138,9 @@ function renderStrategyPositions(positions) {
           <button onclick="_deleteDbPos(${pos.id})"
             class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-red-600 hover:text-red-600 transition whitespace-nowrap"
             title="${t('delete_db_btn')}">🗑</button>
+          ${_execHistoryByDbId.has(pos.id) ? `<button onclick="_showExecHistory('${_execHistoryByDbId.get(pos.id)}')"
+            class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-accent hover:text-accent transition whitespace-nowrap"
+            title="${currentLang === 'ru' ? 'Лог исполнения' : 'Execution log'}">📋</button>` : ''}
         </div>
         <!-- Active trigger "orders" (shown when set) -->
         <div id="tpsl-badges-${pos.id}" class="flex flex-wrap gap-1 mt-1.5">
@@ -3148,11 +3355,7 @@ async function _closePosSmart(pos) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Smart close failed');
     currentExecId = data.exec_id;
-    showToast(t('toast_smart_started') + currentExecId, 'success');
-    document.getElementById('exec-monitor').classList.remove('hidden');
-    document.getElementById('exec-id-label').textContent = `#${currentExecId}`;
-    if (execPollTimer) clearInterval(execPollTimer);
-    execPollTimer = setInterval(() => pollExecution(currentExecId), 2000);
+    _openExecPopup(currentExecId);
   } catch(e) {
     showToast(t('toast_smart_error') + e.message, 'error');
   }
@@ -3306,6 +3509,10 @@ async function loadTradeJournal() {
       const rowBg = (tr.pnl || 0) >= 0 ? 'rgba(63,185,80,0.04)' : 'rgba(248,81,73,0.04)';
       const opened = tr.opened_at ? new Date(tr.opened_at).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
       const closed = tr.closed_at ? new Date(tr.closed_at).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
+      const _jSymKey  = `${_symShort(tr.symbol1)}|${_symShort(tr.symbol2)}`;
+      const _jExecId  = _execHistoryByDbId.get(_jSymKey);
+      const execLogBtn = _jExecId
+        ? `<button onclick="_showExecHistory('${_jExecId}')" class="text-[10px] text-muted hover:text-accent" title="${currentLang === 'ru' ? 'Лог исполнения' : 'Execution log'}">📋</button>` : '';
       return `<tr style="background:${rowBg}">
         <td><div class="text-white text-xs font-medium">${s1}</div><div class="text-muted text-[10px]">${s2}</div></td>
         <td class="${sideClass} text-xs font-semibold">${sideLabel} ${isLong ? 'Long' : 'Short'}</td>
@@ -3314,7 +3521,7 @@ async function loadTradeJournal() {
         <td class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
         <td class="text-muted text-xs">${tr.leverage ? tr.leverage + 'x' : '–'}</td>
         <td class="text-muted text-[10px]">${opened}</td>
-        <td class="text-muted text-[10px]">${closed}</td>
+        <td class="text-muted text-[10px]">${closed} ${execLogBtn}</td>
       </tr>`;
     }).join('');
   } catch(e) { /* silently */ }
@@ -3700,87 +3907,15 @@ async function startSmartExecution(side) {
     if (!res.ok) throw new Error(data.detail || 'Smart trade failed');
 
     currentExecId = data.exec_id;
-    showToast(t('toast_smart_started') + currentExecId, 'success');
-    document.getElementById('exec-monitor').classList.remove('hidden');
-    document.getElementById('exec-id-label').textContent = `#${currentExecId}`;
-    if (execPollTimer) clearInterval(execPollTimer);
-    execPollTimer = setInterval(() => pollExecution(currentExecId), 2000);
+    _openExecPopup(currentExecId);
   } catch(e) {
     showToast(t('toast_smart_error') + e.message, 'error');
   }
 }
 
-async function pollExecution(execId) {
-  try {
-    const res = await fetch(`${API}/api/execution/${execId}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    renderExecution(data);
-    // Stop polling when terminal
-    const terminal = ['open', 'done', 'cancelled', 'failed'];
-    if (terminal.includes(data.status)) {
-      clearInterval(execPollTimer);
-      execPollTimer = null;
-      if (data.status === 'open') {
-        const msg = data.is_close
-          ? (currentLang === 'ru' ? 'Позиция закрыта — ' : 'Position closed — ') + execId
-          : (currentLang === 'ru' ? 'Позиция открыта — ' : 'Position opened — ') + execId;
-        showToast(msg, 'success');
-      }
-      else if (data.status === 'done') showToast('Execution done (rollback) — ' + execId, 'warn');
-      else if (data.status === 'failed') showToast('Execution FAILED — ' + execId, 'error');
-      // Refresh positions after any terminal state
-      setTimeout(() => { loadStrategyPositions(); refreshPositions(); }, 2000);
-    }
-  } catch {}
-}
-
-function renderExecution(data) {
-  const badgeEl = document.getElementById('exec-status-badge');
-  const legsEl  = document.getElementById('exec-legs');
-  const eventsEl = document.getElementById('exec-events');
-
-  const statusColors = {
-    placing:    'bg-yellow-900 text-yellow-300',
-    passive:    'bg-blue-900 text-blue-300',
-    aggressive: 'bg-orange-900 text-orange-300',
-    forcing:    'bg-red-900 text-red-300',
-    open:       'bg-green-900 text-green-300',
-    rollback:   'bg-red-900 text-red-300',
-    done:       'bg-surface text-muted',
-    cancelled:  'bg-surface text-muted',
-    failed:     'bg-red-900 text-red-400',
-  };
-  const cls = statusColors[data.status] || 'bg-surface text-muted';
-  badgeEl.className = `px-2 py-0.5 rounded text-[10px] font-bold ${cls}`;
-  badgeEl.textContent = data.status.toUpperCase();
-
-  const legHtml = (leg, n) => {
-    const pct = leg.qty > 0 ? Math.round(leg.filled / leg.qty * 100) : 0;
-    const statusColor = leg.status === 'filled' ? 'text-green-400' : leg.status === 'failed' ? 'text-red-400' : 'text-yellow-300';
-    return `<div class="flex justify-between items-center">
-      <span class="text-muted">${t('leg_label')} ${n}: <span class="text-white">${leg.symbol.replace('/USDT:USDT','').replace('/USDC:USDC','')}</span> ${leg.side}</span>
-      <span class="${statusColor}">${pct}% ${leg.status}</span>
-    </div>`;
-  };
-  legsEl.innerHTML = legHtml(data.leg1, 1) + legHtml(data.leg2, 2);
-
-  const recentEvents = (data.events || []).slice(-12);
-  eventsEl.innerHTML = recentEvents
-    .map(e => `<div class="text-[10px] text-muted">${e}</div>`)
-    .join('');
-  eventsEl.scrollTop = eventsEl.scrollHeight;
-}
-
 async function cancelCurrentExecution() {
   if (!currentExecId) return;
-  if (!window.confirm(t('exec_cancel_confirm'))) return;
-  try {
-    await fetch(`${API}/api/execution/${currentExecId}`, { method: 'DELETE' });
-    showToast('Cancel requested for ' + currentExecId, 'warn');
-  } catch(e) {
-    showToast('Cancel error: ' + e.message, 'error');
-  }
+  await _cancelExecFromPopup(currentExecId);
 }
 
 // ------------------------------------------------------------------ //
