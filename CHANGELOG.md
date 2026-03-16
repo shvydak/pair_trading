@@ -768,9 +768,24 @@ PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN
 - `set_leverage` выдаёт WARNING (не ERROR) если позиция уже открыта на бирже — торговля продолжается с текущим плечом
 - `find_open_position` ищет по `(symbol1, symbol2)` — если пара менялась, запись не найдётся и P&L будет null
 
----
+## [Unreleased]
 
-## 2026-03-10 — Документация и руководство пользователя
+### Added
+- **UI Enhancements**:
+  - Integrated `chartjs-plugin-zoom` using `hammerjs` to allow horizontal panning and zooming on the PnL and price charts without distorting the Y-axis.
+  - Implemented synchronous zoom/pan between the Spread/Z-score chart and the Price chart.
+  - Added real-time Z-score PnL equivalent (dollar value) directly in the header Z-score stat card.
+  - Added grey Z-score PnL calculation per row in the Strategy Positions tab under the Z-score and Entry Z columns.
+
+### Changed
+- **Chart Annotations**:
+  - Replaced entry and exit annotations from generic `point` to unicode text (`label` type) triangles (`▲`/`▼`) and crosses (`✕`) to prevent visual obstruction of chart lines.
+  - Repositioned open and closed trade entry/exit markers to directly follow the right Z-score axis (yZ) rather than the absolute dollar PnL to align with true strategy trigger logic.
+  - Fixed timezone drift on chart markers where UTC dates were parsed as local times, forcing markers to stick to the right edge.
+- **Journal markers rendering limitation**:
+  - Restored journal past-trade markers to render dynamically according to the chart's currently selected pair regardless of configured timeframe/z-score configurations, but they map accurately to their respective entry/exit Z-values.
+
+## [1.2.9] - 2026-03-150 — Документация и руководство пользователя
 
 ### CLAUDE.md
 
