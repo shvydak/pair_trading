@@ -249,10 +249,10 @@
 
       // chart labels
       spread_chart_title: 'Spread & Z-Score',
-      legend_spread: 'Spread',
+      legend_spread: 'PnL ($)',
       legend_zscore: 'Z-Score',
       legend_threshold: '±2σ threshold',
-      tip_legend_spread: '<strong>Spread</strong> — the gap between the two assets in log-price space.<br/><br/>Formula: <code>log(P₁) − β × log(P₂)</code><br/><br/>Example: BTC at 84000, ETH at 2000, β = 1.2<br/>Spread = ln(84000) − 1.2 × ln(2000) ≈ 4.89<br/><br/>When BTC rises faster than ETH → spread goes up.<br/>When ETH catches up → spread falls back.<br/>A healthy spread oscillates around a stable mean.',
+      tip_legend_spread: '<strong>PnL ($)</strong> — estimated dollar P&L based on your position size.<br/><br/>$0 = spread at its historical mean (z-score = 0).<br/><br/>Read it as: "If I enter where the blue line is at -$X and exit where it\'s at -$Y, my profit is the difference."<br/><br/>Recalculated each time you click Analyze or change position size.',
       tip_legend_zscore: '<strong>Z-Score</strong> — how many standard deviations the spread is from its recent average.<br/><br/>Formula: <code>Z = (Spread − Mean) / StdDev</code><br/><br/>Z = 0 → spread is at its normal level<br/>Z = +2 → spread is 2σ above normal → asset 1 is expensive<br/>Z = −2 → spread is 2σ below normal → asset 1 is cheap<br/><br/>The Z-score is what triggers entry and exit signals.',
       tip_legend_threshold: '<strong>±2σ Threshold</strong> — signal lines on the Z-score axis.<br/><br/><svg width="200" height="70" style="display:block;margin:6px 0"><line x1="0" y1="15" x2="200" y2="15" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="55" x2="200" y2="55" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="35" x2="200" y2="35" stroke="#8b949e" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/><text x="4" y="12" fill="#f85149" font-size="9">+2σ — short spread here</text><text x="4" y="68" fill="#3fb950" font-size="9">−2σ — long spread here</text><path d="M0,35 C20,28 30,10 50,13 S70,40 90,35 S110,20 130,22 S160,50 180,42 S195,30 200,35" fill="none" stroke="#e3b341" stroke-width="1.5"/></svg>Red line (+2σ): Z-score crosses up → spread too wide → short spread (sell S1, buy S2).<br/>Green line (−2σ): Z-score crosses down → spread too narrow → long spread (buy S1, sell S2).<br/>Inner dotted lines (exit zone): trade closes when Z-score returns here.',
       price_chart_title: 'Normalised Price (indexed to 100)',
@@ -509,10 +509,10 @@
       no: 'Нет',
 
       spread_chart_title: 'Спред и Z-счёт',
-      legend_spread: 'Спред',
+      legend_spread: 'PnL ($)',
       legend_zscore: 'Z-счёт',
       legend_threshold: '±2σ порог',
-      tip_legend_spread: '<strong>Спред</strong> — разница между двумя активами в пространстве логарифмических цен.<br/><br/>Формула: <code>log(P₁) − β × log(P₂)</code><br/><br/>Пример: BTC = 84000, ETH = 2000, β = 1.2<br/>Спред = ln(84000) − 1.2 × ln(2000) ≈ 4.89<br/><br/>BTC растёт быстрее ETH → спред растёт.<br/>ETH догоняет → спред падает обратно.<br/>Здоровый спред колеблется вокруг стабильного среднего.',
+      tip_legend_spread: '<strong>PnL ($)</strong> — расчётная прибыль/убыток в долларах на основе размера вашей позиции.<br/><br/>$0 = спред на историческом среднем (z-score = 0).<br/><br/>Читайте так: «Если я вхожу, когда синяя линия на -$X, и выхожу, когда на -$Y — моя прибыль = разница».<br/><br/>Пересчитывается при каждом нажатии Анализировать или изменении размера позиции.',
       tip_legend_zscore: '<strong>Z-счёт</strong> — на сколько стандартных отклонений текущий спред отклонился от своего среднего.<br/><br/>Формула: <code>Z = (Спред − Среднее) / СтдОткл</code><br/><br/>Z = 0 → спред на обычном уровне<br/>Z = +2 → спред на 2σ выше нормы → актив 1 дорогой<br/>Z = −2 → спред на 2σ ниже нормы → актив 1 дешёвый<br/><br/>Z-счёт — это то, что запускает сигналы входа и выхода.',
       tip_legend_threshold: '<strong>±2σ порог</strong> — сигнальные линии на оси Z-счёта.<br/><br/><svg width="200" height="70" style="display:block;margin:6px 0"><line x1="0" y1="15" x2="200" y2="15" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="55" x2="200" y2="55" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4,3"/><line x1="0" y1="35" x2="200" y2="35" stroke="#8b949e" stroke-width="1" stroke-dasharray="2,3" opacity="0.5"/><text x="4" y="12" fill="#f85149" font-size="9">+2σ — шорт спреда здесь</text><text x="4" y="68" fill="#3fb950" font-size="9">−2σ — лонг спреда здесь</text><path d="M0,35 C20,28 30,10 50,13 S70,40 90,35 S110,20 130,22 S160,50 180,42 S195,30 200,35" fill="none" stroke="#e3b341" stroke-width="1.5"/></svg>Красная линия (+2σ): Z-счёт пробивает вверх → шорт спреда (продать S1, купить S2).<br/>Зелёная линия (−2σ): Z-счёт пробивает вниз → лонг спреда (купить S1, продать S2).<br/>Внутренние пунктиры (зона выхода): сделка закрывается когда Z-счёт возвращается сюда.',
       price_chart_title: 'Нормализованные цены (база=100)',
@@ -2376,6 +2376,13 @@ function renderStats(data) {
 // ------------------------------------------------------------------ //
 //  Spread Chart
 // ------------------------------------------------------------------ //
+// Convert raw spread array to dollar PnL: (spread - mean) * size / (1 + |β|)
+function _spreadToDollar(spreadArr) {
+  if (!state._spreadDollarFactor) return spreadArr;
+  const { meanSpread, dollarPerUnit } = state._spreadDollarFactor;
+  return spreadArr.map(s => (s - meanSpread) * dollarPerUnit);
+}
+
 function renderSpreadChart(data) {
   const ctx = document.getElementById('spread-chart').getContext('2d');
   if (state.spreadChart) { state.spreadChart.destroy(); }
@@ -2384,14 +2391,26 @@ function renderSpreadChart(data) {
   const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 2.0;
   const exitZ  = parseFloat(document.getElementById('exit-z-input').value)  || 0.5;
 
+  // Compute dollar PnL conversion factor
+  const sizeUsd = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+  const beta = Math.abs(state.hedgeRatio || 1);
+  const dollarPerUnit = sizeUsd / (1 + beta);
+  const validSpread = data.spread.filter(v => v != null && !isNaN(v));
+  const meanSpread = validSpread.length > 0
+    ? validSpread.reduce((a, b) => a + b, 0) / validSpread.length
+    : 0;
+  state._spreadDollarFactor = { meanSpread, dollarPerUnit };
+
+  const dollarData = _spreadToDollar(data.spread);
+
   state.spreadChart = new Chart(ctx, {
     type: 'line',
     data: {
       labels,
       datasets: [
         {
-          label: t('legend_spread'),
-          data: data.spread,
+          label: 'PnL ($)',
+          data: dollarData,
           borderColor: '#58a6ff',
           borderWidth: 1.5,
           pointRadius: 0,
@@ -2436,15 +2455,29 @@ function renderSpreadChart(data) {
         },
         ySpread: {
           position: 'left',
-          ticks: { color: '#58a6ff', font: { size: 11 } },
+          ticks: {
+            color: '#58a6ff',
+            font: { size: 11 },
+            callback: function(value) { return '$' + value.toFixed(2); },
+          },
           grid:  { color: 'rgba(48,54,61,0.5)' },
-          title: { display: true, text: t('legend_spread'), color: '#58a6ff', font: { size: 11 } },
+          title: { display: true, text: 'PnL ($)', color: '#58a6ff', font: { size: 11 } },
+          afterDataLimits: function(axis) {
+            const absMax = Math.max(Math.abs(axis.min), Math.abs(axis.max));
+            axis.min = -absMax;
+            axis.max = absMax;
+          },
         },
         yZ: {
           position: 'right',
           ticks: { color: '#e3b341', font: { size: 11 } },
           grid:  { drawOnChartArea: false },
           title: { display: true, text: t('legend_zscore'), color: '#e3b341', font: { size: 11 } },
+          afterDataLimits: function(axis) {
+            const absMax = Math.max(Math.abs(axis.min), Math.abs(axis.max));
+            axis.min = -absMax;
+            axis.max = absMax;
+          },
         },
       }
     }
@@ -4057,7 +4090,7 @@ function refreshLiveCharts() {
 
   if (state.spreadChart) {
     state.spreadChart.data.labels = labels;
-    state.spreadChart.data.datasets[0].data = history.spread;
+    state.spreadChart.data.datasets[0].data = _spreadToDollar(history.spread);
     state.spreadChart.data.datasets[1].data = history.zscore;
     state.spreadChart.update('none');
   }
