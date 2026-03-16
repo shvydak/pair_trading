@@ -768,22 +768,28 @@ PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN
 - `set_leverage` выдаёт WARNING (не ERROR) если позиция уже открыта на бирже — торговля продолжается с текущим плечом
 - `find_open_position` ищет по `(symbol1, symbol2)` — если пара менялась, запись не найдётся и P&L будет null
 
-## [Unreleased]
+## 2026-03-XX — Маркеры входа/выхода на графике + фикс отображения истории сделок
 
-### Added
-- **UI Enhancements**:
-  - Integrated `chartjs-plugin-zoom` using `hammerjs` to allow horizontal panning and zooming on the PnL and price charts without distorting the Y-axis.
-  - Implemented synchronous zoom/pan between the Spread/Z-score chart and the Price chart.
-  - Added real-time Z-score PnL equivalent (dollar value) directly in the header Z-score stat card.
-  - Added grey Z-score PnL calculation per row in the Strategy Positions tab under the Z-score and Entry Z columns.
+### Что добавлено
 
-### Changed
-- **Chart Annotations**:
-  - Replaced entry and exit annotations from generic `point` to unicode text (`label` type) triangles (`▲`/`▼`) and crosses (`✕`) to prevent visual obstruction of chart lines.
-  - Repositioned open and closed trade entry/exit markers to directly follow the right Z-score axis (yZ) rather than the absolute dollar PnL to align with true strategy trigger logic.
-  - Fixed timezone drift on chart markers where UTC dates were parsed as local times, forcing markers to stick to the right edge.
-- **Journal markers rendering limitation**:
-  - Restored journal past-trade markers to render dynamically according to the chart's currently selected pair regardless of configured timeframe/z-score configurations, but they map accurately to their respective entry/exit Z-values.
+**Frontend:**
+- **Маркеры входа/выхода на графике спреда** (▲/▼ и ✕):
+  - Открытая позиция: ▲/▼ на z-score входа + подпись «Вход Z ±X.XX» + тонкая вертикальная линия
+  - Закрытые сделки из журнала: ▲/▼ (вход, полупрозрачный) и ✕ + PnL метка (выход), цвет по знаку PnL
+  - Маркеры только для текущей пары (sym1+sym2), фильтрация по диапазону графика
+  - Автоматически обновляются при смене пары, повторном анализе и открытии Journal-вкладки
+
+### Исправленные баги
+
+**Frontend:**
+- **Маркеры не показывались совсем** — `loadTradeJournal()` вызывалась только при открытии вкладки «Журнал»; `_cachedJournalTrades` оставался `[]` когда `_updatePositionAnnotations()` строила маркеры. Фикс: `loadTradeJournal()` вызывается при `DOMContentLoaded` и после каждого `runAnalyze()` — заменяет прямой вызов `_updatePositionAnnotations()`
+- **`_utcParse` возвращал Invalid Date для DB-временных меток** — формат `2026-03-16T18:17:28+00:00` не содержит `Z`, но код добавлял `Z` в конец `+00:00` → невалидный `...+00:00Z`. Все маркеры ставились в индекс 0. Фикс: добавлена проверка regex `/[+-]\d{2}:\d{2}$/` — если timestamp уже имеет timezone-суффикс, `Z` не добавляется
+- **`xValue` числовой индекс на category scale** — Chart.js annotation v3 мог некорректно интерпретировать числовой индекс на category scale. Фикс: `_closestIdx` заменён на `_closestLabel`, возвращающий строку-лейбл (точное совпадение с `labels` массивом чарта)
+- **Сравнение sym1/sym2 ломалось при ccxt-формате** — `sym1-input` мог содержать `BTC/USDT:USDT`, а DB хранит такой же формат; без `_symShort()` сравнение проваливалось. Фикс: `sym1`/`sym2` из инпута теперь тоже проходят через `_symShort()`
+- **Ранний return без вызова `_updatePositionAnnotations()`** — при `trades.length === 0` функция возвращалась без обновления аннотаций (старые маркеры не очищались). Фикс: `_updatePositionAnnotations()` вызывается и в ветке пустого журнала
+- **Удалён `query_api.py`** — временный отладочный скрипт с неправильным портом (8000 вместо 8080)
+
+### Итого тестов: 213 (без изменений — все изменения в frontend JS)
 
 ## [1.2.9] - 2026-03-150 — Документация и руководство пользователя
 

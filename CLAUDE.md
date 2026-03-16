@@ -121,14 +121,10 @@ Returns `{ok: bool, checks: [{name, ok, detail}], sizes: {qty1, qty2, rounded_qt
 | `zscore_window` | int | `20` | Rolling z-score window (saved to DB) |
 
 ### `POST /api/trade/smart` — SmartTradeRequest fields
-Same as TradeRequest plus `action: str = "open"` (supports `"close"` for smart close from positions table) and:
+Same as TradeRequest plus:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `action` | str | `"open"` | `"open"` \| `"close"` |
-| `exit_zscore` | float | null | Z-score at exit (for close action, saved to DB) |
-| `timeframe` | str | `"1h"` | Timeframe used for analysis (saved to DB, used in sparkline) |
-| `candle_limit` | int | `500` | Candle count for analysis window (saved to DB) |
-| `zscore_window` | int | `20` | Rolling z-score window (saved to DB) |
 | `passive_s` | float | `30.0` | Total dynamic passive window; starts at best bid/ask and reprices inside the window |
 | `aggressive_s` | float | `20.0` | Total semi-aggressive window before market fallback |
 | `allow_market` | bool | `true` | Use market order as final fallback |
@@ -195,12 +191,6 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
   - **Журнал** (`tab-journal`): закрытые сделки
   - ~~Ордера TP/SL~~ — вкладка удалена; TP/SL позиции отображаются inline в строке позиции (badges)
 
-### Режимы
-- `setMode('trade'|'backtest')` — переключает layout, сохраняет в `localStorage['pt_mode']`
-- `setBottomTab('positions'|'orders'|'journal')` — вкладки нижней панели
-- `toggleBottomPanel()` — свернуть/развернуть нижнюю панель
-- Backtest: кнопка "→ Открыть в Trade" вызывает `setMode('trade')`
-
 ### Watchlist
 - Хранится в `localStorage['pt_watchlist']` как `[{sym1, sym2, timeframe, limit, zwindow, entryZ, exitZ, posSize, sizing, leverage, marketFilter, zscore, spread, _zDir}]`
 - Кнопка **"★ Add to Watchlist"** под "Analyze Pair" добавляет текущую пару **со всеми параметрами анализа**
@@ -239,9 +229,9 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers; `pos.tp_smart` defaults to `true` for positions without TP yet set
 - Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage + **timeframe + candle_limit + zscore_window** from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePos(id,'market')`; `◎ S` → `_closePos(id,'smart')`; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
 - **Row click** — clicking anywhere on a position row (except buttons/inputs/canvas) calls `_loadPosIntoAnalysis(id)` — same as `↗` button
-- `_updatePositionAnnotations()` — called after `runAnalyze()` and after `renderStrategyPositions()`; finds the DB position matching the currently analysed pair (sym1+sym2); sets `entryPoint` triangle annotation on the spread chart (using Z-axis); updates `tpHigh`/`tpLow`/`slHigh`/`slLow` horizontal annotations from `pos.tp_zscore`/`pos.sl_zscore` (hides them if null). Also plots closed trade journal markers using matching pairs.
+- `_updatePositionAnnotations()` — called indirectly via `loadTradeJournal()` after `runAnalyze()` and after `renderStrategyPositions()`; plots: open position entry ▲/▼ + label (yZ scale), TP/SL horizontal lines, closed trade entry/exit markers (▲/▼ and ✕ + PnL label) from `_cachedJournalTrades`. Uses label strings (not numeric indices) as `xValue` on category scale. `_utcParse` handles both `2026-03-16 18:00:00` (chart, no tz) and `2026-03-16T18:17:28+00:00` (DB, with tz suffix).
 - **Chart Zooming**: Horizontal pan/zoom uses `chartjs-plugin-zoom` + `hammerjs`. `onPan` and `onZoom` handlers recursively sync the Spread and Price charts horizontally (`_syncCharts`).
-- `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table in Journal tab
+- `loadTradeJournal()` → `GET /api/db/history?limit=50` → populates `_cachedJournalTrades` → renders Journal table → calls `_updatePositionAnnotations()`. Called from `DOMContentLoaded` and after every `runAnalyze()`.
 - **Active pair highlighting**: after `runAnalyze()`, calls `renderWatchlist()` + `_updateStrategyPosHighlights()` + `renderAlerts(_cachedAlerts)` to immediately show blue highlight (`bg-blue-950/20`/`bg-blue-950/40`) on matching items; match criteria: sym1+sym2+timeframe+zscore_window+entryZ (all 5); `_cachedAlerts` populated by `loadAlertsTab()`, used for re-render without extra API call
 - `_updateStrategyPosHighlights()` — updates `bg-blue-950/20` class on existing `pos-row-{id}` elements without full table rebuild; also called from `renderStrategyPositions()` for both new and existing rows
 
@@ -330,15 +320,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - `ExecConfig`: `passive_s` (default **30s**), `aggressive_s` (20s), `allow_market` (True), `poll_s` (2s), `reprice_s` (**4s**)
 - `LegState`: tracks `order_id`, `status` (`WAITING`/`PARTIAL`/`FILLED`/`DUST`/`CANCELLED`/`FAILED`), `filled`, `remaining`, `avg_price`, `working_price`, `last_reprice_at`, `hold_until_stage_end`; `absorb_order(order_dict)` syncs from ccxt order
 - `ExecContext`: holds both legs, config, events log, `cancel_req` flag, `db_id`, `is_close`, `close_db_id`, `entry_price1/2`, `exit_zscore`; `to_dict()` includes `is_close`; OPEN terminal state branches on `is_close` to call `close_position()` vs `save_open_position()`
-- `run_execution(ctx, client, db_module)` runs as `asyncio.create_task()`:
-  1. Fetch both orderbooks, place passive limits simultaneously via `asyncio.gather`
-  2. Poll every `poll_s`: check cancel flag → refresh fills → decide whether to reprice inside the current stage
-  3. During `PASSIVE`, cancel+re-place only on the **remaining** qty, only if the quote moved and `reprice_s` elapsed
-  4. If the residual becomes too small for Binance, do **not** send a new order for it; keep the current order alive until stage end
-  5. After `passive_s`, rebuild remaining live orders into `AGGRESSIVE` using semi-aggressive prices
-  6. After `aggressive_s`, cancel remaining live orders and use market fallback only for still-placeable residuals
-  7. Both legs `FILLED`/`DUST` → `OPEN`; if `is_close=True` → close DB record with PnL; else → save new open position using actual filled qtys
-  8. Partial fill with one exposed leg → `ROLLBACK` (close filled leg at market) → `DONE`
+- `run_execution(ctx, client, db_module)` runs as `asyncio.create_task()`: places passive limits → polls/reprices within `passive_s` window → rebuilds as semi-aggressive within `aggressive_s` window → market fallback for residuals. Both legs `FILLED`/`DUST` → `OPEN` (saves/closes DB record); one exposed leg partial → `ROLLBACK` (close filled leg at market) → `DONE`.
 - Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
 - Semi-aggressive price: buy at `bid + 25% of spread`, sell at `ask - 25% of spread`
 - `DUST` means the leg already has a partial fill, but the remaining qty is below exchange minimum; the partial fill is accepted and persisted, and no new order is placed for the residual
@@ -401,42 +383,21 @@ await tg_bot.stop()                            # stop polling + close session
 - **Notification center**: `checkRecentAlerts()` polls `GET /api/alerts/recent` on startup + every 60 s; shows clickable toast + badge on Alerts tab; recently fired rows highlighted yellow with `⚡ X мин назад` in "Last fired" column
 - **Creating alerts**: (1) 🔔 button on watchlist item — uses watchlist params; (2) `addAlertFromPanel()` button next to `★ В Watchlist` in Pair Config panel — uses current analysis params (sym1/sym2/timeframe/zscore_window/entry-z); both show pct prompt, switch to Alerts tab after creation
 
-### Bot commands (implemented, foundation for future control)
-- `/start` — welcome message + feature list
-- `/status` — confirms system is running
-
-### Design notes
-- Uses `aiogram` v3 (native asyncio, no event-loop conflicts with FastAPI/uvicorn)
-- `aiogram` added to `backend/requirements.txt`
-- Polling runs as `asyncio.create_task()` — same event loop as the rest of the app
-- If `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are empty → bot silently disabled, zero overhead
-
 ## Common Issues & Fixes
 - **Empty symbols list**: ccxt returns Binance perpetuals as `type: "swap"`, not `"future"` — filter includes both
 - **`pip` not found**: use `.venv/bin/pip` — Homebrew Python blocks system installs
 - **CORS errors**: backend has CORS middleware allowing all origins including `file://`
 - **NaN/Inf in JSON**: `_clean()` helper in `main.py` recursively strips non-serializable floats
-- **Port 5000 on macOS**: reserved by AirPlay Receiver (Control Center) — use port 8080 instead
-- **HTTP 400 "notional below minimum"**: position `size_usd` is too small — increase it; minimum depends on the exact contract and margin market (`USDT-M` / `USDC-M`)
-- **Mixed pair won't trade**: if one leg is `USDT-M` and the other is `USDC-M`, analysis still works but live trading is rejected until both legs use the same margin asset
-- **Leverage set error (warning, not fatal)**: if a position already exists on Binance, `set_leverage` fails — logged as WARNING, trade still proceeds with current exchange leverage
-- **`amount_to_precision` KeyError**: markets not loaded — fixed by `_ensure_markets()` guard in `place_order`
-- **Smart execution seems stuck in PASSIVE**: in Smart v2 the passive phase is intentionally dynamic for up to `30s`; check execution events for `Reprice ... (passive)` before assuming it's frozen
-- **Rollback FAILED**: market order for the filled leg also failed — requires manual action; logged as ERROR with "MANUAL ACTION REQUIRED"
-- **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — position was closed manually on exchange or via another interface. Use 🗑 button to remove the stale DB record, OR press `✕ M` (backend will detect no open positions and still clean up DB).
-- **PnL showing positive when it should be negative**: Frontend format bug — `(pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2)`. If you see wrong sign, check this pattern in `renderStrategyPositions`.
-- **Sparkline flashing every 5 s**: Caused by `chart.destroy() + new Chart()` on each refresh. Fix: use `chart.data.datasets[0].data = ...; chart.update('none')` when the Chart.js instance already exists on the canvas.
-- **`_do_smart_close_trigger` TypeError (FIXED)**: Was passing `sym1=`, `side1=`, `qty1=` kwargs to `ExecContext` dataclass which expects `exec_id=`, `leg1=LegState(...)`, `leg2=LegState(...)`. Fixed — exec_id is now created before ctx, spread_side passed correctly.
-- **Double-trigger (FIXED)**: Monitor could fire TP/SL twice — sending duplicate Telegram messages and opening a reverse position. Root cause: `closing_tags.add(tag)` could be skipped on exception, and `closing_tags &= current_tags` cleanup could prematurely remove the guard. Fix: `db.set_position_triggers(pos_id, None, None, False)` called immediately before starting close — next cycle sees `tp is None and sl is None → continue`; DB-level guard, not memory-level.
-- **Monitor used hardcoded timeframe/zscore_window (FIXED)**: TP/SL fired at wrong z-score levels when position was opened with non-default params (e.g. 5m / window=50). Fixed: monitor reads `pos.get("timeframe")` and `pos.get("zscore_window")` from each DB record.
-- **Z-score discrepancy header vs position row (FIXED)**: `_loadSparkline` fetched with `pos.candle_limit` (DB), WebSocket used `state.historyLimit` (analysis) → different dataset → different mean/std → different z. Fixed: when pair matches current analysis, sparkline reads from `state.historyData` directly.
-- **Uvicorn не останавливается по Cmd+C (FIXED)**: `asyncio.create_task()` в lifespan не сохранял ссылки на задачи — при SIGTERM нечего было отменять, бесконечные циклы (PriceCache, monitor, Telegram polling) зависали. Fix: ссылки сохраняются в `_bg_tasks = [...]`; shutdown делает `t.cancel()` + `asyncio.gather(*_bg_tasks, return_exceptions=True)`.
-- **Active pair highlight match (design decision)**: подсветка активной пары в watchlist/positions/alerts сравнивает **4 параметра**: sym1+sym2+timeframe+zscore_window+entryZ. Только ticker — недостаточно: одна пара может быть в watchlist с разными timeframe/z-порогами.
-- **TP lines disappearing race condition (FIXED)**: `loadAllPositions()` inside `_setTriggers` raced with the 5s auto-refresh fetch; the auto-refresh returned stale `tp_zscore=null` before the POST finished, hiding lines. Fix: removed `loadAllPositions()` from `_setTriggers`/`_cancelTrigger`; local state updated directly (`_stratPosMap[id].tp_zscore = tp` + `_tpslBadgesHtml()`).
-- **False TP toast (FIXED)**: `_checkWsTriggers` on frontend computed z on 1000-candle dataset; backend monitor used `max(zscore_window*3, 60)` candles — different mean/std → different z → frontend saw threshold crossing where backend didn't. Fix: monitor now uses `min(candle_limit, 500)` (reads `candle_limit` from DB). Toast text changed from "идёт закрытие" to "порог достигнут — монитор закрывает" (frontend only notifies; closing is done by backend only).
-- **📋 Exec log button missing after page reload (FIXED)**: button was only in initial row render, not in-place update path. Fix: moved to `exec-status-{id}` div via `_execStatusHtml(exec, posId)`; `loadExecHistory()` on `DOMContentLoaded` bootstraps `_execHistoryByDbId` map and refreshes all exec-status divs.
-- **`active_executions` OPEN status never TTL-cleaned (FIXED)**: entries with status=OPEN were excluded from cleanup condition, causing infinite popup-reopen loop. Fix: `OPEN` added to TTL cleanup set.
-- **Popup keeps re-appearing when TP/SL is set (FIXED)**: `_startExecPoller()` was launched whenever any position has TP/SL; `_pollAllExecutions` called `_openExecPopup()` for every entry from `GET /api/executions`, including terminal entries (OPEN/DONE/etc.) lingering for 2h TTL. Popup auto-closed after 15s → next poll 2s later re-opened it → infinite loop. Fix: `_pollAllExecutions` now only auto-opens popups for **non-terminal** executions; terminal entries update if already open but are never auto-opened.
+- **Port 5000 on macOS**: reserved by AirPlay Receiver — use port 8080 instead
+- **HTTP 400 "notional below minimum"**: `size_usd` too small; minimum depends on contract/margin market
+- **Mixed pair won't trade**: one leg USDT-M + other USDC-M → analysis works, live trading blocked
+- **Leverage set error (warning, not fatal)**: position already exists on Binance → WARNING, trade proceeds with current leverage
+- **Smart execution stuck in PASSIVE**: intentionally dynamic up to `30s`; check events for `Reprice ... (passive)`
+- **Rollback FAILED**: market order for filled leg also failed → manual action required; logged as ERROR "MANUAL ACTION REQUIRED"
+- **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — use 🗑 to remove stale record or `✕ M` (backend detects no open positions and cleans DB)
+- **Trade markers not showing on chart**: `loadTradeJournal()` must be called after `runAnalyze()` to populate `_cachedJournalTrades`; DB timestamps use `+00:00` format — `_utcParse` must handle timezone suffix without appending extra `Z`
+- **Active pair highlight**: compares **5 params**: sym1+sym2+timeframe+zscore_window+entryZ — ticker alone is insufficient
+- **`_pollAllExecutions` auto-opens popups**: only for non-terminal executions; terminal entries (OPEN/DONE/CANCELLED/FAILED) update if popup already open but never create new one
 
 ## Tests (`tests/`)
 
@@ -455,8 +416,6 @@ await tg_bot.stop()                            # stop polling + close session
 | `test_lifespan.py` | 5 | asyncio graceful shutdown pattern: infinite tasks cancelled, `CancelledError` absorbed by `return_exceptions=True`, already-done tasks unharmed, mixed task types |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
-
-**Не покрыто намеренно**: `binance_client.py` (внешний API), баланс/номинал в `/api/pre_trade_check` (нужен мок BinanceClient), alert-гистерезис в мониторе (embedded in monitor loop), live Binance behavior of `order_manager.py` (rate limits / exchange-specific partial fills / reduce-only semantics).
 
 ## User Preferences
 - Русский язык по умолчанию в UI
