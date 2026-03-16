@@ -177,7 +177,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 
 ## Frontend (`frontend/index.html`)
 - Single HTML file, no build step, no npm
-- Dependencies via CDN: Tailwind CSS, Chart.js 4.4.2, chartjs-plugin-annotation 3.0.1
+- Dependencies via CDN: Tailwind CSS, Chart.js 4.4.2, chartjs-plugin-annotation 3.0.1, chartjs-plugin-zoom 2.0.1, hammerjs 2.0.8
 - i18n: `I18N` object with `en`/`ru` keys, `t(key)` function, `applyLocale()` on load and lang switch
 - Language stored in `localStorage` key `pt_lang`, default `ru`
 
@@ -234,14 +234,14 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `loadAllPositions()` — single call to `GET /api/all_positions` + `GET /api/balance`; renders both strategy and exchange tables; replaces old separate `loadStrategyPositions()` + `refreshPositions()` calls
 - **Auto-refresh**: `setInterval(() => loadAllPositions(), 5000)` — positions update every 5 s automatically
 - `renderStrategyPositions(positions)` — **in-place DOM updates**: existing rows update PnL cell (`id="pnl-cell-{id}"`), TP/SL badges (`id="tpsl-badges-{id}"`), exec-status (`id="exec-status-{id}"`), and call `_loadSparkline`; no full rebuild, no flash
-- `_loadSparkline(pos)` — async; **if the position's pair matches the current analysis** (`normSym(pos.symbol1) === curSym1`), reads z-scores from `state.historyData` directly (no API call) — guarantees same value as the header; otherwise fetches `/api/history` using `pos.timeframe`/`pos.candle_limit`/`pos.zscore_window` from DB. Creates Chart.js sparkline on first call; updates data in-place on subsequent calls
+- `_loadSparkline(pos)` — async; **if the position's pair matches the current analysis** (`normSym(pos.symbol1) === curSym1`), reads z-scores from `state.historyData` directly (no API call) — guarantees same value as the header; otherwise fetches `/api/history` using `pos.timeframe`/`pos.candle_limit`/`pos.zscore_window` from DB. Creates Chart.js sparkline on first call; updates data in-place on subsequent calls. Shows grey PnL equivalent under Z-score values.
 - `updateLiveData(msg)` — on each WebSocket message also updates `z-cur-{id}` for the matching position row in real-time (same cadence as the header, every 2 s)
 - `_stratPosMap: {[id]: pos}` — populated on each render, used by button onclick handlers; `pos.tp_smart` defaults to `true` for positions without TP yet set
 - Action buttons: `↗` → `_loadPosIntoAnalysis(id)` fills sym1/sym2 + hedge_ratio + sizing_method + leverage + **timeframe + candle_limit + zscore_window** from DB record, calls `runAnalyze()` automatically; `✕ M` → `_closePos(id,'market')`; `◎ S` → `_closePos(id,'smart')`; `🗑` → `_deleteDbPos(id)` DELETE `/api/db/positions/{id}` with warning confirm
 - **Row click** — clicking anywhere on a position row (except buttons/inputs/canvas) calls `_loadPosIntoAnalysis(id)` — same as `↗` button
-- `_updatePositionAnnotations()` — called after `runAnalyze()` and after `renderStrategyPositions()`; finds the DB position matching the currently analysed pair (sym1+sym2); sets `entryLine` vertical annotation on the spread chart (xMin/xMax = index of closest timestamp to `pos.opened_at`); updates `tpHigh`/`tpLow`/`slHigh`/`slLow` horizontal annotations from `pos.tp_zscore`/`pos.sl_zscore` (hides them if null)
+- `_updatePositionAnnotations()` — called after `runAnalyze()` and after `renderStrategyPositions()`; finds the DB position matching the currently analysed pair (sym1+sym2); sets `entryPoint` triangle annotation on the spread chart (using Z-axis); updates `tpHigh`/`tpLow`/`slHigh`/`slLow` horizontal annotations from `pos.tp_zscore`/`pos.sl_zscore` (hides them if null). Also plots closed trade journal markers using matching pairs.
+- **Chart Zooming**: Horizontal pan/zoom uses `chartjs-plugin-zoom` + `hammerjs`. `onPan` and `onZoom` handlers recursively sync the Spread and Price charts horizontally (`_syncCharts`).
 - `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table in Journal tab
-- `pollExecution` on terminal state → calls `loadAllPositions()` after 2s delay
 - **Active pair highlighting**: after `runAnalyze()`, calls `renderWatchlist()` + `_updateStrategyPosHighlights()` + `renderAlerts(_cachedAlerts)` to immediately show blue highlight (`bg-blue-950/20`/`bg-blue-950/40`) on matching items; match criteria: sym1+sym2+timeframe+zscore_window+entryZ (all 5); `_cachedAlerts` populated by `loadAlertsTab()`, used for re-render without extra API call
 - `_updateStrategyPosHighlights()` — updates `bg-blue-950/20` class on existing `pos-row-{id}` elements without full table rebuild; also called from `renderStrategyPositions()` for both new and existing rows
 
