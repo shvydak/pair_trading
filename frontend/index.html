@@ -31,6 +31,8 @@
   <!-- Chart.js + annotation plugin -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 
   <style>
     * { box-sizing: border-box; }
@@ -804,6 +806,7 @@
       <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
         <span class="text-[10px] text-muted" data-i18n="stat_zscore">Z-score</span>
         <span id="stat-zscore" class="text-sm font-bold text-white">-</span>
+        <span id="stat-zscore-pnl" class="text-[10px] text-muted ml-0.5">-</span>
         <div class="tooltip-box" data-i18n-html="tip_zscore"></div>
       </div>
       <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
@@ -2331,6 +2334,20 @@ function restoreAnalysisState() {
   runAnalyze();
 }
 
+let _isSyncingCharts = false;
+function _syncCharts(sourceChart) {
+  if (_isSyncingCharts) return;
+  _isSyncingCharts = true;
+  const targetChart = sourceChart === state.spreadChart ? state.priceChart : state.spreadChart;
+  if (!targetChart) { _isSyncingCharts = false; return; }
+  
+  const sourceScale = sourceChart.scales.x;
+  targetChart.options.scales.x.min = sourceScale.min;
+  targetChart.options.scales.x.max = sourceScale.max;
+  targetChart.update('none');
+  _isSyncingCharts = false;
+}
+
 // ------------------------------------------------------------------ //
 //  Render Stats Cards
 // ------------------------------------------------------------------ //
@@ -2383,6 +2400,17 @@ function _spreadToDollar(spreadArr) {
   return spreadArr.map(s => (s - meanSpread) * dollarPerUnit);
 }
 
+function _updateZScorePnlLabel(z) {
+  const pnlEl = document.getElementById('stat-zscore-pnl');
+  if (!pnlEl) return;
+  if (state._pnlPerZ != null && z != null) {
+    const pnl = z * state._pnlPerZ;
+    pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2);
+  } else {
+    pnlEl.textContent = '-';
+  }
+}
+
 function renderSpreadChart(data) {
   const ctx = document.getElementById('spread-chart').getContext('2d');
   if (state.spreadChart) { state.spreadChart.destroy(); }
@@ -2400,6 +2428,15 @@ function renderSpreadChart(data) {
     ? validSpread.reduce((a, b) => a + b, 0) / validSpread.length
     : 0;
   state._spreadDollarFactor = { meanSpread, dollarPerUnit };
+  
+  if (data.stats && data.stats.spread_std != null) {
+    state._pnlPerZ = data.stats.spread_std * dollarPerUnit;
+    _updateZScorePnlLabel(data.stats.current_zscore);
+  } else {
+    state._pnlPerZ = null;
+    const pnlEl = document.getElementById('stat-zscore-pnl');
+    if (pnlEl) pnlEl.textContent = '-';
+  }
 
   const dollarData = _spreadToDollar(data.spread);
 
@@ -2445,6 +2482,19 @@ function renderSpreadChart(data) {
             tpLow:     { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(63,185,80,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
             slHigh:    { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3], label: { content: 'SL', enabled: true, position: 'start', color: '#f85149', font: { size: 10 } } },
             slLow:     { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
+          }
+        },
+        zoom: {
+          pan: {
+            enabled: true,
+            mode: 'x',
+            onPan: function({chart}) { _syncCharts(chart); }
+          },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: 'x',
+            onZoom: function({chart}) { _syncCharts(chart); }
           }
         }
       },
@@ -2513,7 +2563,22 @@ function renderPriceChart(data, sym1, sym2) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        zoom: {
+          pan: {
+            enabled: true,
+            mode: 'x',
+            onPan: function({chart}) { _syncCharts(chart); }
+          },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: 'x',
+            onZoom: function({chart}) { _syncCharts(chart); }
+          }
+        }
+      },
       scales: {
         x: { ticks: { color: '#8b949e', maxTicksLimit: 10, maxRotation: 0, font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' } },
         y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' }, title: { display: true, text: t('indexed_label'), color: '#8b949e', font: { size: 11 } } },
@@ -3196,11 +3261,17 @@ function renderStrategyPositions(positions) {
         <div class="text-white leading-tight">${fmt(pos.entry_price1, 4)}</div>
         <div class="text-muted text-[10px] leading-tight">${fmt(pos.entry_price2, 4)}</div>
       </td>
-      <td class="font-mono text-xs text-muted">${pos.entry_zscore !== null && pos.entry_zscore !== undefined ? (pos.entry_zscore >= 0 ? '+' : '') + fmt(pos.entry_zscore, 2) : '–'}</td>
+      <td class="font-mono">
+        <div class="text-xs text-muted leading-tight">${pos.entry_zscore !== null && pos.entry_zscore !== undefined ? (pos.entry_zscore >= 0 ? '+' : '') + fmt(pos.entry_zscore, 2) : '–'}</div>
+        <div id="entry-z-pnl-${pos.id}" class="text-[10px] text-muted leading-tight opacity-70"></div>
+      </td>
       <td>
         <div class="flex items-center gap-1.5">
           <canvas id="sparkline-${pos.id}" width="90" height="28" style="display:block;flex-shrink:0"></canvas>
-          <span id="z-cur-${pos.id}" class="font-mono text-xs text-muted" style="min-width:32px">…</span>
+          <div class="font-mono" style="min-width:36px">
+            <div id="z-cur-${pos.id}" class="text-xs text-muted leading-tight">…</div>
+            <div id="z-cur-pnl-${pos.id}" class="text-[10px] text-muted leading-tight opacity-70"></div>
+          </div>
         </div>
       </td>
       <td id="pnl-cell-${pos.id}" class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
@@ -3278,8 +3349,10 @@ async function _loadSparkline(pos) {
       normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2;
 
     let zscores;
+    let data;
     if (isCurrent) {
-      zscores = (state.historyData.zscore || []).filter(v => v !== null && v !== undefined);
+      data = state.historyData;
+      zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
     } else {
       const params = new URLSearchParams({
         symbol1: pos.symbol1, symbol2: pos.symbol2,
@@ -3289,7 +3362,7 @@ async function _loadSparkline(pos) {
       });
       const res = await fetch(`${API}/api/history?${params}`);
       if (!res.ok) return;
-      const data = await res.json();
+      data = await res.json();
       zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
     }
     if (zscores.length === 0) return;
@@ -3300,6 +3373,26 @@ async function _loadSparkline(pos) {
                    : Math.abs(currentZ) >= 1.5 ? '#d29922' : '#8b949e';
       zLabel.textContent = (currentZ >= 0 ? '+' : '') + fmt(currentZ, 2);
       zLabel.style.color = zColor;
+    }
+
+    // Add PnL equivalent text directly below Z-scores in the table
+    const std = data?.stats?.spread_std;
+    if (std != null && pos.size_usd != null) {
+      const pnlPerZ = std * pos.size_usd;
+      
+      const entryPnlEl = document.getElementById(`entry-z-pnl-${pos.id}`);
+      if (entryPnlEl && pos.entry_zscore != null) {
+        const epnl = pos.entry_zscore * pnlPerZ;
+        const eStr = (epnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(epnl), 2);
+        entryPnlEl.textContent = eStr;
+        entryPnlEl.title = currentLang === 'ru' ? 'Спред PnL при Z=0' : 'Spread PnL at Z=0';
+      }
+
+      const curPnlEl = document.getElementById(`z-cur-pnl-${pos.id}`);
+      if (curPnlEl) {
+        const cpnl = currentZ * pnlPerZ;
+        curPnlEl.textContent = (cpnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(cpnl), 2);
+      }
     }
 
     const sparkData = zscores.slice(-50);
@@ -3561,12 +3654,15 @@ async function _deleteDbPos(posId) {
 //  Trade Journal
 // ------------------------------------------------------------------ //
 
+let _cachedJournalTrades = [];
+
 async function loadTradeJournal() {
   try {
     const res = await fetch(`${API}/api/db/history?limit=50`);
     if (!res.ok) return;
     const data = await res.json();
     const trades = data.trades || [];
+    _cachedJournalTrades = trades;
     const countEl = document.getElementById('journal-count');
     if (countEl) countEl.textContent = `${trades.length} ${currentLang === 'ru' ? 'сделок' : 'trades'}`;
     const tbody = document.getElementById('journal-body');
@@ -3611,6 +3707,7 @@ async function loadTradeJournal() {
         <td class="text-muted text-[10px]">${closed} ${execLogBtn}</td>
       </tr>`;
     }).join('');
+    _updatePositionAnnotations();
   } catch(e) { /* silently */ }
 }
 
@@ -3658,13 +3755,44 @@ function _updatePositionAnnotations() {
   if (!state.spreadChart || !state.historyData) return;
   const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
   const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const timestamps = state.historyData.timestamps;
+  if (!timestamps || !timestamps.length) return;
 
-  // Find open position matching the current chart pair
+  const ann = state.spreadChart.options.plugins.annotation.annotations;
+
+  const _utcParse = (ts) => new Date(ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z').getTime();
+
+  // Helper: find closest chart index for a given ISO timestamp
+  function _closestIdx(isoStr) {
+    const ms = _utcParse(isoStr);
+    let best = 0, minDiff = Infinity;
+    timestamps.forEach((ts, i) => {
+      const diff = Math.abs(_utcParse(ts) - ms);
+      if (diff < minDiff) { minDiff = diff; best = i; }
+    });
+    return best;
+  }
+
+  // Helper: get dollar PnL value at a chart index
+  function _pnlAt(idx) {
+    const spread = state.historyData.spread;
+    if (!spread || idx >= spread.length) return 0;
+    const f = state._spreadDollarFactor;
+    if (!f) return spread[idx];
+    return (spread[idx] - f.meanSpread) * f.dollarPerUnit;
+  }
+
+  // ── Clean up old trade markers ─────────────────────────────────────
+  Object.keys(ann).forEach(key => {
+    if (key.startsWith('trade_')) delete ann[key];
+  });
+  delete ann.entryLine;
+  delete ann.entryPoint;
+
+  // ── Find open position matching the current chart pair ─────────────
   const pos = Object.values(_stratPosMap).find(p =>
     _symShort(p.symbol1) === sym1 && _symShort(p.symbol2) === sym2
   );
-
-  const ann = state.spreadChart.options.plugins.annotation.annotations;
 
   // ── TP / SL lines from position ────────────────────────────────────
   const tp = pos?.tp_zscore ?? null;
@@ -3674,27 +3802,101 @@ function _updatePositionAnnotations() {
   ann.slHigh.display = !!sl; ann.slHigh.yMin = sl || 0;       ann.slHigh.yMax = sl || 0;
   ann.slLow.display  = !!sl; ann.slLow.yMin  = sl ? -sl : 0;  ann.slLow.yMax  = sl ? -sl : 0;
 
-  // ── Entry vertical line ────────────────────────────────────────────
-  if (pos?.opened_at && state.historyData.timestamps?.length) {
-    const entryMs = new Date(pos.opened_at).getTime();
-    const timestamps = state.historyData.timestamps;
-    let closestIdx = 0, minDiff = Infinity;
-    timestamps.forEach((ts, i) => {
-      const diff = Math.abs(new Date(ts).getTime() - entryMs);
-      if (diff < minDiff) { minDiff = diff; closestIdx = i; }
-    });
+  // ── Open position: entry marker ────────────────────────────────────
+  if (pos?.opened_at && pos.entry_zscore != null) {
+    const idx = _closestIdx(pos.opened_at);
+    const zVal = pos.entry_zscore;
+    const isLong = pos.side === 'long_spread';
+    const marker = isLong ? '▲' : '▼';
+    const color  = isLong ? '#3fb950' : '#f85149';
+
+    // Subtle vertical dashed line
     ann.entryLine = {
       type: 'line', xScaleID: 'x',
-      xMin: closestIdx, xMax: closestIdx,
-      borderColor: 'rgba(88,166,255,0.55)', borderWidth: 1.5, borderDash: [4, 3],
-      label: {
-        content: currentLang === 'ru' ? 'Вход' : 'Entry',
-        enabled: true, position: 'start',
-        color: '#58a6ff', font: { size: 9 }, padding: 2,
-      },
+      xMin: idx, xMax: idx,
+      borderColor: 'rgba(88,166,255,0.25)', borderWidth: 1, borderDash: [3, 4],
     };
-  } else {
-    delete ann.entryLine;
+
+    // Triangle marker + Z-score label
+    ann.entryPoint = {
+      type: 'label',
+      xScaleID: 'x', yScaleID: 'yZ',
+      xValue: idx, yValue: zVal,
+      content: marker,
+      color: color,
+      font: { size: 14, weight: 'bold' },
+      padding: 0,
+      yAdjust: isLong ? -10 : 10,
+    };
+    ann.entryLabel = {
+      type: 'label',
+      xScaleID: 'x', yScaleID: 'yZ',
+      xValue: idx, yValue: zVal,
+      content: (currentLang === 'ru' ? 'Вход Z ' : 'Entry Z ') + (zVal > 0 ? '+' : '') + zVal.toFixed(2),
+      color: '#8b949e',
+      font: { size: 9 },
+      padding: 2,
+      yAdjust: isLong ? -24 : 24,
+    };
+  }
+
+  // ── Closed trades: entry + exit markers ─────────────────────────────
+  if (Array.isArray(_cachedJournalTrades)) {
+    const chartStart = _utcParse(timestamps[0]);
+    const chartEnd   = _utcParse(timestamps[timestamps.length - 1]);
+
+    _cachedJournalTrades.forEach((tr, i) => {
+      if (_symShort(tr.symbol1) !== sym1 || _symShort(tr.symbol2) !== sym2) return;
+
+      const entryMs = tr.opened_at ? _utcParse(tr.opened_at) : null;
+      const exitMs  = tr.closed_at ? _utcParse(tr.closed_at) : null;
+
+      if ((!entryMs || entryMs < chartStart) && (!exitMs || exitMs < chartStart)) return;
+
+      const isLong = tr.side === 'long_spread';
+      const pnlOk = (tr.pnl || 0) >= 0;
+
+      // Entry triangle (smaller, semi-transparent)
+      if (entryMs && entryMs >= chartStart && entryMs <= chartEnd && tr.entry_zscore != null) {
+        const idx = _closestIdx(tr.opened_at);
+        ann[`trade_entry_${i}`] = {
+          type: 'label',
+          xScaleID: 'x', yScaleID: 'yZ',
+          xValue: idx, yValue: tr.entry_zscore,
+          content: isLong ? '▲' : '▼',
+          color: (isLong ? '#3fb950' : '#f85149') + 'aa',
+          font: { size: 10 },
+          padding: 0,
+          yAdjust: isLong ? -8 : 8,
+        };
+      }
+
+      // Exit marker: ✕ with PnL label
+      if (exitMs && exitMs >= chartStart && exitMs <= chartEnd && tr.exit_zscore != null) {
+        const idx = _closestIdx(tr.closed_at);
+        const pnlStr = (tr.pnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(tr.pnl || 0), 2);
+        ann[`trade_exit_${i}`] = {
+          type: 'label',
+          xScaleID: 'x', yScaleID: 'yZ',
+          xValue: idx, yValue: tr.exit_zscore,
+          content: '✕',
+          color: pnlOk ? '#3fb950' : '#f85149',
+          font: { size: 11, weight: 'bold' },
+          padding: 0,
+          yAdjust: -8,
+        };
+        ann[`trade_pnl_${i}`] = {
+          type: 'label',
+          xScaleID: 'x', yScaleID: 'yZ',
+          xValue: idx, yValue: tr.exit_zscore,
+          content: pnlStr,
+          color: pnlOk ? '#3fb950' : '#f85149',
+          font: { size: 8, weight: 'bold' },
+          padding: 1,
+          yAdjust: -20,
+        };
+      }
+    });
   }
 
   state.spreadChart.update('none');
@@ -4114,6 +4316,9 @@ function updateLiveData(msg) {
     if (z <= -2)      zEl.classList.add('text-green-400');
     else if (z >= 2)  zEl.classList.add('text-red-400');
     else              zEl.classList.add('text-yellow-400');
+
+    _updateZScorePnlLabel(z);
+
     // Update z-score label in matching position rows in real-time
     const normSym = s => s.split(':')[0].replace('/', '').toUpperCase();
     const curSym1 = document.getElementById('sym1-input')?.value?.toUpperCase();
