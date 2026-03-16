@@ -1691,14 +1691,29 @@ function renderWatchlist() {
     list.innerHTML = `<div class="text-center text-muted text-[10px] py-6">${t('wl_no_items')}</div>`;
     return;
   }
+  const _wlNorm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const _wlCurS1 = _wlNorm(document.getElementById('sym1-input')?.value || '');
+  const _wlCurS2 = _wlNorm(document.getElementById('sym2-input')?.value || '');
+  const _wlCurTf = state.timeframe || '1h';
+  const _wlCurZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
+  const _wlCurEz = parseFloat(document.getElementById('entry-z-input')?.value) || 2;
+
   list.innerHTML = items.map((w, i) => {
     const az = w.zscore != null ? Math.abs(w.zscore) : null;
     const entryZ = parseFloat(w.entryZ) || 2;
+    const isActivePair = _wlCurS1 && _wlCurS2
+      && _wlNorm(w.sym1) === _wlCurS1 && _wlNorm(w.sym2) === _wlCurS2
+      && (w.timeframe || '1h') === _wlCurTf
+      && (parseInt(w.zwindow) || 20) === _wlCurZw
+      && Math.abs((parseFloat(w.entryZ) || 2) - _wlCurEz) < 0.01;
 
-    // Row highlight based on proximity to entryZ threshold
+    // Row highlight: active pair takes priority, then threshold proximity
     let rowBorder = '';
     let alertDot = '';
-    if (az != null) {
+    if (isActivePair) {
+      rowBorder = 'border-l-2 border-l-blue-400 bg-blue-950/40';
+      alertDot = `<span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0"></span>`;
+    } else if (az != null) {
       if (az >= entryZ) {
         rowBorder = 'border-l-2 border-l-[#f85149]';
         alertDot = `<span class="inline-block w-1.5 h-1.5 rounded-full bg-red animate-pulse shrink-0"></span>`;
@@ -1721,7 +1736,7 @@ function renderWatchlist() {
     const spreadDisplay = w.spread != null ? w.spread.toFixed(4) : '—';
 
     return `
-    <div class="px-2 py-1.5 border-b border-border ${rowBorder} hover:bg-card cursor-pointer transition group" onclick="loadPairFromWatchlist(${i})">
+    <div class="px-2 py-1.5 border-b border-border ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-card'} cursor-pointer transition group" onclick="loadPairFromWatchlist(${i})">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-1 min-w-0 flex-1">
           ${alertDot}
@@ -1803,12 +1818,14 @@ async function updateWatchlistZScores() {
 // ------------------------------------------------------------------ //
 //  Alerts tab
 // ------------------------------------------------------------------ //
+let _cachedAlerts = null;
 async function loadAlertsTab() {
   try {
     const res = await fetch(`${API}/api/triggers`);
     if (!res.ok) return;
     const data = await res.json();
-    renderAlerts((data.triggers || []).filter(t => t.type === 'alert'));
+    _cachedAlerts = (data.triggers || []).filter(t => t.type === 'alert');
+    renderAlerts(_cachedAlerts);
     // Clear badge when user opens the tab
     _setAlertsBadge(0);
   } catch {}
@@ -1869,7 +1886,19 @@ function renderAlerts(alerts) {
     tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">No active alerts.</td></tr>`;
     return;
   }
+  const _alNorm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const _alCurS1 = _alNorm(document.getElementById('sym1-input')?.value || '');
+  const _alCurS2 = _alNorm(document.getElementById('sym2-input')?.value || '');
+  const _alCurTf = state.timeframe || '1h';
+  const _alCurZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
+  const _alCurEz = parseFloat(document.getElementById('entry-z-input')?.value) || 2;
+
   tbody.innerHTML = alerts.map(tr => {
+    const alertIsActive = _alCurS1 && _alCurS2
+      && _alNorm(tr.symbol1) === _alCurS1 && _alNorm(tr.symbol2) === _alCurS2
+      && (tr.timeframe || '1h') === _alCurTf
+      && (tr.zscore_window || 20) === _alCurZw
+      && Math.abs(Math.abs(tr.zscore) - _alCurEz) < 0.01;
     const statusBadge = tr.status === 'active'
       ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">active</span>'
       : tr.status === 'triggered'
@@ -1886,7 +1915,7 @@ function renderAlerts(alerts) {
     const firedAgo = tr.last_fired_at ? _timeAgo(tr.last_fired_at) : null;
     const firedMs = tr.last_fired_at ? (Date.now() - new Date(tr.last_fired_at).getTime()) : Infinity;
     const isRecent = firedMs < 3600000; // fired within last hour
-    const rowBg = isRecent ? 'bg-yellow-900/20 hover:bg-yellow-900/30' : 'hover:bg-white/5';
+    const rowBg = alertIsActive ? 'bg-blue-950/40' : isRecent ? 'bg-yellow-900/20 hover:bg-yellow-900/30' : 'hover:bg-white/5';
     const firedCell = firedAgo
       ? `<span class="${isRecent ? 'text-yellow-400 font-medium' : 'text-muted'} text-[10px]">${isRecent ? '⚡ ' : ''}${firedAgo}</span>`
       : '<span class="text-muted text-[10px]">—</span>';
@@ -2250,6 +2279,9 @@ async function runAnalyze() {
     updateLastUpdate();
     saveAnalysisState();
     _updatePositionAnnotations();
+    renderWatchlist();
+    _updateStrategyPosHighlights();
+    if (_cachedAlerts) renderAlerts(_cachedAlerts);
     switchTab('spread');
   } catch(e) {
     enableTrading(false);
@@ -2808,13 +2840,24 @@ function renderStrategyPositions(positions) {
     if (!currentIds.has(id)) document.getElementById(`pos-row-${id}`)?.remove();
   });
 
+  const _spNorm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const _spCurS1 = _spNorm(document.getElementById('sym1-input')?.value || '');
+  const _spCurS2 = _spNorm(document.getElementById('sym2-input')?.value || '');
+  const _spCurTf = state.timeframe || '1h';
+  const _spCurZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
+
   positions.forEach(pos => {
     // Default tp_smart=true when no TP is set yet (user hasn't saved a preference)
     if (pos.tp_zscore == null) pos.tp_smart = true;
     _stratPosMap[pos.id] = pos;
     const existingRow = document.getElementById(`pos-row-${pos.id}`);
+    const posIsActive = _spCurS1 && _spCurS2
+      && _spNorm(pos.symbol1) === _spCurS1 && _spNorm(pos.symbol2) === _spCurS2
+      && (pos.timeframe || '1h') === _spCurTf
+      && (pos.zscore_window || 20) === _spCurZw;
 
     if (existingRow) {
+      existingRow.classList.toggle('bg-blue-950/20', posIsActive);
       // In-place update of dynamic cells only — no canvas recreation
       const pnl = pos.unrealized_pnl;
       const pnlClass = pnl === null ? 'text-muted' : pnl >= 0 ? 'text-green-400' : 'text-red-400';
@@ -2846,6 +2889,7 @@ function renderStrategyPositions(positions) {
     const tr = document.createElement('tr');
     tr.id = `pos-row-${pos.id}`;
     tr.style.cursor = 'pointer';
+    if (posIsActive) tr.classList.add('bg-blue-950/20');
     tr.onclick = (e) => { if (!e.target.closest('button, input, canvas')) _loadPosIntoAnalysis(pos.id); };
     tr.innerHTML = `
       <td>
@@ -3270,6 +3314,24 @@ function updateThresholdLines() {
   ann.exitHigh.yMin  = exitZ;   ann.exitHigh.yMax  = exitZ;
   ann.exitLow.yMin   = -exitZ;  ann.exitLow.yMax   = -exitZ;
   state.spreadChart.update('none');
+}
+
+function _updateStrategyPosHighlights() {
+  const norm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const curS1 = norm(document.getElementById('sym1-input')?.value || '');
+  const curS2 = norm(document.getElementById('sym2-input')?.value || '');
+  const curTf = state.timeframe || '1h';
+  const curZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
+  Object.keys(_stratPosMap).forEach(id => {
+    const pos = _stratPosMap[id];
+    const row = document.getElementById(`pos-row-${id}`);
+    if (!row) return;
+    const isActive = curS1 && curS2
+      && norm(pos.symbol1) === curS1 && norm(pos.symbol2) === curS2
+      && (pos.timeframe || '1h') === curTf
+      && (pos.zscore_window || 20) === curZw;
+    row.classList.toggle('bg-blue-950/20', isActive);
+  });
 }
 
 function _updatePositionAnnotations() {

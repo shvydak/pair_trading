@@ -208,6 +208,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - Индикация порога (`entryZ` пары): `|z| ≥ entryZ*0.75` → жёлтый `border-l-2`; `|z| ≥ entryZ` → красный `border-l-2` + мигающая точка
 - Направление z-score: `_zDir` (sign) → стрелка ↑/↓ рядом со значением z
 - `addWatchlistItem()` — ручная форма (только sym1/sym2, без параметров); `addCurrentPairToWatchlist()` — захватывает весь текущий стейт анализа; `_addToWatchlist(s1, s2, params)` — общая логика добавления/обновления
+- **Подсветка активной пары**: пара считается активной если совпадают **sym1 + sym2 + timeframe + zscore_window + entryZ** (все 5 параметров); активная пара получает синий фон (`bg-blue-950/40`) + синую рамку слева + синюю точку — приоритет выше threshold-цветов; обновляется немедленно после `runAnalyze()` через `renderWatchlist()` (не ждёт 5-секундного тика)
 
 ### TP/SL Ордера (новая система)
 - `loadOrdersTab()` → `GET /api/triggers` → рендерит таблицу
@@ -240,6 +241,8 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `_updatePositionAnnotations()` — called after `runAnalyze()` and after `renderStrategyPositions()`; finds the DB position matching the currently analysed pair (sym1+sym2); sets `entryLine` vertical annotation on the spread chart (xMin/xMax = index of closest timestamp to `pos.opened_at`); updates `tpHigh`/`tpLow`/`slHigh`/`slLow` horizontal annotations from `pos.tp_zscore`/`pos.sl_zscore` (hides them if null)
 - `loadTradeJournal()` → `GET /api/db/history?limit=50` → renders closed trades table in Journal tab
 - `pollExecution` on terminal state → calls `loadAllPositions()` after 2s delay
+- **Active pair highlighting**: after `runAnalyze()`, calls `renderWatchlist()` + `_updateStrategyPosHighlights()` + `renderAlerts(_cachedAlerts)` to immediately show blue highlight (`bg-blue-950/20`/`bg-blue-950/40`) on matching items; match criteria: sym1+sym2+timeframe+zscore_window+entryZ (all 5); `_cachedAlerts` populated by `loadAlertsTab()`, used for re-render without extra API call
+- `_updateStrategyPosHighlights()` — updates `bg-blue-950/20` class on existing `pos-row-{id}` elements without full table rebuild; also called from `renderStrategyPositions()` for both new and existing rows
 
 ### Trading Section (sidebar)
 - **Leverage input**: `#leverage-input` (1–20x); passed to both market and smart execution
@@ -423,10 +426,12 @@ await tg_bot.stop()                            # stop polling + close session
 - **Double-trigger (FIXED)**: Monitor could fire TP/SL twice — sending duplicate Telegram messages and opening a reverse position. Root cause: `closing_tags.add(tag)` could be skipped on exception, and `closing_tags &= current_tags` cleanup could prematurely remove the guard. Fix: `db.set_position_triggers(pos_id, None, None, False)` called immediately before starting close — next cycle sees `tp is None and sl is None → continue`; DB-level guard, not memory-level.
 - **Monitor used hardcoded timeframe/zscore_window (FIXED)**: TP/SL fired at wrong z-score levels when position was opened with non-default params (e.g. 5m / window=50). Fixed: monitor reads `pos.get("timeframe")` and `pos.get("zscore_window")` from each DB record.
 - **Z-score discrepancy header vs position row (FIXED)**: `_loadSparkline` fetched with `pos.candle_limit` (DB), WebSocket used `state.historyLimit` (analysis) → different dataset → different mean/std → different z. Fixed: when pair matches current analysis, sparkline reads from `state.historyData` directly.
+- **Uvicorn не останавливается по Cmd+C (FIXED)**: `asyncio.create_task()` в lifespan не сохранял ссылки на задачи — при SIGTERM нечего было отменять, бесконечные циклы (PriceCache, monitor, Telegram polling) зависали. Fix: ссылки сохраняются в `_bg_tasks = [...]`; shutdown делает `t.cancel()` + `asyncio.gather(*_bg_tasks, return_exceptions=True)`.
+- **Active pair highlight match (design decision)**: подсветка активной пары в watchlist/positions/alerts сравнивает **4 параметра**: sym1+sym2+timeframe+zscore_window+entryZ. Только ticker — недостаточно: одна пара может быть в watchlist с разными timeframe/z-порогами.
 
 ## Tests (`tests/`)
 
-199 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
+204 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
@@ -438,6 +443,7 @@ await tg_bot.stop()                            # stop polling + close session
 | `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |
 | `test_watchlist.py` | 8 | WatchlistItem Pydantic model: defaults, custom fields, required fields validation |
 | `test_telegram_bot.py` | 56 | Formatters, is_configured, send() safety, all notify_* content (via `_fire` mock); uses `asyncio.run()` — no pytest-asyncio needed |
+| `test_lifespan.py` | 5 | asyncio graceful shutdown pattern: infinite tasks cancelled, `CancelledError` absorbed by `return_exceptions=True`, already-done tasks unharmed, mixed task types |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
 

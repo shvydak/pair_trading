@@ -510,11 +510,16 @@ async def monitor_position_triggers() -> None:
 async def lifespan(app: FastAPI):
     db.init_db()
     await tg_bot.setup()
-    asyncio.create_task(price_cache.run())
-    asyncio.create_task(monitor_position_triggers())
-    asyncio.create_task(tg_bot.start_polling())
+    _bg_tasks = [
+        asyncio.create_task(price_cache.run()),
+        asyncio.create_task(monitor_position_triggers()),
+        asyncio.create_task(tg_bot.start_polling()),
+    ]
     log.info("Pair Trading backend started")
     yield
+    for t in _bg_tasks:
+        t.cancel()
+    await asyncio.gather(*_bg_tasks, return_exceptions=True)
     await client.close()
     await tg_bot.stop()
     log.info("Pair Trading backend stopped")
