@@ -151,10 +151,10 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - **Backtest signals**: enter at `|z| > entry_threshold`, exit at `|z| < exit_threshold`
 - **ATR**: `calculate_atr(df, period=14)` — average true range from OHLCV DataFrame
 - **Position sizing** (`calculate_position_sizes`):
-  - `ols`: `qty1 = size/P1`, `qty2 = size*|β|/P2`
-  - `atr`: `qty1 = size/P1`, `qty2 = qty1 * (ATR1/ATR2)` — equal dollar volatility per leg
-  - `equal`: `qty1 = size/P1`, `qty2 = size/P2`
-  - ⚠️ ATR formula does NOT include `* (P1/P2)` — that was a bug, correct is `qty2 = qty1 * ratio`
+  - `size_usd` = **total position size** (both legs combined, value1 + value2 = size_usd)
+  - `ols`: split proportionally by 1 : |β| → `qty1 = size / ((1+|β|)*P1)`, `qty2 = size*|β| / ((1+|β|)*P2)`
+  - `atr`: `qty1 = size / (P1 + ratio*P2)`, `qty2 = qty1 * (ATR1/ATR2)` — equal dollar volatility per leg
+  - `equal`: `qty1 = size / (2*P1)`, `qty2 = size / (2*P2)`
 
 ## Binance Client Notes (`binance_client.py`)
 - Uses `ccxt.async_support.binanceusdm` (not `binance`)
@@ -440,11 +440,11 @@ await tg_bot.stop()                            # stop polling + close session
 
 ## Tests (`tests/`)
 
-212 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
+213 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
-| `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
+| `test_strategy.py` | 41 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
 | `test_db.py` | 55 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern**, **execution_history** (save, idempotent, is_close, empty, limit, order, statuses) |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
 | `test_order_manager.py` | 4 | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance |

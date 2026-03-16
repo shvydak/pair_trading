@@ -89,14 +89,17 @@ def test_calculate_zscore_named():
 # ---------------------------------------------------------------------------
 
 def test_position_sizes_ols():
-    """OLS: qty1 = size/p1, qty2 = size*|β|/p2"""
+    """OLS: size_usd is total; split by 1:|β|. β=0.5 → leg1=666.67, leg2=333.33"""
     result = strat.calculate_position_sizes(
         price1=100.0, price2=50.0, size_usd=1000.0, hedge_ratio=0.5, method="ols"
     )
-    assert result["qty1"] == pytest.approx(10.0)
-    assert result["qty2"] == pytest.approx(10.0)   # 1000*0.5/50
-    assert result["value1"] == pytest.approx(1000.0)
-    assert result["value2"] == pytest.approx(500.0)
+    # divisor = 1 + 0.5 = 1.5
+    # leg1_usd = 1000/1.5 ≈ 666.67, leg2_usd = 500/1.5 ≈ 333.33
+    assert result["qty1"] == pytest.approx(1000.0 / (1.5 * 100.0))   # ≈ 6.667
+    assert result["qty2"] == pytest.approx(1000.0 * 0.5 / (1.5 * 50.0))  # ≈ 6.667
+    assert result["value1"] == pytest.approx(1000.0 / 1.5)
+    assert result["value2"] == pytest.approx(1000.0 * 0.5 / 1.5)
+    assert result["value1"] + result["value2"] == pytest.approx(1000.0)
 
 
 def test_position_sizes_ols_negative_beta():
@@ -107,26 +110,30 @@ def test_position_sizes_ols_negative_beta():
 
 
 def test_position_sizes_equal():
-    """Equal: both legs get exactly size_usd in dollar exposure."""
+    """Equal: each leg gets size_usd/2 in dollar exposure."""
     result = strat.calculate_position_sizes(
         price1=100.0, price2=50.0, size_usd=1000.0, hedge_ratio=1.0, method="equal"
     )
-    assert result["value1"] == pytest.approx(1000.0)
-    assert result["value2"] == pytest.approx(1000.0)
-    assert result["qty1"] == pytest.approx(10.0)
-    assert result["qty2"] == pytest.approx(20.0)
+    assert result["value1"] == pytest.approx(500.0)
+    assert result["value2"] == pytest.approx(500.0)
+    assert result["qty1"] == pytest.approx(5.0)    # 1000/(2*100)
+    assert result["qty2"] == pytest.approx(10.0)   # 1000/(2*50)
+    assert result["value1"] + result["value2"] == pytest.approx(1000.0)
 
 
 def test_position_sizes_atr():
-    """ATR: qty2 = qty1 * (atr1/atr2)."""
-    # atr1=5, atr2=2 → ratio=2.5 → qty2 = (1000/100) * 2.5 = 25
+    """ATR: total = size_usd, split proportionally by ATR ratio."""
+    # atr1=5, atr2=2 → ratio=2.5
+    # qty1 = 1000 / (100 + 2.5*50) = 1000/225 ≈ 4.444
+    # qty2 = qty1 * 2.5 ≈ 11.111
     result = strat.calculate_position_sizes(
         price1=100.0, price2=50.0, size_usd=1000.0, hedge_ratio=1.0,
         atr1=5.0, atr2=2.0, method="atr"
     )
-    assert result["qty1"] == pytest.approx(10.0)
-    assert result["qty2"] == pytest.approx(25.0)   # 10 * (5/2)
-    assert result["value2"] == pytest.approx(1250.0)
+    expected_qty1 = 1000.0 / (100.0 + 2.5 * 50.0)
+    assert result["qty1"] == pytest.approx(expected_qty1)
+    assert result["qty2"] == pytest.approx(expected_qty1 * 2.5)
+    assert result["value1"] + result["value2"] == pytest.approx(1000.0)
 
 
 def test_position_sizes_atr_missing_falls_back_to_ols():
@@ -149,6 +156,16 @@ def test_position_sizes_value_equals_qty_times_price():
         )
         assert r["value1"] == pytest.approx(r["qty1"] * 200.0, rel=1e-9)
         assert r["value2"] == pytest.approx(r["qty2"] * 30.0, rel=1e-9)
+
+
+def test_position_sizes_total_equals_size_usd():
+    """value1 + value2 == size_usd for all methods (total position = input)."""
+    for method in ("ols", "equal", "atr"):
+        r = strat.calculate_position_sizes(
+            price1=200.0, price2=30.0, size_usd=500.0, hedge_ratio=0.8,
+            atr1=3.0, atr2=1.5, method=method
+        )
+        assert r["value1"] + r["value2"] == pytest.approx(500.0, rel=1e-9)
 
 
 # ---------------------------------------------------------------------------

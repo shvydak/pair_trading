@@ -164,33 +164,38 @@ class PairTradingStrategy:
         """
         Calculate position quantities for both legs.
 
+        size_usd is the TOTAL position size (both legs combined).
+
         method="ols"   — dollar-neutral adjusted by OLS hedge ratio β:
-                          qty1 = size_usd / price1
-                          qty2 = size_usd * |β| / price2
-                          → leg2 dollar exposure scales with β
+                          Split size_usd proportionally by 1 : |β|
+                          leg1_usd = size_usd / (1 + |β|)
+                          leg2_usd = size_usd * |β| / (1 + |β|)
+                          qty1 = leg1_usd / price1
+                          qty2 = leg2_usd / price2
 
         method="atr"   — volatility parity (ATR-based):
                           ratio = atr1 / atr2
-                          qty1 = size_usd / price1
+                          qty1 = size_usd / (price1 + ratio * price2)
                           qty2 = qty1 * ratio
                           → equal price-unit volatility (qty1*ATR1 == qty2*ATR2)
-                            Note: dollar exposure of leg2 (qty2*price2) may differ
-                            from size_usd when ATR ratio is far from price ratio
+                          → value1 + value2 = size_usd
 
         method="equal" — equal dollar exposure on both legs:
-                          qty1 = size_usd / price1
-                          qty2 = size_usd / price2
+                          qty1 = size_usd / (2 * price1)
+                          qty2 = size_usd / (2 * price2)
         """
         if method == "atr" and atr1 and atr2 and atr2 > 0:
             ratio = atr1 / atr2
-            qty1 = size_usd / price1
+            qty1 = size_usd / (price1 + ratio * price2)
             qty2 = qty1 * ratio
         elif method == "equal":
-            qty1 = size_usd / price1
-            qty2 = size_usd / price2
+            qty1 = size_usd / (2 * price1)
+            qty2 = size_usd / (2 * price2)
         else:  # ols (default)
-            qty1 = size_usd / price1
-            qty2 = (size_usd * abs(hedge_ratio)) / price2
+            beta = abs(hedge_ratio)
+            divisor = 1 + beta
+            qty1 = size_usd / (divisor * price1)
+            qty2 = (size_usd * beta) / (divisor * price2)
 
         return {
             "qty1":   qty1,
@@ -315,11 +320,13 @@ class PairTradingStrategy:
                 exit_spread = np.log(exit_p1) - hedge_ratio * np.log(exit_p2)
                 spread_change = (exit_spread - entry_spread) * position
 
-                # Dollar PnL using OLS-β sizing:
-                # qty1 = size_usd / entry_p1  (long or short based on position)
-                # qty2 = size_usd * |β| / entry_p2  (opposite leg)
-                qty1 = (position_size_usd / entry_p1) * position
-                qty2 = (position_size_usd * abs(hedge_ratio) / entry_p2) * (-position)
+                # Dollar PnL using OLS-β sizing (size_usd = total position):
+                # leg1_usd = size_usd / (1 + |β|)
+                # leg2_usd = size_usd * |β| / (1 + |β|)
+                beta = abs(hedge_ratio)
+                divisor = 1 + beta
+                qty1 = (position_size_usd / (divisor * entry_p1)) * position
+                qty2 = (position_size_usd * beta / (divisor * entry_p2)) * (-position)
 
                 pnl1 = qty1 * (exit_p1 - entry_p1)
                 pnl2 = qty2 * (exit_p2 - entry_p2)
