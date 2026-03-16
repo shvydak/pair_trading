@@ -477,3 +477,128 @@ def test_get_recent_alerts_multiple(tmp_db):
         tid = tmp_db.save_trigger("BTC/USDT:USDT", sym2, "both", "alert", 2.0)
         tmp_db.alert_fired(tid)
     assert len(tmp_db.get_recent_alerts(minutes=60)) == 3
+
+
+# ---------------------------------------------------------------------------
+# execution_history
+# ---------------------------------------------------------------------------
+
+_EXEC_DATA = '{"exec_id":"abc12345","status":"open","leg1":{"symbol":"BTC/USDT:USDT","filled":0.01},"leg2":{"symbol":"ETH/USDT:USDT","filled":0.1},"events":["[0.0s] placed"]}'
+
+
+def test_save_execution_history_basic(tmp_db):
+    """save_execution_history stores a row retrievable by get_execution_history."""
+    tmp_db.save_execution_history(
+        exec_id="abc12345",
+        db_id=1,
+        close_db_id=None,
+        is_close=False,
+        status="open",
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        data_json=_EXEC_DATA,
+    )
+    rows = tmp_db.get_execution_history()
+    assert len(rows) == 1
+    assert rows[0]["exec_id"] == "abc12345"
+    assert rows[0]["db_id"] == 1
+    assert rows[0]["close_db_id"] is None
+    assert rows[0]["is_close"] == 0
+    assert rows[0]["status"] == "open"
+    assert rows[0]["symbol1"] == "BTC/USDT:USDT"
+    assert rows[0]["symbol2"] == "ETH/USDT:USDT"
+    assert rows[0]["data_json"] == _EXEC_DATA
+    assert rows[0]["completed_at"] is not None
+
+
+def test_save_execution_history_idempotent(tmp_db):
+    """Calling save twice with the same exec_id inserts only one row (INSERT OR IGNORE)."""
+    for _ in range(2):
+        tmp_db.save_execution_history(
+            exec_id="dup00001",
+            db_id=5,
+            close_db_id=None,
+            is_close=False,
+            status="open",
+            symbol1="BTC/USDT:USDT",
+            symbol2="ETH/USDT:USDT",
+            data_json=_EXEC_DATA,
+        )
+    rows = tmp_db.get_execution_history()
+    assert len(rows) == 1
+
+
+def test_save_execution_history_close(tmp_db):
+    """is_close=True and close_db_id are stored correctly."""
+    tmp_db.save_execution_history(
+        exec_id="close001",
+        db_id=None,
+        close_db_id=7,
+        is_close=True,
+        status="open",
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        data_json=_EXEC_DATA,
+    )
+    row = tmp_db.get_execution_history()[0]
+    assert row["is_close"] == 1
+    assert row["close_db_id"] == 7
+    assert row["db_id"] is None
+
+
+def test_get_execution_history_empty(tmp_db):
+    """Returns empty list when table is empty."""
+    assert tmp_db.get_execution_history() == []
+
+
+def test_get_execution_history_limit(tmp_db):
+    """limit parameter caps the number of returned rows."""
+    for i in range(5):
+        tmp_db.save_execution_history(
+            exec_id=f"exec{i:04d}",
+            db_id=i,
+            close_db_id=None,
+            is_close=False,
+            status="done",
+            symbol1="BTC/USDT:USDT",
+            symbol2="ETH/USDT:USDT",
+            data_json=_EXEC_DATA,
+        )
+    assert len(tmp_db.get_execution_history(limit=3)) == 3
+    assert len(tmp_db.get_execution_history(limit=10)) == 5
+
+
+def test_get_execution_history_newest_first(tmp_db):
+    """Rows are returned in descending completed_at order."""
+    for i in range(3):
+        tmp_db.save_execution_history(
+            exec_id=f"ord{i:04d}",
+            db_id=i,
+            close_db_id=None,
+            is_close=False,
+            status="open",
+            symbol1="BTC/USDT:USDT",
+            symbol2="ETH/USDT:USDT",
+            data_json=_EXEC_DATA,
+        )
+    rows = tmp_db.get_execution_history()
+    # completed_at timestamps should be non-decreasing (newest first)
+    assert rows[0]["completed_at"] >= rows[1]["completed_at"] >= rows[2]["completed_at"]
+
+
+def test_save_execution_history_terminal_statuses(tmp_db):
+    """All four terminal statuses can be stored."""
+    for i, status in enumerate(["open", "done", "cancelled", "failed"]):
+        tmp_db.save_execution_history(
+            exec_id=f"term{i:04d}",
+            db_id=i,
+            close_db_id=None,
+            is_close=False,
+            status=status,
+            symbol1="BTC/USDT:USDT",
+            symbol2="ETH/USDT:USDT",
+            data_json=_EXEC_DATA,
+        )
+    rows = tmp_db.get_execution_history()
+    stored_statuses = {r["status"] for r in rows}
+    assert stored_statuses == {"open", "done", "cancelled", "failed"}

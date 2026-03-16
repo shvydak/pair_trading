@@ -391,8 +391,8 @@
       sl_smart_btn_title: 'Smart limit close for SL (◎ = enabled, market = disabled)',
       toast_triggers_ok: 'TP/SL set.',
       toast_triggers_err: 'Trigger error: ',
-      toast_tp_hit: 'Take Profit triggered — closing position...',
-      toast_sl_hit: 'Stop Loss triggered — closing position...',
+      toast_tp_hit: 'Take Profit threshold reached — monitor will close',
+      toast_sl_hit: 'Stop Loss threshold reached — monitor will close',
       toast_exec_closed: 'Position closed.',
       toast_exec_rollback: 'Partial fill — manual action required.',
       toast_exec_failed: 'Close failed — manual action required.',
@@ -647,8 +647,8 @@
       sl_smart_btn_title: 'Умное закрытие для SL (◎ = включено, маркет = выключено)',
       toast_triggers_ok: 'TP/SL сохранены.',
       toast_triggers_err: 'Ошибка триггера: ',
-      toast_tp_hit: 'Take Profit достигнут — идёт закрытие...',
-      toast_sl_hit: 'Stop Loss достигнут — идёт закрытие...',
+      toast_tp_hit: 'Take Profit порог достигнут — монитор закрывает',
+      toast_sl_hit: 'Stop Loss порог достигнут — монитор закрывает',
       toast_exec_closed: 'Позиция закрыта.',
       toast_exec_rollback: 'Частичное исполнение — требуется вмешательство.',
       toast_exec_failed: 'Ошибка закрытия — требуется вмешательство.',
@@ -1434,6 +1434,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Bottom panel: load positions tab by default
   setBottomTab('positions');
   loadStrategyPositions();
+  loadExecHistory();
   restoreAnalysisState();
   // Auto-refresh positions every 5s (same cadence as PriceCache)
   setInterval(() => { loadStrategyPositions(); refreshPositions(); }, 5000);
@@ -2617,7 +2618,11 @@ async function loadAllPositions() {
     renderBalanceCards(state.balances);
 
     // Strategy positions (enriched)
-    renderStrategyPositions(allData.strategy_positions || []);
+    const stratPos = allData.strategy_positions || [];
+    renderStrategyPositions(stratPos);
+    // Start exec poller if any position has TP/SL set — ensures we catch
+    // backend-initiated closes even when _checkWsTriggers hasn't fired.
+    if (stratPos.some(p => p.tp_zscore != null || p.sl_zscore != null)) _startExecPoller();
     const el = document.getElementById('strategy-pos-updated');
     if (el) el.textContent = t('updated') + ' ' + new Date().toLocaleTimeString();
 
@@ -2824,6 +2829,38 @@ function _showExecHistory(execId) {
   _openExecPopup(execId, data);
 }
 
+async function loadExecHistory() {
+  try {
+    const res = await fetch(`${API}/api/executions/history?limit=100`);
+    if (!res.ok) return;
+    const json = await res.json();
+    for (const row of (json.history || [])) {
+      const execId = row.exec_id;
+      // In-session entries (from live polling) take priority over DB snapshot
+      if (!_execHistory.has(execId)) _execHistory.set(execId, row);
+      // Index by position id for 📋 button lookup
+      if (row.is_close && row.close_db_id != null) {
+        if (!_execHistoryByDbId.has(row.close_db_id)) _execHistoryByDbId.set(row.close_db_id, execId);
+      } else if (!row.is_close && row.db_id != null) {
+        if (!_execHistoryByDbId.has(row.db_id)) _execHistoryByDbId.set(row.db_id, execId);
+      }
+      // Sym-pair key for journal tab 📋 button
+      if (row.is_close) {
+        const s1 = _symShort(row.leg1?.symbol || row.symbol1 || '');
+        const s2 = _symShort(row.leg2?.symbol || row.symbol2 || '');
+        const symKey = `${s1}|${s2}`;
+        if (!_execHistoryByDbId.has(symKey)) _execHistoryByDbId.set(symKey, execId);
+      }
+    }
+    // Refresh exec-status cells for positions that now have history
+    document.querySelectorAll('[id^="exec-status-"]').forEach(el => {
+      const posId = +el.id.replace('exec-status-', '');
+      if (_execHistoryByDbId.has(posId) && !el.innerHTML.trim())
+        el.innerHTML = _execStatusHtml(null, posId);
+    });
+  } catch(e) { /* non-fatal — exec history is a nice-to-have */ }
+}
+
 function _updateExecPopup(execId, data) {
   const st = _execPopups.get(execId);
   if (!st) return;
@@ -2932,6 +2969,12 @@ function _updateExecPopup(execId, data) {
       const symKey = `${_symShort(data.leg1?.symbol || '')}|${_symShort(data.leg2?.symbol || '')}`;
       _execHistoryByDbId.set(symKey, execId);
     }
+    // Refresh exec-status div immediately so 📋 button appears right away
+    const _dbId = data.is_close ? data.close_db_id : data.db_id;
+    if (_dbId != null) {
+      const _eEl = document.getElementById(`exec-status-${_dbId}`);
+      if (_eEl) _eEl.innerHTML = _execStatusHtml(null, _dbId);
+    }
 
     setTimeout(() => loadAllPositions(), 2000);
   }
@@ -2960,7 +3003,7 @@ async function _pollAllExecutions() {
     _posExecMap = newMap;
     for (const [posId, exec] of Object.entries(_posExecMap)) {
       const el = document.getElementById(`exec-status-${posId}`);
-      if (el) el.innerHTML = _execStatusHtml(exec);
+      if (el) el.innerHTML = _execStatusHtml(exec, +posId);
     }
 
     // Stop poller when nothing active and no non-terminal popups
@@ -2979,9 +3022,12 @@ function _startExecPoller() {
 }
 function startExecPoller() { _startExecPoller(); }
 
-function _execStatusHtml(exec) {
-  if (!exec) return '';
-  if (_EXEC_TERMINAL.has((exec.status || '').toLowerCase())) return '';
+function _execStatusHtml(exec, posId) {
+  const histExecId = posId != null ? _execHistoryByDbId.get(posId) : null;
+  const histBtn = histExecId
+    ? `<button onclick="_showExecHistory('${histExecId}')" class="mt-1 text-[10px] text-muted hover:text-accent transition" title="${currentLang === 'ru' ? 'Лог исполнения' : 'Execution log'}">📋 ${currentLang === 'ru' ? 'Лог' : 'Log'}</button>`
+    : '';
+  if (!exec || _EXEC_TERMINAL.has((exec.status || '').toLowerCase())) return histBtn;
   const p1    = _execFillPct(exec.leg1);
   const p2    = _execFillPct(exec.leg2);
   const phase = exec.status === 'placing'    ? (currentLang === 'ru' ? 'размещение'  : 'placing')
@@ -2992,7 +3038,7 @@ function _execStatusHtml(exec) {
   return `<div class="mt-1.5 p-1.5 rounded bg-yellow-950 border border-yellow-700 flex items-center justify-between gap-1">
     <span class="text-[10px] text-yellow-300 font-semibold">◎ ${phase} · ${p1}%·${p2}%</span>
     <button onclick="_openExecPopup('${exec.exec_id}')" class="text-[10px] text-accent hover:text-white flex-shrink-0" title="Открыть монитор">▶</button>
-  </div>`;
+  </div>${histBtn}`;
 }
 
 async function _cancelExecFromPopup(execId) {
@@ -3078,7 +3124,7 @@ function renderStrategyPositions(positions) {
       if (badgesEl) badgesEl.innerHTML = _tpslBadgesHtml(pos);
       // Update smart close execution progress if any
       const execEl = document.getElementById(`exec-status-${pos.id}`);
-      if (execEl) execEl.innerHTML = _execStatusHtml(_posExecMap[pos.id]);
+      if (execEl) execEl.innerHTML = _execStatusHtml(_posExecMap[pos.id], pos.id);
       _loadSparkline(pos); // refresh z-score + chart data in-place
       return; // skip full rebuild
     }
@@ -3138,9 +3184,6 @@ function renderStrategyPositions(positions) {
           <button onclick="_deleteDbPos(${pos.id})"
             class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-red-600 hover:text-red-600 transition whitespace-nowrap"
             title="${t('delete_db_btn')}">🗑</button>
-          ${_execHistoryByDbId.has(pos.id) ? `<button onclick="_showExecHistory('${_execHistoryByDbId.get(pos.id)}')"
-            class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-accent hover:text-accent transition whitespace-nowrap"
-            title="${currentLang === 'ru' ? 'Лог исполнения' : 'Execution log'}">📋</button>` : ''}
         </div>
         <!-- Active trigger "orders" (shown when set) -->
         <div id="tpsl-badges-${pos.id}" class="flex flex-wrap gap-1 mt-1.5">
@@ -3165,8 +3208,8 @@ function renderStrategyPositions(positions) {
             title="${t('set_triggers_btn')}">${t('set_triggers_btn')}</button>
           <div class="tooltip-box" data-i18n-html="tip_tp_sl"></div>
         </div>
-        <!-- Smart close execution progress (shown when monitor-triggered close is in flight) -->
-        <div id="exec-status-${pos.id}"></div>
+        <!-- Smart close execution progress / exec history log button -->
+        <div id="exec-status-${pos.id}">${_execStatusHtml(_posExecMap[pos.id], pos.id)}</div>
       </td>
     `;
     tbody.appendChild(tr);
@@ -3411,8 +3454,9 @@ async function _cancelTrigger(posId, which) {
     pos.sl_zscore = sl;
     if (which === 'tp') pos.tp_smart = true;
     if (which === 'sl') pos.sl_smart = true;
+    const _ctBadgesEl = document.getElementById(`tpsl-badges-${posId}`);
+    if (_ctBadgesEl) _ctBadgesEl.innerHTML = _tpslBadgesHtml(pos);
     updateTriggerLines(tp, sl);
-    loadStrategyPositions();
   } catch(e) {
     showToast(t('toast_triggers_err') + e.message, 'error');
   }
@@ -3440,14 +3484,17 @@ async function _setTriggers(posId) {
           : JSON.stringify(data.detail);
       throw new Error(detail || 'Trigger error');
     }
-    // Update local map so chart lines update immediately if position is loaded
+    // Update local map immediately — no loadAllPositions() to avoid race condition
+    // where a concurrent auto-refresh fetch (started before this POST) could
+    // return stale tp_zscore=null and overwrite our just-saved value.
     if (_stratPosMap[posId]) {
       _stratPosMap[posId].tp_zscore = tp;
       _stratPosMap[posId].sl_zscore = sl;
+      const badgesEl = document.getElementById(`tpsl-badges-${posId}`);
+      if (badgesEl) badgesEl.innerHTML = _tpslBadgesHtml(_stratPosMap[posId]);
     }
     updateTriggerLines(tp, sl);
     showToast(t('toast_triggers_ok'), 'success');
-    loadAllPositions();
   } catch(e) {
     showToast(t('toast_triggers_err') + e.message, 'error');
   }

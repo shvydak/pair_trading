@@ -74,6 +74,19 @@ def init_db() -> None:
                 opened_at      TEXT    NOT NULL,
                 closed_at      TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS execution_history (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                exec_id      TEXT    UNIQUE NOT NULL,
+                db_id        INTEGER,
+                close_db_id  INTEGER,
+                is_close     INTEGER NOT NULL DEFAULT 0,
+                status       TEXT    NOT NULL,
+                symbol1      TEXT    NOT NULL,
+                symbol2      TEXT    NOT NULL,
+                data_json    TEXT    NOT NULL,
+                completed_at TEXT    NOT NULL
+            );
         """)
     _migrate()
 
@@ -345,5 +358,46 @@ def get_recent_alerts(minutes: int = 60) -> list[dict]:
             ORDER BY last_fired_at DESC
             """,
             (f"-{minutes} minutes",),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Execution history (persisted smart execution logs)
+# ---------------------------------------------------------------------------
+
+def save_execution_history(
+    exec_id: str,
+    db_id: Optional[int],
+    close_db_id: Optional[int],
+    is_close: bool,
+    status: str,
+    symbol1: str,
+    symbol2: str,
+    data_json: str,
+) -> None:
+    """Persist a terminal smart execution snapshot. Idempotent via INSERT OR IGNORE."""
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO execution_history
+              (exec_id, db_id, close_db_id, is_close, status, symbol1, symbol2,
+               data_json, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                exec_id, db_id, close_db_id, int(is_close), status,
+                symbol1, symbol2, data_json,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_execution_history(limit: int = 100) -> list[dict]:
+    """Return most recent completed execution snapshots, newest first."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM execution_history ORDER BY completed_at DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         return [dict(r) for r in rows]

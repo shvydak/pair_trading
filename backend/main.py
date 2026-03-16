@@ -65,6 +65,8 @@ active_executions: dict = {}
 # timestamps of when each execution was created (for TTL cleanup)
 _exec_created_at: dict[str, float] = {}
 _EXEC_TTL = 7200  # remove terminal executions after 2 hours
+# track which terminal execs have already been persisted to execution_history table
+_exec_saved_to_db: set[str] = set()
 
 SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
 
@@ -307,7 +309,9 @@ async def monitor_position_triggers() -> None:
 
                 pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
                 pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                limit = max(pos_zw * 3, 60)
+                # Use the position's saved candle_limit so the monitor z-score
+                # matches the frontend chart. Cap at 500 to avoid API overload.
+                limit = min(pos.get("candle_limit") or (pos_zw * 5), 500)
 
                 try:
                     df1, df2 = await asyncio.gather(
@@ -498,14 +502,35 @@ async def monitor_position_triggers() -> None:
         except Exception as e:
             log.warning(f"monitor: outer error: {e}")
 
+        # Persist terminal executions to execution_history (idempotent, runs once per exec)
+        for eid in list(active_executions.keys()):
+            ctx = active_executions[eid]
+            if ctx.status.name in ("DONE", "CANCELLED", "FAILED", "OPEN") and eid not in _exec_saved_to_db:
+                try:
+                    d = ctx.to_dict()
+                    db.save_execution_history(
+                        exec_id=eid,
+                        db_id=d.get("db_id"),
+                        close_db_id=d.get("close_db_id"),
+                        is_close=bool(d.get("is_close", False)),
+                        status=str(d["status"]),
+                        symbol1=ctx.leg1.symbol,
+                        symbol2=ctx.leg2.symbol,
+                        data_json=json.dumps(d),
+                    )
+                    _exec_saved_to_db.add(eid)
+                except Exception as _e:
+                    log.warning(f"exec_history save failed {eid}: {_e}")
+
         # Clean up terminal executions older than TTL
         now = time.monotonic()
         for eid in list(active_executions.keys()):
             ctx = active_executions[eid]
             created = _exec_created_at.get(eid, now)
-            if ctx.status.name in ("DONE", "CANCELLED", "FAILED") and (now - created) > _EXEC_TTL:
+            if ctx.status.name in ("DONE", "CANCELLED", "FAILED", "OPEN") and (now - created) > _EXEC_TTL:
                 active_executions.pop(eid, None)
                 _exec_created_at.pop(eid, None)
+                _exec_saved_to_db.discard(eid)
 
         await asyncio.sleep(2)
 
@@ -1298,6 +1323,30 @@ async def start_smart_trade(req: SmartTradeRequest):
 async def list_executions():
     """Return all active execution contexts (for progress monitoring)."""
     return {"executions": [_clean(ctx.to_dict()) for ctx in active_executions.values()]}
+
+
+@app.get("/api/executions/history")
+async def get_executions_history(limit: int = Query(50, le=200)):
+    """Return persisted terminal executions with full event log, newest first."""
+    rows = db.get_execution_history(limit=limit)
+    result = []
+    for row in rows:
+        try:
+            data = json.loads(row["data_json"])
+        except Exception:
+            data = {}
+        result.append({
+            "exec_id":      row["exec_id"],
+            "db_id":        row["db_id"],
+            "close_db_id":  row["close_db_id"],
+            "is_close":     bool(row["is_close"]),
+            "status":       row["status"],
+            "symbol1":      row["symbol1"],
+            "symbol2":      row["symbol2"],
+            "completed_at": row["completed_at"],
+            **_clean(data),
+        })
+    return {"history": result}
 
 
 @app.get("/api/execution/{exec_id}")

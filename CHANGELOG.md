@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-03-18 — Execution history, фикс TP-линий, фикс ложного toast TP
+
+### Что добавлено
+
+**Backend:**
+- **Персистентная история исполнений** — новая таблица `execution_history` в SQLite: сохраняет финальный снапшот каждого завершённого исполнения (`exec_id`, `db_id`, `close_db_id`, `is_close`, `status`, `symbol1/2`, `data_json`, `completed_at`)
+- `db.save_execution_history(...)` — `INSERT OR IGNORE` (идемпотентно); `db.get_execution_history(limit=100)` — сортировка по `completed_at DESC`
+- Новый endpoint `GET /api/executions/history` — список всех сохранённых исполнений
+- Хук в мониторе: терминальные контексты (`DONE`/`CANCELLED`/`FAILED`/`OPEN`) сохраняются в `execution_history` перед TTL-очисткой (`_exec_saved_to_db: set` гарантирует однократную запись)
+- **`OPEN` добавлен в TTL-cleanup** — ранее контексты со статусом `OPEN` никогда не удалялись, что вызывало бесконечную петлю переоткрытия popup. Теперь удаляются через 2 ч наравне с остальными терминальными статусами
+
+**Frontend:**
+- **`loadExecHistory()`** — загружает `GET /api/executions/history` при старте страницы; заполняет `_execHistory` и `_execHistoryByDbId` (Map db_id → exec_id); обновляет кнопки 📋 во всех строках позиций
+- **`_execStatusHtml(exec, posId)`** — принимает `posId`; всегда показывает 📋 Лог если в `_execHistoryByDbId` есть запись для данной позиции, даже после перезагрузки страницы
+- **`_startExecPoller()` в `loadAllPositions()`** — автоматически запускает поллинг когда хоть у одной позиции выставлен TP/SL; позволяет поймать закрытие, инициированное бэкендом
+
+### Исправленные баги
+
+**Frontend:**
+- **TP-линии исчезали сразу после нажатия «Уст.»** — гонка условий: `loadAllPositions()` внутри `_setTriggers` запускал fetch до того, как POST сохранял `tp_zscore`; возвращался старый `null` → `_updatePositionAnnotations()` прятал линии. Фикс: убран вызов `loadAllPositions()` из `_setTriggers` и `_cancelTrigger`; локальное состояние обновляется напрямую (`_stratPosMap[id].tp_zscore = tp` + `_tpslBadgesHtml()`)
+- **Кнопка 📋 не появлялась после перезагрузки страницы** — в in-place ветке обновления строки позиции кнопка не рендерилась. Фикс: `_execStatusHtml` перемещена в div `exec-status-{id}`, который обновляется in-place; после сохранения в `_execHistoryByDbId` div немедленно перерисовывается
+- **Ложный toast «Take Profit достигнут — идёт закрытие»** — `_checkWsTriggers` на фронтенде вычислял z на датасете из 1000 свечей, монитор бэкенда — на `max(zscore_window*3, 60)` свечей (например 300 при window=100). Разный датасет → разный mean/std → разный z → фронтенд видел пересечение порога там, где бэкенд не видел. Фикс: монитор использует `min(candle_limit, 500)` вместо `max(zscore_window*3, 60)` (читает `candle_limit` из позиции в БД)
+- **Текст toast вводил в заблуждение** — «идёт закрытие» подразумевало немедленное действие, но фронтенд только уведомляет, закрытие делает только монитор. Фикс: RU → «порог достигнут — монитор закрывает», EN → «threshold reached — monitor will close»
+
+### Тесты
+
+- `test_db.py`: +7 тестов для `execution_history` — `save/get basic`, `idempotent INSERT OR IGNORE`, `is_close=True`, `empty list`, `limit param`, `newest first order`, `all 4 terminal statuses`
+
+### Итого тестов: 212 (+7 от предыдущих 204, +1 за test_order_manager.py → 4)
+
+---
+
 ## 2026-03-17 — Подсветка активной пары, фикс graceful shutdown
 
 ### Что добавлено

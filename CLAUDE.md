@@ -26,7 +26,7 @@ pair_trading/
 ├── tests/
 │   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
 │   ├── test_strategy.py     # 40 tests — all strategy math
-│   ├── test_db.py           # 48 tests — SQLite persistence layer
+│   ├── test_db.py           # 55 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
 │   ├── test_order_manager.py # 4 tests — Smart v2 repricing / semi-aggressive / dust rules
 │   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
@@ -58,7 +58,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 ### Tests
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 199 tests
+.venv/bin/pytest tests/ -v        # all 212 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -95,6 +95,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | DELETE | `/api/triggers/{id}` | Cancel an active trigger |
 | GET | `/api/alerts/recent` | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center |
 | GET | `/api/executions` | All active execution contexts (for inline progress monitoring in position rows) |
+| GET | `/api/executions/history` | Persisted terminal execution snapshots from SQLite (`?limit=100`) |
 | POST | `/api/watchlist/data` | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair |
 | WS | `/ws/stream` | Live spread/price/Z-score updates every 2 seconds for the active analysed pair |
 
@@ -282,7 +283,7 @@ Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
 > Прямые вызовы `client.fetch_ohlcv()` допустимы только в трёх случаях:
 > 1. Исторические данные для анализа/бэктеста (`/api/history`, `/api/backtest`)
 > 2. Первичное заполнение кэша, если он ещё пуст (seed на первом вызове)
-> 3. Монитор TP/SL — маленькие запросы (`max(zw*3, 60)` свечей) каждые 2 с
+> 3. Монитор TP/SL — маленькие запросы (`min(candle_limit, 500)` свечей) каждые 2 с
 > **Никогда не создавай новые polling-таймеры на фронтенде, делающие прямые запросы к `/api/history` для получения live-данных — всегда используй `/api/watchlist/data` или WebSocket.**
 
 - **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
@@ -292,7 +293,7 @@ Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
 - `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
 - `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every **2 s** (`FEED_INTERVAL = 2`) via `fetch_ohlcv × 2`
 - **WebSocket** (`/ws/stream`): subscribes on connect, reads from cache each **2 s** loop, unsubscribes in `finally`
-- **monitor_position_triggers**: does **NOT** use PriceCache; fetches OHLCV directly every 2 s with small limit `max(zscore_window * 3, 60)`; no `monitored_keys` dict
+- **monitor_position_triggers**: does **NOT** use PriceCache; fetches OHLCV directly every 2 s with limit `min(candle_limit, 500)` (reads `candle_limit` from DB position); no `monitored_keys` dict
 - **Watchlist** (`POST /api/watchlist/data`): maintains `_watchlist_keys: dict[tag → cache_key]` at module level; subscribes each pair on first call, unsubscribes pairs removed from watchlist; frontend polls every 5 s — one request for the whole watchlist; on cache miss seeds `price_cache._store[key]` directly before returning
 
 ## Logging & Persistence
@@ -305,12 +306,14 @@ Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
 
 ### SQLite Persistence (`backend/db.py`)
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
-- Three tables:
+- Four tables:
   - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, tp_smart, timeframe, candle_limit, zscore_window, opened_at
   - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
   - `triggers` — standalone TP/SL/alert orders, independent of positions; columns: symbol1/2, side, type (tp|sl|alert), zscore, tp_smart, status (active|triggered|cancelled), timeframe, zscore_window, alert_pct, last_fired_at, created_at, triggered_at
+  - `execution_history` — persisted terminal smart execution snapshots; columns: exec_id (UNIQUE), db_id, close_db_id, is_close, status, symbol1/2, data_json, completed_at
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
 - Trigger functions: `save_trigger(sym1, sym2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct)` → id, `get_active_triggers()`, `get_triggers_for_pair(sym1, sym2)`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None, `alert_fired(id)` → bool (sets `last_fired_at`, keeps status=active), `get_recent_alerts(minutes=60)` → list[dict]
+- Execution history functions: `save_execution_history(exec_id, db_id, close_db_id, is_close, status, symbol1, symbol2, data_json)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)` → list[dict] ordered by `completed_at DESC`
 - Triggers survive position deletion — user manages them explicitly via `/api/triggers` endpoints
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicate DB records
 - On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance, not pre-rounding calculated value)
@@ -339,14 +342,15 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
 - Semi-aggressive price: buy at `bid + 25% of spread`, sell at `ask - 25% of spread`
 - `DUST` means the leg already has a partial fill, but the remaining qty is below exchange minimum; the partial fill is accepted and persisted, and no new order is placed for the residual
-- `active_executions` dict in `main.py` maps `exec_id → ExecContext`; terminal entries (DONE/CANCELLED/FAILED) are cleaned up after 2h TTL in the monitor loop
+- `active_executions` dict in `main.py` maps `exec_id → ExecContext`; terminal entries (DONE/CANCELLED/FAILED/**OPEN**) are cleaned up after 2h TTL in the monitor loop; before cleanup, each terminal entry is persisted to `execution_history` via `_exec_saved_to_db` set (ensures single write)
+- `_exec_saved_to_db: set[str]` — tracks which exec_ids have already been written to DB; `discard(eid)` on TTL removal
 - `_exec_created_at: dict[str, float]` — monotonic timestamps for TTL cleanup
 - `exec_id` is first 8 chars of UUID4
 
 ## Pre-trade Check (`GET /api/pre_trade_check`)
 - Balance check formula: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Order of validation: balance → min_notional → lot_size → leverage (informational)
-- monitor_position_triggers runs every **2 s** — direct `fetch_ohlcv` with small limit; uses `pos.timeframe`/`pos.zscore_window` from DB (not hardcoded constants)
+- monitor_position_triggers runs every **2 s** — direct `fetch_ohlcv` with limit `min(candle_limit, 500)`; uses `pos.timeframe`/`pos.zscore_window`/`pos.candle_limit` from DB (not hardcoded constants)
 - Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
 
 ## Telegram Bot (`telegram_bot.py`)
@@ -428,15 +432,19 @@ await tg_bot.stop()                            # stop polling + close session
 - **Z-score discrepancy header vs position row (FIXED)**: `_loadSparkline` fetched with `pos.candle_limit` (DB), WebSocket used `state.historyLimit` (analysis) → different dataset → different mean/std → different z. Fixed: when pair matches current analysis, sparkline reads from `state.historyData` directly.
 - **Uvicorn не останавливается по Cmd+C (FIXED)**: `asyncio.create_task()` в lifespan не сохранял ссылки на задачи — при SIGTERM нечего было отменять, бесконечные циклы (PriceCache, monitor, Telegram polling) зависали. Fix: ссылки сохраняются в `_bg_tasks = [...]`; shutdown делает `t.cancel()` + `asyncio.gather(*_bg_tasks, return_exceptions=True)`.
 - **Active pair highlight match (design decision)**: подсветка активной пары в watchlist/positions/alerts сравнивает **4 параметра**: sym1+sym2+timeframe+zscore_window+entryZ. Только ticker — недостаточно: одна пара может быть в watchlist с разными timeframe/z-порогами.
+- **TP lines disappearing race condition (FIXED)**: `loadAllPositions()` inside `_setTriggers` raced with the 5s auto-refresh fetch; the auto-refresh returned stale `tp_zscore=null` before the POST finished, hiding lines. Fix: removed `loadAllPositions()` from `_setTriggers`/`_cancelTrigger`; local state updated directly (`_stratPosMap[id].tp_zscore = tp` + `_tpslBadgesHtml()`).
+- **False TP toast (FIXED)**: `_checkWsTriggers` on frontend computed z on 1000-candle dataset; backend monitor used `max(zscore_window*3, 60)` candles — different mean/std → different z → frontend saw threshold crossing where backend didn't. Fix: monitor now uses `min(candle_limit, 500)` (reads `candle_limit` from DB). Toast text changed from "идёт закрытие" to "порог достигнут — монитор закрывает" (frontend only notifies; closing is done by backend only).
+- **📋 Exec log button missing after page reload (FIXED)**: button was only in initial row render, not in-place update path. Fix: moved to `exec-status-{id}` div via `_execStatusHtml(exec, posId)`; `loadExecHistory()` on `DOMContentLoaded` bootstraps `_execHistoryByDbId` map and refreshes all exec-status divs.
+- **`active_executions` OPEN status never TTL-cleaned (FIXED)**: entries with status=OPEN were excluded from cleanup condition, causing infinite popup-reopen loop. Fix: `OPEN` added to TTL cleanup set.
 
 ## Tests (`tests/`)
 
-204 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
+212 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
 | `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
-| `test_db.py` | 48 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern** |
+| `test_db.py` | 55 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern**, **execution_history** (save, idempotent, is_close, empty, limit, order, statuses) |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
 | `test_order_manager.py` | 4 | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance |
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
