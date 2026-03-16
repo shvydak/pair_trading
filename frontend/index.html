@@ -384,6 +384,7 @@
       set_triggers_btn: 'Set',
       cancel_trigger_btn: 'Cancel trigger',
       tp_smart_btn_title: 'Smart limit close for TP (◎ = enabled, market = disabled)',
+      sl_smart_btn_title: 'Smart limit close for SL (◎ = enabled, market = disabled)',
       toast_triggers_ok: 'TP/SL set.',
       toast_triggers_err: 'Trigger error: ',
       toast_tp_hit: 'Take Profit triggered — closing position...',
@@ -639,6 +640,7 @@
       set_triggers_btn: 'Уст.',
       cancel_trigger_btn: 'Отменить триггер',
       tp_smart_btn_title: 'Умное закрытие для TP (◎ = включено, маркет = выключено)',
+      sl_smart_btn_title: 'Умное закрытие для SL (◎ = включено, маркет = выключено)',
       toast_triggers_ok: 'TP/SL сохранены.',
       toast_triggers_err: 'Ошибка триггера: ',
       toast_tp_hit: 'Take Profit достигнут — идёт закрытие...',
@@ -1627,6 +1629,7 @@ async function addAlertFromPanel() {
     });
     if (res.ok) {
       showToast(`🔔 Алерт добавлен (${pct}% от порога)`, 'ok', 5000, () => setBottomTab('alerts'));
+      loadAlertsTab();
     } else {
       const data = await res.json();
       showToast('Ошибка: ' + (data.detail || res.status), 'error');
@@ -2810,6 +2813,7 @@ function _tpslBadgesHtml(pos) {
   if (pos.sl_zscore != null) {
     html += `<div class="flex items-center gap-1 bg-red-950 border border-red-700 rounded px-1.5 py-0.5">
       <span class="text-[10px] text-red-400 font-semibold">${t('sl_label')} z=${pos.sl_zscore}</span>
+      ${pos.sl_smart ? `<span class="text-[10px] text-accent" title="${t('sl_smart_btn_title')}">◎</span>` : ''}
       <button onclick="_cancelTrigger(${pos.id},'sl')" title="${t('cancel_trigger_btn')}"
         class="text-red-600 hover:text-red-300 transition text-[10px] leading-none ml-0.5">✕</button>
     </div>`;
@@ -2847,8 +2851,9 @@ function renderStrategyPositions(positions) {
   const _spCurZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
 
   positions.forEach(pos => {
-    // Default tp_smart=true when no TP is set yet (user hasn't saved a preference)
+    // Default tp_smart/sl_smart=true when not yet saved (smart is the default mode)
     if (pos.tp_zscore == null) pos.tp_smart = true;
+    if (pos.sl_zscore == null) pos.sl_smart = true;
     _stratPosMap[pos.id] = pos;
     const existingRow = document.getElementById(`pos-row-${pos.id}`);
     const posIsActive = _spCurS1 && _spCurS2
@@ -2945,6 +2950,9 @@ function renderStrategyPositions(positions) {
           <span class="text-[10px] text-red-400 font-semibold">${t('sl_label')}</span>
           <input id="sl-input-${pos.id}" type="number" step="0.1" min="0" max="10" placeholder="–"
             class="w-12 bg-surface border border-border rounded px-1 py-0.5 text-[10px] text-white text-center focus:outline-none focus:border-red-400" />
+          <button id="sl-smart-btn-${pos.id}" onclick="_toggleSlSmart(${pos.id})"
+            title="${t('sl_smart_btn_title')}"
+            class="px-1 py-0.5 rounded text-[10px] border transition whitespace-nowrap ${pos.sl_smart ? 'border-accent text-accent bg-surface' : 'border-border text-muted hover:border-accent hover:text-accent'}">◎</button>
           <button onclick="_setTriggers(${pos.id})"
             class="px-1.5 py-0.5 rounded text-[10px] border border-border text-muted hover:border-accent hover:text-accent transition whitespace-nowrap"
             title="${t('set_triggers_btn')}">${t('set_triggers_btn')}</button>
@@ -3162,8 +3170,24 @@ function _toggleTpSmart(posId) {
         : 'border-border text-muted hover:border-accent hover:text-accent'
     }`;
   }
-  // If TP is already saved — auto-save the new tp_smart value immediately
+  // If TP is already saved — auto-save immediately
   if (pos.tp_zscore != null) _setTriggers(posId);
+}
+
+function _toggleSlSmart(posId) {
+  const pos = _stratPosMap[posId];
+  if (!pos) return;
+  pos.sl_smart = !pos.sl_smart;
+  const btn = document.getElementById(`sl-smart-btn-${posId}`);
+  if (btn) {
+    btn.className = `px-1 py-0.5 rounded text-[10px] border transition whitespace-nowrap ${
+      pos.sl_smart
+        ? 'border-accent text-accent bg-surface'
+        : 'border-border text-muted hover:border-accent hover:text-accent'
+    }`;
+  }
+  // If SL is already saved — auto-save immediately
+  if (pos.sl_zscore != null) _setTriggers(posId);
 }
 
 async function _cancelTrigger(posId, which) {
@@ -3171,19 +3195,20 @@ async function _cancelTrigger(posId, which) {
   if (!pos) return;
   const tp = which === 'tp' ? null : pos.tp_zscore ?? null;
   const sl = which === 'sl' ? null : pos.sl_zscore ?? null;
-  const tp_smart = which === 'tp' ? false : !!pos.tp_smart;
+  const tp_smart = which === 'tp' ? true : !!pos.tp_smart;
+  const sl_smart = which === 'sl' ? true : !!pos.sl_smart;
   try {
     const res = await fetch(`${API}/api/db/positions/${posId}/triggers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tp_zscore: tp, sl_zscore: sl, tp_smart }),
+      body: JSON.stringify({ tp_zscore: tp, sl_zscore: sl, tp_smart, sl_smart }),
     });
     if (!res.ok) throw new Error(await res.text());
     pos.tp_zscore = tp;
     pos.sl_zscore = sl;
-    if (which === 'tp') pos.tp_smart = false;
+    if (which === 'tp') pos.tp_smart = true;
+    if (which === 'sl') pos.sl_smart = true;
     updateTriggerLines(tp, sl);
-    // Re-render positions to reflect removed badge
     loadStrategyPositions();
   } catch(e) {
     showToast(t('toast_triggers_err') + e.message, 'error');
@@ -3196,11 +3221,12 @@ async function _setTriggers(posId) {
   const tp = _tpVal !== '' && _tpVal != null ? parseFloat(_tpVal) : null;
   const sl = _slVal !== '' && _slVal != null ? parseFloat(_slVal) : null;
   const tp_smart = !!(_stratPosMap[posId]?.tp_smart);
+  const sl_smart = !!(_stratPosMap[posId]?.sl_smart ?? true);
   try {
     const res = await fetch(`${API}/api/db/positions/${posId}/triggers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tp_zscore: tp, sl_zscore: sl, tp_smart }),
+      body: JSON.stringify({ tp_zscore: tp, sl_zscore: sl, tp_smart, sl_smart }),
     });
     const data = await res.json();
     if (!res.ok) {

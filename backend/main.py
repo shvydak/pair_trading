@@ -363,7 +363,8 @@ async def monitor_position_triggers() -> None:
                         # next monitor cycle regardless of closing_tags state.
                         db.set_position_triggers(pos_id, None, None, False)
 
-                        use_smart = trigger == "tp" and bool(pos.get("tp_smart"))
+                        smart_key = "tp_smart" if trigger == "tp" else "sl_smart"
+                        use_smart = bool(pos.get(smart_key, True))
                         if use_smart:
                             exec_id = await _do_smart_close_trigger(pos, exit_zscore=current_z)
                             closing_tags.add(tag)
@@ -462,7 +463,8 @@ async def monitor_position_triggers() -> None:
 
                         db_pos = db.find_open_position(sym1, sym2)
                         if db_pos:
-                            use_smart = trig_type == "tp" and bool(trig.get("tp_smart"))
+                            smart_key = "tp_smart" if trig_type == "tp" else "sl_smart"
+                            use_smart = bool(trig.get(smart_key, True))
                             if use_smart:
                                 exec_id = await _do_smart_close_trigger(db_pos, exit_zscore=current_z)
                                 closing_tags.add(tag)
@@ -483,7 +485,8 @@ async def monitor_position_triggers() -> None:
                             )
 
                         db.trigger_fired(trig_id)
-                        if not (db_pos and trig_type == "tp" and bool(trig.get("tp_smart"))):
+                        smart_key2 = "tp_smart" if trig_type == "tp" else "sl_smart"
+                        if not (db_pos and bool(trig.get(smart_key2, True))):
                             current_tags.discard(tag)
                 except Exception as e:
                     log.warning(f"monitor: error checking trigger {trig_id}: {e}")
@@ -881,22 +884,26 @@ async def delete_db_position(position_id: int):
 class TriggerRequest(BaseModel):
     tp_zscore: Optional[float] = None
     sl_zscore: Optional[float] = None
-    tp_smart: bool = False
+    tp_smart: bool = True
+    sl_smart: bool = True
 
 
 @app.post("/api/db/positions/{position_id}/triggers")
 async def set_triggers(position_id: int, req: TriggerRequest):
     """Set TP/SL z-score triggers for an open position."""
-    ok = db.set_position_triggers(position_id, req.tp_zscore, req.sl_zscore, req.tp_smart)
+    ok = db.set_position_triggers(
+        position_id, req.tp_zscore, req.sl_zscore, req.tp_smart, req.sl_smart
+    )
     if not ok:
         raise HTTPException(status_code=404, detail=f"Position {position_id} not found")
     log.info(
         f"Triggers set for position {position_id}: "
-        f"TP={req.tp_zscore} (smart={req.tp_smart}) SL={req.sl_zscore}"
+        f"TP={req.tp_zscore} (smart={req.tp_smart}) SL={req.sl_zscore} (smart={req.sl_smart})"
     )
     return {
         "ok": True, "id": position_id,
-        "tp_zscore": req.tp_zscore, "sl_zscore": req.sl_zscore, "tp_smart": req.tp_smart,
+        "tp_zscore": req.tp_zscore, "sl_zscore": req.sl_zscore,
+        "tp_smart": req.tp_smart, "sl_smart": req.sl_smart,
     }
 
 
@@ -910,7 +917,8 @@ class TriggerCreateRequest(BaseModel):
     side: str           # long_spread | short_spread
     type: str           # tp | sl | alert
     zscore: float
-    tp_smart: bool = False
+    tp_smart: bool = True
+    sl_smart: bool = True
     timeframe: str = "1h"
     zscore_window: int = 20
     alert_pct: float = 1.0   # fraction of zscore at which alert fires (1.0 = 100%)
@@ -948,6 +956,7 @@ async def create_trigger(req: TriggerCreateRequest):
         type=req.type,
         zscore=req.zscore,
         tp_smart=req.tp_smart,
+        sl_smart=req.sl_smart,
         timeframe=req.timeframe,
         zscore_window=req.zscore_window,
         alert_pct=req.alert_pct,

@@ -204,24 +204,35 @@ def test_set_position_triggers_tp_smart_true(tmp_db):
     assert pos["tp_smart"] == 1
 
 
-def test_set_position_triggers_tp_smart_default_false(tmp_db):
-    """tp_smart defaults to False (0) when not provided."""
+def test_set_position_triggers_smart_default_true(tmp_db):
+    """tp_smart and sl_smart both default to True (smart close is the default mode)."""
     pos_id = _save(tmp_db)
     tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0)
     pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
-    assert not pos["tp_smart"]
+    assert pos["tp_smart"]
+    assert pos["sl_smart"]
+
+
+def test_set_position_triggers_sl_smart_explicit(tmp_db):
+    """sl_smart can be explicitly set to False (market mode for SL)."""
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0, tp_smart=True, sl_smart=False)
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos["tp_smart"]
+    assert not pos["sl_smart"]
 
 
 def test_set_position_triggers_clear_all_resets_tp_smart(tmp_db):
-    """Clearing triggers (None, None, False) also resets tp_smart — prevents double-trigger re-fire."""
+    """Clearing triggers (None, None, False, False) also resets smart flags — prevents double-trigger re-fire."""
     pos_id = _save(tmp_db)
-    tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0, tp_smart=True)
+    tmp_db.set_position_triggers(pos_id, tp_zscore=0.5, sl_zscore=3.0, tp_smart=True, sl_smart=True)
     # Pattern used by monitor before starting close to prevent double-trigger
-    tmp_db.set_position_triggers(pos_id, tp_zscore=None, sl_zscore=None, tp_smart=False)
+    tmp_db.set_position_triggers(pos_id, tp_zscore=None, sl_zscore=None, tp_smart=False, sl_smart=False)
     pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
     assert pos["tp_zscore"] is None
     assert pos["sl_zscore"] is None
     assert not pos["tp_smart"]
+    assert not pos["sl_smart"]
 
 
 # ---------------------------------------------------------------------------

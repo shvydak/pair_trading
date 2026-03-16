@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-03-17 — Подсветка активной пары, фикс graceful shutdown
+
+### Что добавлено
+
+**Frontend:**
+- **Подсветка активной пары** в watchlist, вкладке Позиции и вкладке Alerts: активная пара выделяется синим фоном (`bg-blue-950/40`) и синей левой рамкой; в watchlist дополнительно — синяя точка вместо threshold-индикатора
+- Критерий совпадения — **5 параметров**: sym1 + sym2 + timeframe + zscore_window + entryZ (с допуском 0.01 для float). Только тикер недостаточен: одна пара может быть в watchlist с разными timeframe/z-порогами
+- Подсветка обновляется **сразу** после `runAnalyze()` (не ждёт 5-секундного тика watchlist)
+- `_updateStrategyPosHighlights()` — обновляет класс на существующих строках позиций без full rebuild
+- `_cachedAlerts` — кэш последних загруженных алертов; позволяет перерисовать Alerts без дополнительного API-запроса при смене пары
+
+### Исправленные баги
+
+**Backend:**
+- **Uvicorn не останавливался по Cmd+C**: lifespan не сохранял ссылки на background tasks (`price_cache.run()`, `monitor_position_triggers`, `tg_bot.start_polling()`). При SIGTERM нечего было отменять — бесконечные циклы зависали. Fix: `_bg_tasks = [asyncio.create_task(...), ...]`; shutdown делает `for t in _bg_tasks: t.cancel()` + `await asyncio.gather(*_bg_tasks, return_exceptions=True)`
+
+**Frontend:**
+- **Новый алерт не появлялся сразу** при создании через кнопку `🔔 Alert` в панели Настройки пары (`addAlertFromPanel`): `loadAlertsTab()` вызывался только если пользователь кликал на toast, а не сразу. Fix: `loadAlertsTab()` вызывается сразу после `res.ok`
+- **Нормализация символов в highlight**: `sym1-input` мог содержать ccxt-формат `BTC/USDT:USDT`, а watchlist хранит `BTCUSDT` → подсветка не срабатывала. Fix: `_wlNorm()` применяется и к значениям из input-полей
+
+### Тесты
+- `test_lifespan.py` — 5 новых тестов для паттерна asyncio graceful shutdown: бесконечные задачи отменяются, `CancelledError` поглощается `return_exceptions=True`, already-done задачи не ломаются, смешанные типы задач
+
+### Итого тестов: 204
+
+---
+
 ## 2026-03-16 — Исправление двойного триггера, монитор 2с, синхронизация z-score
 
 ### Исправленные баги

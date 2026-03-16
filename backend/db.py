@@ -34,7 +34,8 @@ def init_db() -> None:
                 leverage       INTEGER,
                 tp_zscore      REAL,
                 sl_zscore      REAL,
-                tp_smart       INTEGER DEFAULT 0,
+                tp_smart       INTEGER DEFAULT 1,
+                sl_smart       INTEGER DEFAULT 1,
                 opened_at      TEXT    NOT NULL
             );
 
@@ -45,7 +46,8 @@ def init_db() -> None:
                 side         TEXT    NOT NULL,
                 type         TEXT    NOT NULL,
                 zscore       REAL    NOT NULL,
-                tp_smart     INTEGER DEFAULT 0,
+                tp_smart     INTEGER DEFAULT 1,
+                sl_smart     INTEGER DEFAULT 1,
                 status       TEXT    DEFAULT 'active',
                 created_at   TEXT    NOT NULL,
                 triggered_at TEXT
@@ -82,10 +84,12 @@ def _migrate() -> None:
         for table, col, typedef in [
             ("open_positions", "tp_zscore",     "REAL"),
             ("open_positions", "sl_zscore",     "REAL"),
-            ("open_positions", "tp_smart",      "INTEGER DEFAULT 0"),
+            ("open_positions", "tp_smart",      "INTEGER DEFAULT 1"),
+            ("open_positions", "sl_smart",      "INTEGER DEFAULT 1"),
             ("open_positions", "timeframe",     "TEXT DEFAULT '1h'"),
             ("open_positions", "candle_limit",  "INTEGER DEFAULT 500"),
             ("open_positions", "zscore_window", "INTEGER DEFAULT 20"),
+            ("triggers",       "sl_smart",      "INTEGER DEFAULT 1"),
             ("triggers",       "timeframe",     "TEXT DEFAULT '1h'"),
             ("triggers",       "zscore_window", "INTEGER DEFAULT 20"),
             ("triggers",       "alert_pct",     "REAL DEFAULT 1.0"),
@@ -212,12 +216,13 @@ def set_position_triggers(
     position_id: int,
     tp_zscore: Optional[float],
     sl_zscore: Optional[float],
-    tp_smart: bool = False,
+    tp_smart: bool = True,
+    sl_smart: bool = True,
 ) -> bool:
     with _conn() as conn:
         cur = conn.execute(
-            "UPDATE open_positions SET tp_zscore = ?, sl_zscore = ?, tp_smart = ? WHERE id = ?",
-            (tp_zscore, sl_zscore, int(tp_smart), position_id),
+            "UPDATE open_positions SET tp_zscore = ?, sl_zscore = ?, tp_smart = ?, sl_smart = ? WHERE id = ?",
+            (tp_zscore, sl_zscore, int(tp_smart), int(sl_smart), position_id),
         )
         return cur.rowcount > 0
 
@@ -241,7 +246,8 @@ def save_trigger(
     side: str,
     type: str,
     zscore: float,
-    tp_smart: bool = False,
+    tp_smart: bool = True,
+    sl_smart: bool = True,
     timeframe: str = "1h",
     zscore_window: int = 20,
     alert_pct: float = 1.0,
@@ -251,12 +257,12 @@ def save_trigger(
         cur = conn.execute(
             """
             INSERT INTO triggers
-              (symbol1, symbol2, side, type, zscore, tp_smart, status,
+              (symbol1, symbol2, side, type, zscore, tp_smart, sl_smart, status,
                timeframe, zscore_window, alert_pct, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
             """,
             (
-                symbol1, symbol2, side, type, zscore, int(tp_smart),
+                symbol1, symbol2, side, type, zscore, int(tp_smart), int(sl_smart),
                 timeframe, zscore_window, alert_pct,
                 datetime.now(timezone.utc).isoformat(),
             ),
