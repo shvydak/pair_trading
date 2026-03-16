@@ -2,9 +2,9 @@
 Smart limit-order execution engine for pair trades.
 
 State machine:
-  PLACING → PASSIVE (at bid/ask) → AGGRESSIVE (chase to ask/bid) → FORCING (market) → OPEN
-                                                                                      ↘ ROLLBACK → DONE
-                                                                                      ↘ CANCELLED
+  PLACING → PASSIVE (dynamic bid/ask repricing) → AGGRESSIVE (semi-aggressive repricing) → FORCING (market) → OPEN
+                                                                                                          ↘ ROLLBACK → DONE
+                                                                                                          ↘ CANCELLED
 """
 import asyncio
 import time
@@ -24,6 +24,7 @@ class LegStatus(str, Enum):
     WAITING    = "waiting"
     PARTIAL    = "partial"
     FILLED     = "filled"
+    DUST       = "dust"
     CANCELLED  = "cancelled"
     FAILED     = "failed"
 
@@ -44,10 +45,11 @@ class ExecStatus(str, Enum):
 
 @dataclass
 class ExecConfig:
-    passive_s:    float = 10.0   # seconds at bid/ask before chasing
-    aggressive_s: float = 20.0   # seconds at ask/bid before market fallback
+    passive_s:    float = 30.0   # total dynamic passive window
+    aggressive_s: float = 20.0   # total semi-aggressive window
     allow_market: bool  = True   # use market order as final fallback
     poll_s:       float = 2.0    # order-status poll interval
+    reprice_s:    float = 4.0    # do not cancel/re-place more often than this
 
 
 # ─── Per-leg state ────────────────────────────────────────────────────────────
@@ -63,13 +65,16 @@ class LegState:
     filled:    float           = 0.0
     remaining: float           = 0.0
     avg_price: Optional[float] = None
+    working_price: Optional[float] = None
+    last_reprice_at: float         = field(default_factory=time.time)
+    hold_until_stage_end: bool     = False
 
     def __post_init__(self):
         self.remaining = self.qty
 
     @property
     def is_done(self) -> bool:
-        return self.status == LegStatus.FILLED
+        return self.status in (LegStatus.FILLED, LegStatus.DUST)
 
     def absorb_order(self, order: dict) -> None:
         """Sync fill state from a ccxt order dict."""
@@ -85,8 +90,14 @@ class LegState:
 
         if status in ("closed", "filled") or remaining <= 1e-9:
             self.status = LegStatus.FILLED
+        elif status in ("canceled", "cancelled"):
+            self.status = LegStatus.PARTIAL if filled > 0 else LegStatus.CANCELLED
+        elif status in ("rejected", "expired"):
+            self.status = LegStatus.PARTIAL if filled > 0 else LegStatus.FAILED
         elif filled > 0:
             self.status = LegStatus.PARTIAL
+        else:
+            self.status = LegStatus.WAITING
 
 
 # ─── Execution context ────────────────────────────────────────────────────────
@@ -191,6 +202,10 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
         )
         ctx.leg1.order_id = ord1["id"]
         ctx.leg2.order_id = ord2["id"]
+        ctx.leg1.working_price = p1
+        ctx.leg2.working_price = p2
+        ctx.leg1.last_reprice_at = time.time()
+        ctx.leg2.last_reprice_at = ctx.leg1.last_reprice_at
         ctx.status = ExecStatus.PASSIVE
         ctx.evt(f"Orders live: {ctx.leg1.order_id} | {ctx.leg2.order_id}")
 
@@ -211,19 +226,27 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
 
             now = time.time()
 
-            if now >= deadline_market and ctx.status == ExecStatus.AGGRESSIVE:
-                ctx.status = ExecStatus.FORCING
-                ctx.evt("Aggressive timeout — forcing remaining fills")
-                if cfg.allow_market:
-                    await _force_market(ctx, client)
-                    await asyncio.sleep(3)
-                    await _refresh_fills(ctx, client)
-                break
+            if ctx.status == ExecStatus.PASSIVE:
+                if now >= deadline_aggressive:
+                    ctx.status = ExecStatus.AGGRESSIVE
+                    ctx.evt("Passive window ended — switching to semi-aggressive repricing")
+                    await _start_stage(ctx, client, mode="semi")
+                else:
+                    await _reprice_live_orders(ctx, client, mode="passive")
+                continue
 
-            if now >= deadline_aggressive and ctx.status == ExecStatus.PASSIVE:
-                ctx.status = ExecStatus.AGGRESSIVE
-                ctx.evt("Passive timeout — switching to aggressive (taker-side) prices")
-                await _chase_to_taker(ctx, client)
+            if ctx.status == ExecStatus.AGGRESSIVE:
+                if now >= deadline_market:
+                    ctx.status = ExecStatus.FORCING
+                    ctx.evt("Semi-aggressive timeout — forcing remaining fills")
+                    if cfg.allow_market:
+                        await _force_market(ctx, client)
+                        await asyncio.sleep(3)
+                        await _refresh_fills(ctx, client)
+                    else:
+                        await _close_stage_orders(ctx, client)
+                    break
+                await _reprice_live_orders(ctx, client, mode="semi")
 
         # ── 4. Outcome ─────────────────────────────────────────────────────────
         if ctx.leg1.is_done and ctx.leg2.is_done:
@@ -344,12 +367,14 @@ async def _refresh_fills(ctx: ExecContext, client) -> None:
             )
 
 
-async def _chase_to_taker(ctx: ExecContext, client) -> None:
-    """Cancel unfilled orders and re-place at taker-side prices."""
+async def _start_stage(ctx: ExecContext, client, mode: str) -> None:
+    """Rebuild remaining working orders for the next stage."""
     unfilled = [l for l in (ctx.leg1, ctx.leg2) if not l.is_done]
     if not unfilled:
         return
-    obs = {l.symbol: await client.fetch_order_book(l.symbol) for l in unfilled}
+
+    obs = await _fetch_orderbooks(client, unfilled)
+    now = time.time()
 
     for leg in unfilled:
         if leg.order_id:
@@ -357,24 +382,78 @@ async def _chase_to_taker(ctx: ExecContext, client) -> None:
                 await client.cancel_order(leg.symbol, leg.order_id)
             except Exception as e:
                 ctx.evt(f"  Cancel {leg.symbol} warn: {e} — refreshing fill")
-                await _refresh_fills(ctx, client)
-                if leg.is_done:
-                    continue
+            await _refresh_fills(ctx, client)
 
-        if leg.remaining <= 1e-9:
-            leg.status = LegStatus.FILLED
+        leg.order_id = None
+        leg.working_price = None
+        leg.hold_until_stage_end = False
+
+        if leg.is_done:
             continue
 
-        new_price = _taker_price(leg.side, obs[leg.symbol])
-        ctx.evt(f"  Chase {leg.symbol}: {leg.remaining:.6f} @ {new_price} (aggressive)")
-        try:
-            new_ord = await client.place_limit_order(
-                leg.symbol, leg.side, leg.remaining, new_price
-            )
-            leg.order_id = new_ord["id"]
-        except Exception as e:
-            ctx.evt(f"  Chase order FAILED {leg.symbol}: {e}")
+        ob = obs.get(leg.symbol)
+        if not ob:
+            ctx.evt(f"  Stage switch skipped for {leg.symbol}: no orderbook")
             leg.status = LegStatus.FAILED
+            continue
+
+        new_price = _target_price(mode, leg.side, ob)
+        can_place, reason = await _can_place_remaining(client, leg, new_price)
+        if not can_place:
+            _finalise_non_placeable_leg(ctx, leg, reason)
+            continue
+
+        await _place_remaining_limit(ctx, client, leg, new_price, mode, now=now)
+
+
+async def _reprice_live_orders(ctx: ExecContext, client, mode: str) -> None:
+    """Reprice live limit orders within the current stage."""
+    now = time.time()
+    legs = [
+        l for l in (ctx.leg1, ctx.leg2)
+        if not l.is_done and not l.hold_until_stage_end and (now - l.last_reprice_at) >= ctx.config.reprice_s
+    ]
+    if not legs:
+        return
+
+    obs = await _fetch_orderbooks(client, legs)
+    for leg in legs:
+        ob = obs.get(leg.symbol)
+        if not ob:
+            leg.last_reprice_at = now
+            continue
+
+        new_price = _target_price(mode, leg.side, ob)
+        if leg.working_price is not None and _same_price(leg.working_price, new_price):
+            leg.last_reprice_at = now
+            continue
+
+        can_place, reason = await _can_place_remaining(client, leg, new_price)
+        if not can_place:
+            leg.hold_until_stage_end = True
+            leg.last_reprice_at = now
+            ctx.evt(
+                f"  Hold {leg.symbol}: remaining {leg.remaining:.6f} "
+                f"cannot be re-placed ({reason}); keeping current order until stage end"
+            )
+            continue
+
+        if leg.order_id:
+            try:
+                await client.cancel_order(leg.symbol, leg.order_id)
+            except Exception as e:
+                ctx.evt(f"  Cancel {leg.symbol} warn: {e} — refreshing fill")
+            await _refresh_fills(ctx, client)
+
+        if leg.is_done:
+            continue
+
+        can_place, reason = await _can_place_remaining(client, leg, new_price)
+        if not can_place:
+            _finalise_non_placeable_leg(ctx, leg, reason)
+            continue
+
+        await _place_remaining_limit(ctx, client, leg, new_price, mode, now=now)
 
 
 async def _force_market(ctx: ExecContext, client) -> None:
@@ -389,12 +468,29 @@ async def _force_market(ctx: ExecContext, client) -> None:
                 pass
         await _refresh_fills(ctx, client)
         if leg.remaining > 1e-9:
+            ob = await client.fetch_order_book(leg.symbol)
+            ref_price = _taker_price(leg.side, ob)
+            can_place, reason = await _can_place_remaining(client, leg, ref_price)
+            if not can_place:
+                _finalise_non_placeable_leg(ctx, leg, reason)
+                continue
             ctx.evt(f"  Market fill: {leg.symbol} {leg.side} {leg.remaining:.6f}")
             try:
-                await client.place_order(leg.symbol, leg.side, leg.remaining, order_type="market")
-                leg.filled    = leg.qty
+                prev_filled = leg.filled
+                prev_avg = leg.avg_price
+                order = await client.place_order(leg.symbol, leg.side, leg.remaining, order_type="market")
+                market_filled = float(order.get("filled") or leg.remaining)
+                market_avg = order.get("average")
+                leg.filled = min(leg.qty, prev_filled + market_filled)
                 leg.remaining = 0.0
                 leg.status    = LegStatus.FILLED
+                if market_avg:
+                    market_avg = float(market_avg)
+                    if prev_avg is not None and prev_filled > 0:
+                        total_cost = prev_avg * prev_filled + market_avg * market_filled
+                        leg.avg_price = total_cost / max(leg.filled, 1e-9)
+                    else:
+                        leg.avg_price = market_avg
             except Exception as e:
                 ctx.evt(f"  Market order FAILED {leg.symbol}: {e}")
                 leg.status = LegStatus.FAILED
@@ -406,6 +502,8 @@ async def _cancel_open_orders(ctx: ExecContext, client) -> None:
             try:
                 await client.cancel_order(leg.symbol, leg.order_id)
                 leg.status = LegStatus.CANCELLED
+                leg.order_id = None
+                leg.working_price = None
             except Exception:
                 pass
 
@@ -420,3 +518,111 @@ async def _rollback_leg(leg: LegState, client, ctx: ExecContext) -> None:
     except Exception as e:
         ctx.evt(f"ROLLBACK FAILED {leg.symbol}: {e} — MANUAL ACTION REQUIRED")
         log.error("ROLLBACK FAILED %s: %s", leg.symbol, e)
+
+
+async def _close_stage_orders(ctx: ExecContext, client) -> None:
+    """Cancel any still-open orders at stage end."""
+    for leg in (ctx.leg1, ctx.leg2):
+        if leg.is_done or not leg.order_id:
+            continue
+        try:
+            await client.cancel_order(leg.symbol, leg.order_id)
+        except Exception:
+            pass
+    await _refresh_fills(ctx, client)
+    for leg in (ctx.leg1, ctx.leg2):
+        if leg.order_id and leg.status in (LegStatus.CANCELLED, LegStatus.FAILED):
+            leg.order_id = None
+            leg.working_price = None
+
+
+async def _fetch_orderbooks(client, legs: list[LegState]) -> dict[str, dict]:
+    results = await asyncio.gather(
+        *[client.fetch_order_book(leg.symbol) for leg in legs],
+        return_exceptions=True,
+    )
+    obs: dict[str, dict] = {}
+    for leg, result in zip(legs, results):
+        if isinstance(result, Exception):
+            continue
+        obs[leg.symbol] = result
+    return obs
+
+
+def _target_price(mode: str, side: str, ob: dict) -> float:
+    if mode == "semi":
+        return _semi_aggressive_price(side, ob)
+    return _passive_price(side, ob)
+
+
+def _semi_aggressive_price(side: str, ob: dict) -> float:
+    bid = ob.get("bid")
+    ask = ob.get("ask")
+    if bid is None or ask is None or ask <= bid:
+        return _passive_price(side, ob)
+    spread = float(ask) - float(bid)
+    if side == "buy":
+        return float(bid) + spread * 0.25
+    return float(ask) - spread * 0.25
+
+
+def _same_price(a: float, b: float) -> bool:
+    tol = max(1e-12, max(abs(a), abs(b)) * 1e-9)
+    return abs(a - b) <= tol
+
+
+async def _can_place_remaining(client, leg: LegState, price: float) -> tuple[bool, str]:
+    if leg.remaining <= 1e-9:
+        return False, "nothing remaining"
+
+    rounded = await client.round_amount(leg.symbol, leg.remaining)
+    if rounded <= 0:
+        return False, "rounds to zero"
+
+    ok, actual, minimum = await client.check_min_notional(leg.symbol, leg.remaining, price)
+    if not ok:
+        return False, f"notional ${actual:.4f} < min ${minimum:.4f}"
+
+    return True, ""
+
+
+async def _place_remaining_limit(
+    ctx: ExecContext,
+    client,
+    leg: LegState,
+    price: float,
+    mode: str,
+    *,
+    now: float,
+) -> None:
+    label = "passive" if mode == "passive" else "semi-aggressive"
+    ctx.evt(f"  Reprice {leg.symbol}: {leg.remaining:.6f} @ {price} ({label})")
+    try:
+        new_ord = await client.place_limit_order(leg.symbol, leg.side, leg.remaining, price)
+        leg.order_id = new_ord["id"]
+        leg.working_price = price
+        leg.last_reprice_at = now
+        leg.hold_until_stage_end = False
+    except Exception as e:
+        ctx.evt(f"  Reprice FAILED {leg.symbol}: {e}")
+        leg.status = LegStatus.FAILED
+        leg.order_id = None
+        leg.working_price = None
+
+
+def _finalise_non_placeable_leg(ctx: ExecContext, leg: LegState, reason: str) -> None:
+    leg.order_id = None
+    leg.working_price = None
+    leg.hold_until_stage_end = False
+    if leg.filled > 0:
+        leg.status = LegStatus.DUST
+        ctx.evt(
+            f"  Accept {leg.symbol}: remaining {leg.remaining:.6f} "
+            f"is below exchange minimum ({reason}); keeping filled qty={leg.filled:.6f}"
+        )
+    else:
+        leg.status = LegStatus.CANCELLED
+        ctx.evt(
+            f"  Stop {leg.symbol}: no fill and remaining {leg.remaining:.6f} "
+            f"cannot be placed ({reason})"
+        )

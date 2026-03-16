@@ -28,6 +28,7 @@ pair_trading/
 │   ├── test_strategy.py     # 40 tests — all strategy math
 │   ├── test_db.py           # 48 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
+│   ├── test_order_manager.py # 4 tests — Smart v2 repricing / semi-aggressive / dust rules
 │   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
 │   ├── test_triggers.py     # 40 tests — triggers table CRUD
 │   ├── test_watchlist.py    #  8 tests — WatchlistItem model validation
@@ -57,7 +58,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 ### Tests
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 194 tests
+.venv/bin/pytest tests/ -v        # all 199 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -127,8 +128,8 @@ Same as TradeRequest plus `action: str = "open"` (supports `"close"` for smart c
 | `timeframe` | str | `"1h"` | Timeframe used for analysis (saved to DB, used in sparkline) |
 | `candle_limit` | int | `500` | Candle count for analysis window (saved to DB) |
 | `zscore_window` | int | `20` | Rolling z-score window (saved to DB) |
-| `passive_s` | float | `10.0` | Seconds to wait at bid/ask before chasing |
-| `aggressive_s` | float | `20.0` | Seconds at taker side before market fallback |
+| `passive_s` | float | `30.0` | Total dynamic passive window; starts at best bid/ask and reprices inside the window |
+| `aggressive_s` | float | `20.0` | Total semi-aggressive window before market fallback |
 | `allow_market` | bool | `true` | Use market order as final fallback |
 
 When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qty (fallback to DB qty), reverses spread direction, runs smart execution that calls `db.close_position()` on success.
@@ -316,18 +317,25 @@ Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
 ## Order Manager (`order_manager.py`)
 State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→ ROLLBACK → DONE`
 
-- `ExecConfig`: `passive_s` (default 10s), `aggressive_s` (20s), `allow_market` (True), `poll_s` (2s)
-- `LegState`: tracks `order_id`, `status` (WAITING/PARTIAL/FILLED/CANCELLED/FAILED), `filled`, `remaining`, `avg_price`; `absorb_order(order_dict)` syncs from ccxt order
+- **Smart v2 (balanced profile) is now live**:
+  - `PASSIVE` = dynamic passive: places at best bid/ask, checks every `poll_s=2s`, reprices at most once per `reprice_s=4s`
+  - `AGGRESSIVE` = semi-aggressive: still uses limit orders, but moves to `25%` into the spread instead of jumping straight to taker
+  - `FORCING` = market fallback only for still-placeable residual size
+- `ExecConfig`: `passive_s` (default **30s**), `aggressive_s` (20s), `allow_market` (True), `poll_s` (2s), `reprice_s` (**4s**)
+- `LegState`: tracks `order_id`, `status` (`WAITING`/`PARTIAL`/`FILLED`/`DUST`/`CANCELLED`/`FAILED`), `filled`, `remaining`, `avg_price`, `working_price`, `last_reprice_at`, `hold_until_stage_end`; `absorb_order(order_dict)` syncs from ccxt order
 - `ExecContext`: holds both legs, config, events log, `cancel_req` flag, `db_id`, `is_close`, `close_db_id`, `entry_price1/2`, `exit_zscore`; `to_dict()` includes `is_close`; OPEN terminal state branches on `is_close` to call `close_position()` vs `save_open_position()`
 - `run_execution(ctx, client, db_module)` runs as `asyncio.create_task()`:
   1. Fetch both orderbooks, place passive limits simultaneously via `asyncio.gather`
-  2. Poll every `poll_s`: check cancel flag → refresh fills → check timeouts
-  3. Passive timeout: cancel+replace at taker prices (`_chase_to_taker`)
-  4. Aggressive timeout: cancel+market (`_force_market`) → break
-  5. Both filled → `OPEN`; if `is_close=True` → close DB record with PnL; else → save new open position
-  6. Partial fill → `ROLLBACK` (close filled leg at market) → `DONE`
+  2. Poll every `poll_s`: check cancel flag → refresh fills → decide whether to reprice inside the current stage
+  3. During `PASSIVE`, cancel+re-place only on the **remaining** qty, only if the quote moved and `reprice_s` elapsed
+  4. If the residual becomes too small for Binance, do **not** send a new order for it; keep the current order alive until stage end
+  5. After `passive_s`, rebuild remaining live orders into `AGGRESSIVE` using semi-aggressive prices
+  6. After `aggressive_s`, cancel remaining live orders and use market fallback only for still-placeable residuals
+  7. Both legs `FILLED`/`DUST` → `OPEN`; if `is_close=True` → close DB record with PnL; else → save new open position using actual filled qtys
+  8. Partial fill with one exposed leg → `ROLLBACK` (close filled leg at market) → `DONE`
 - Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
-- Aggressive price: buy@ask, sell@bid (taker side, crosses spread)
+- Semi-aggressive price: buy at `bid + 25% of spread`, sell at `ask - 25% of spread`
+- `DUST` means the leg already has a partial fill, but the remaining qty is below exchange minimum; the partial fill is accepted and persisted, and no new order is placed for the residual
 - `active_executions` dict in `main.py` maps `exec_id → ExecContext`; terminal entries (DONE/CANCELLED/FAILED) are cleaned up after 2h TTL in the monitor loop
 - `_exec_created_at: dict[str, float]` — monotonic timestamps for TTL cleanup
 - `exec_id` is first 8 chars of UUID4
@@ -406,7 +414,7 @@ await tg_bot.stop()                            # stop polling + close session
 - **Mixed pair won't trade**: if one leg is `USDT-M` and the other is `USDC-M`, analysis still works but live trading is rejected until both legs use the same margin asset
 - **Leverage set error (warning, not fatal)**: if a position already exists on Binance, `set_leverage` fails — logged as WARNING, trade still proceeds with current exchange leverage
 - **`amount_to_precision` KeyError**: markets not loaded — fixed by `_ensure_markets()` guard in `place_order`
-- **Smart execution stuck in PASSIVE**: passive_s too long, or orders not visible in `fetch_order` — check log events in execution monitor
+- **Smart execution seems stuck in PASSIVE**: in Smart v2 the passive phase is intentionally dynamic for up to `30s`; check execution events for `Reprice ... (passive)` before assuming it's frozen
 - **Rollback FAILED**: market order for the filled leg also failed — requires manual action; logged as ERROR with "MANUAL ACTION REQUIRED"
 - **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — position was closed manually on exchange or via another interface. Use 🗑 button to remove the stale DB record, OR press `✕ M` (backend will detect no open positions and still clean up DB).
 - **PnL showing positive when it should be negative**: Frontend format bug — `(pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2)`. If you see wrong sign, check this pattern in `renderStrategyPositions`.
@@ -418,13 +426,14 @@ await tg_bot.stop()                            # stop polling + close session
 
 ## Tests (`tests/`)
 
-195 unit-тестов, все проходят ~3.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
+199 unit-тестов, все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл | Тестов | Покрытие |
 |---|---|---|
 | `test_strategy.py` | 40 | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest |
 | `test_db.py` | 48 | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern** |
 | `test_helpers.py` | 26 | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация |
+| `test_order_manager.py` | 4 | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance |
 | `test_price_cache.py` | 17 | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle |
 | `test_triggers.py` | 40 | Standalone triggers table: save, get_active, get_for_pair, cancel, trigger_fired, lifecycle |
 | `test_watchlist.py` | 8 | WatchlistItem Pydantic model: defaults, custom fields, required fields validation |
@@ -432,7 +441,7 @@ await tg_bot.stop()                            # stop polling + close session
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
 
-**Не покрыто намеренно**: `order_manager.py` (asyncio + Binance мок), `binance_client.py` (внешний API), баланс/номинал в `/api/pre_trade_check` (нужен мок BinanceClient), alert-гистерезис в мониторе (embedded in monitor loop).
+**Не покрыто намеренно**: `binance_client.py` (внешний API), баланс/номинал в `/api/pre_trade_check` (нужен мок BinanceClient), alert-гистерезис в мониторе (embedded in monitor loop), live Binance behavior of `order_manager.py` (rate limits / exchange-specific partial fills / reduce-only semantics).
 
 ## User Preferences
 - Русский язык по умолчанию в UI

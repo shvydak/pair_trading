@@ -248,7 +248,7 @@ async def _do_smart_close_trigger(pos: dict, exit_zscore: Optional[float] = None
     qty2 = abs(p2["size"]) if p2 else pos["qty2"]
 
     exec_id = uuid.uuid4().hex[:8]
-    cfg = ExecConfig(passive_s=10.0, aggressive_s=20.0, allow_market=True)
+    cfg = ExecConfig(passive_s=30.0, aggressive_s=20.0, allow_market=True)
     ctx = ExecContext(
         exec_id=exec_id,
         leg1=LegState(symbol=sym1, side=side1, qty=qty1),
@@ -1006,7 +1006,7 @@ class SmartTradeRequest(BaseModel):
     candle_limit: int = 500
     zscore_window: int = 20
     # Execution parameters
-    passive_s: float = 10.0
+    passive_s: float = 30.0
     aggressive_s: float = 20.0
     allow_market: bool = True
 
