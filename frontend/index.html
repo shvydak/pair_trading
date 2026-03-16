@@ -229,16 +229,16 @@
       tab_positions: 'Positions',
 
       // stat cards
-      stat_zscore: 'Z-score',
+      stat_zscore: 'Z',
       stat_zscore_sub: 'Current',
-      stat_hedge: 'Hedge Ratio',
+      stat_hedge: 'β',
       stat_hedge_sub: 'OLS β',
-      stat_halflife: 'Half-Life',
+      stat_halflife: 'HL',
       stat_halflife_sub: 'Bars to revert',
-      stat_hurst: 'Hurst Exp',
-      stat_corr: 'Correlation',
+      stat_hurst: 'H',
+      stat_corr: 'ρ',
       stat_corr_sub: 'Log returns ρ',
-      stat_coint: 'Cointegrated',
+      stat_coint: 'p-val',
 
       // hurst labels
       mean_reverting: 'Mean reverting',
@@ -492,16 +492,16 @@
       tab_backtest: 'Бэктест',
       tab_positions: 'Позиции',
 
-      stat_zscore: 'Z-счёт',
+      stat_zscore: 'Z',
       stat_zscore_sub: 'Текущий',
-      stat_hedge: 'Коэф. хеджа',
+      stat_hedge: 'β',
       stat_hedge_sub: 'OLS β',
-      stat_halflife: 'Полураспад',
+      stat_halflife: 'HL',
       stat_halflife_sub: 'Баров до возврата',
-      stat_hurst: 'Показ. Хёрста',
-      stat_corr: 'Корреляция',
+      stat_hurst: 'H',
+      stat_corr: 'ρ',
       stat_corr_sub: 'Лог-доходности ρ',
-      stat_coint: 'Коинтегрированы',
+      stat_coint: 'p-val',
 
       mean_reverting: 'Возврат к среднему',
       random_walk: 'Случайное блуждание',
@@ -802,38 +802,36 @@
   <!-- ===== CENTER: CHARTS ===== -->
   <div id="charts-panel" class="flex-1 flex flex-col overflow-hidden min-w-0">
     <!-- Stats Cards (compact row) -->
-    <div class="flex gap-2 px-3 py-2 border-b border-border bg-panel overflow-x-auto shrink-0" id="stats-cards">
-      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
-        <span class="text-[10px] text-muted" data-i18n="stat_zscore">Z-score</span>
-        <span id="stat-zscore" class="text-sm font-bold text-white">-</span>
-        <span id="stat-zscore-pnl" class="text-[10px] text-muted ml-0.5">-</span>
+    <div class="flex gap-1.5 px-3 py-1.5 border-b border-border bg-panel overflow-x-auto shrink-0" id="stats-cards">
+      <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
+        <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_zscore">Z</span>
+        <span id="stat-zscore" class="text-base font-bold text-white leading-none">-</span>
+        <span id="stat-zscore-pnl" class="text-[13px] text-muted leading-none mt-1">-</span>
         <div class="tooltip-box" data-i18n-html="tip_zscore"></div>
       </div>
-      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
-        <span class="text-[10px] text-muted" data-i18n="stat_hedge">Hedge</span>
-        <span id="stat-hedge" class="text-sm font-bold text-white">-</span>
+      <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
+        <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_hedge">β</span>
+        <span id="stat-hedge" class="text-base font-bold text-white leading-none">-</span>
         <div class="tooltip-box" data-i18n-html="tip_hedge"></div>
       </div>
-      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
-        <span class="text-[10px] text-muted" data-i18n="stat_halflife">Half-Life</span>
-        <span id="stat-halflife" class="text-sm font-bold text-white">-</span>
+      <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
+        <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_halflife">HL</span>
+        <span id="stat-halflife" class="text-base font-bold text-white leading-none">-</span>
         <div class="tooltip-box" data-i18n-html="tip_halflife"></div>
       </div>
-      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
-        <span class="text-[10px] text-muted" data-i18n="stat_hurst">Hurst</span>
-        <span id="stat-hurst" class="text-sm font-bold text-white">-</span>
-        <span id="stat-hurst-label" class="text-[10px] text-muted">-</span>
+      <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
+        <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_hurst">H</span>
+        <span id="stat-hurst" class="text-base font-bold text-white leading-none">-</span>
         <div class="tooltip-box" data-i18n-html="tip_hurst"></div>
       </div>
-      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
-        <span class="text-[10px] text-muted" data-i18n="stat_corr">Corr</span>
-        <span id="stat-corr" class="text-sm font-bold text-white">-</span>
+      <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
+        <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_corr">ρ</span>
+        <span id="stat-corr" class="text-base font-bold text-white leading-none">-</span>
         <div class="tooltip-box" data-i18n-html="tip_corr"></div>
       </div>
-      <div class="bg-card rounded px-3 py-1.5 border border-border flex items-center gap-2 tooltip-container shrink-0">
-        <span class="text-[10px] text-muted" data-i18n="stat_coint">Coint</span>
-        <span id="stat-coint" class="text-sm font-bold text-white">-</span>
-        <span id="stat-coint-pval" class="text-[10px] text-muted">-</span>
+      <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[52px]">
+        <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_coint">p-val</span>
+        <span id="stat-coint-pval" class="text-base font-bold text-white leading-none">-</span>
         <div class="tooltip-box" data-i18n-html="tip_coint"></div>
       </div>
     </div>
@@ -2352,6 +2350,16 @@ function _syncCharts(sourceChart) {
 // ------------------------------------------------------------------ //
 //  Render Stats Cards
 // ------------------------------------------------------------------ //
+// Theme colors (matching tailwind.config custom palette)
+const C_GREEN  = '#3fb950';
+const C_YELLOW = '#d29922';
+const C_RED    = '#f85149';
+const C_WHITE  = '#e6edf3';
+
+function _statColor(el, color) {
+  el.style.color = color;
+}
+
 function renderStats(data) {
   const s = data.stats;
 
@@ -2359,36 +2367,54 @@ function renderStats(data) {
   const z = s.current_zscore;
   const zEl = document.getElementById('stat-zscore');
   zEl.textContent = fmt(z, 3);
-  zEl.className = 'text-2xl font-bold';
   if (z !== null && z !== undefined) {
-    if (z <= -2)      zEl.classList.add('text-green-400');
-    else if (z >= 2)  zEl.classList.add('text-red-400');
-    else              zEl.classList.add('text-yellow-400');
-  } else { zEl.classList.add('text-white'); }
+    if (z <= -2)      _statColor(zEl, C_GREEN);
+    else if (z >= 2)  _statColor(zEl, C_RED);
+    else              _statColor(zEl, C_YELLOW);
+  } else { _statColor(zEl, C_WHITE); }
 
   document.getElementById('stat-hedge').textContent = fmt(data.hedge_ratio, 4);
 
+  // Half-life: green 10–50, yellow 5–10 or 50–200, red <5 or >200
   const hl = s.half_life;
-  document.getElementById('stat-halflife').textContent = hl !== null ? fmt(hl, 1) : 'N/A';
+  const hlEl = document.getElementById('stat-halflife');
+  hlEl.textContent = hl !== null ? fmt(hl, 1) : 'N/A';
+  if (hl !== null) {
+    if (hl >= 10 && hl <= 50)    _statColor(hlEl, C_GREEN);
+    else if (hl < 5 || hl > 200) _statColor(hlEl, C_RED);
+    else                          _statColor(hlEl, C_YELLOW);
+  } else { _statColor(hlEl, C_WHITE); }
 
+  // Hurst: green <0.4, yellow 0.4–0.6, red >0.6
   const h = s.hurst_exponent;
   const hurstEl = document.getElementById('stat-hurst');
-  const hurstLbl = document.getElementById('stat-hurst-label');
   hurstEl.textContent = h !== null ? fmt(h, 3) : 'N/A';
   if (h !== null) {
-    if (h < 0.4)      { hurstEl.classList.add('text-green-400'); hurstLbl.textContent = t('mean_reverting'); }
-    else if (h < 0.6) { hurstEl.classList.add('text-yellow-400'); hurstLbl.textContent = t('random_walk'); }
-    else              { hurstEl.classList.add('text-red-400');   hurstLbl.textContent = t('trending'); }
-  }
+    if (h < 0.4)      _statColor(hurstEl, C_GREEN);
+    else if (h < 0.6) _statColor(hurstEl, C_YELLOW);
+    else              _statColor(hurstEl, C_RED);
+  } else { _statColor(hurstEl, C_WHITE); }
 
-  document.getElementById('stat-corr').textContent = fmt(s.correlation, 3);
+  // Correlation: green ≥0.75, yellow 0.5–0.75, red <0.5
+  const corr = s.correlation;
+  const corrEl = document.getElementById('stat-corr');
+  corrEl.textContent = fmt(corr, 3);
+  if (corr !== null && corr !== undefined) {
+    if (corr >= 0.75)     _statColor(corrEl, C_GREEN);
+    else if (corr >= 0.5) _statColor(corrEl, C_YELLOW);
+    else                  _statColor(corrEl, C_RED);
+  } else { _statColor(corrEl, C_WHITE); }
 
+  // Cointegration: show p-value colored (green p<0.05, yellow p<0.1, red otherwise)
   const ci = s.cointegration;
-  const coEl = document.getElementById('stat-coint');
   const coPEl = document.getElementById('stat-coint-pval');
-  coEl.textContent = ci.cointegrated ? t('yes') : t('no');
-  coEl.className = 'text-2xl font-bold ' + (ci.cointegrated ? 'text-green-400' : 'text-red-400');
-  coPEl.textContent = 'p=' + fmt(ci.pvalue, 4);
+  const pv = ci.pvalue;
+  coPEl.textContent = pv !== null && pv !== undefined ? 'p=' + fmt(pv, 4) : 'N/A';
+  if (pv !== null && pv !== undefined) {
+    if (pv < 0.05)      _statColor(coPEl, C_GREEN);
+    else if (pv < 0.10) _statColor(coPEl, C_YELLOW);
+    else                _statColor(coPEl, C_RED);
+  } else { _statColor(coPEl, C_WHITE); }
 }
 
 // ------------------------------------------------------------------ //
@@ -2430,16 +2456,19 @@ function renderSpreadChart(data) {
     : 0;
   state._spreadDollarFactor = { meanSpread, dollarPerUnit };
   
-  if (data.stats && data.stats.spread_std != null) {
-    state._pnlPerZ = data.stats.spread_std * dollarPerUnit;
-    _updateZScorePnlLabel(data.stats.current_zscore);
-  } else {
-    state._pnlPerZ = null;
-    const pnlEl = document.getElementById('stat-zscore-pnl');
-    if (pnlEl) pnlEl.textContent = '-';
-  }
-
   const dollarData = _spreadToDollar(data.spread);
+
+  // Use last point of the chart (same basis as graph) for the PnL label
+  const lastDollar = dollarData.filter(v => v != null && !isNaN(v)).at(-1);
+  state._currentChartPnl = lastDollar ?? null;
+  const pnlEl = document.getElementById('stat-zscore-pnl');
+  if (pnlEl) {
+    if (lastDollar != null) {
+      pnlEl.textContent = (lastDollar >= 0 ? '+$' : '-$') + fmt(Math.abs(lastDollar), 2);
+    } else {
+      pnlEl.textContent = '-';
+    }
+  }
 
   state.spreadChart = new Chart(ctx, {
     type: 'line',
@@ -4314,12 +4343,9 @@ function updateLiveData(msg) {
     const z = msg.zscore;
     const zEl = document.getElementById('stat-zscore');
     zEl.textContent = fmt(z, 3);
-    zEl.className = 'text-2xl font-bold';
-    if (z <= -2)      zEl.classList.add('text-green-400');
-    else if (z >= 2)  zEl.classList.add('text-red-400');
-    else              zEl.classList.add('text-yellow-400');
-
-    _updateZScorePnlLabel(z);
+    if (z <= -2)      _statColor(zEl, C_GREEN);
+    else if (z >= 2)  _statColor(zEl, C_RED);
+    else              _statColor(zEl, C_YELLOW);
 
     // Update z-score label in matching position rows in real-time
     const normSym = s => s.split(':')[0].replace('/', '').toUpperCase();
