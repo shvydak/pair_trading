@@ -2988,10 +2988,17 @@ async function _pollAllExecutions() {
     const data  = await res.json();
     const execs = data.executions || [];
 
-    // Update or auto-open (for TP/SL triggered execs)
+    // Update existing popups; auto-open ONLY for actively running executions.
+    // Terminal entries (OPEN/DONE/CANCELLED/FAILED) linger in active_executions
+    // for up to 2h (TTL).  Opening a popup for them would create an infinite
+    // reopen loop: popup auto-closes after 15s → next poll re-opens it → repeat.
     for (const ex of execs) {
-      if (_execPopups.has(ex.exec_id)) _updateExecPopup(ex.exec_id, ex);
-      else                              _openExecPopup(ex.exec_id, ex);
+      const isTerminal = _EXEC_TERMINAL.has((ex.status || '').toLowerCase());
+      if (_execPopups.has(ex.exec_id)) {
+        _updateExecPopup(ex.exec_id, ex);
+      } else if (!isTerminal) {
+        _openExecPopup(ex.exec_id, ex);
+      }
     }
 
     // Update _posExecMap for position row exec-status indicators
