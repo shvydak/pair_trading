@@ -803,8 +803,8 @@
       <button onclick="showAddWatchlistModal()" class="text-accent hover:text-white text-sm font-bold px-1" title="Add pair">+</button>
     </div>
     <div id="watchlist-add-form" class="hidden px-2 py-2 border-b border-border bg-card">
-      <input id="wl-sym1" placeholder="BTCUSDT" class="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white mb-1 focus:outline-none focus:border-accent" />
-      <input id="wl-sym2" placeholder="ETHUSDT" class="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white mb-1 focus:outline-none focus:border-accent" />
+      <input id="wl-sym1" placeholder="BTC" class="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white mb-1 focus:outline-none focus:border-accent" />
+      <input id="wl-sym2" placeholder="ETH" class="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white mb-1 focus:outline-none focus:border-accent" />
       <button onclick="addWatchlistItem()" class="w-full py-1 rounded text-xs font-medium bg-accent text-surface hover:opacity-90 transition" data-i18n="trigger_confirm">Add</button>
     </div>
     <div id="watchlist-list" class="flex-1 overflow-y-auto"></div>
@@ -912,13 +912,13 @@
       <div class="flex flex-col gap-2">
         <div>
           <label class="text-[10px] text-muted mb-0.5 block" data-i18n="symbol1">Symbol 1</label>
-          <input id="sym1-input" list="sym1-list" placeholder="BTCUSDT" value="BTCUSDT"
+          <input id="sym1-input" list="sym1-list" placeholder="BTC" value="BTC"
             class="w-full bg-surface border border-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent" />
           <datalist id="sym1-list"></datalist>
         </div>
         <div>
           <label class="text-[10px] text-muted mb-0.5 block" data-i18n="symbol2">Symbol 2</label>
-          <input id="sym2-input" list="sym2-list" placeholder="ETHUSDT" value="ETHUSDT"
+          <input id="sym2-input" list="sym2-list" placeholder="ETH" value="ETH"
             class="w-full bg-surface border border-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent" />
           <datalist id="sym2-list"></datalist>
         </div>
@@ -1592,8 +1592,8 @@ function showAddWatchlistModal() {
 }
 
 function addWatchlistItem() {
-  const s1 = document.getElementById('wl-sym1').value.trim().toUpperCase();
-  const s2 = document.getElementById('wl-sym2').value.trim().toUpperCase();
+  const s1 = _expandSym(document.getElementById('wl-sym1').value);
+  const s2 = _expandSym(document.getElementById('wl-sym2').value);
   if (!s1 || !s2) return;
   _addToWatchlist(s1, s2, null);
   document.getElementById('wl-sym1').value = '';
@@ -1602,8 +1602,8 @@ function addWatchlistItem() {
 }
 
 function addCurrentPairToWatchlist() {
-  const s1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const s2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const s1 = _expandSym(document.getElementById('sym1-input').value);
+  const s2 = _expandSym(document.getElementById('sym2-input').value);
   if (!s1 || !s2) return;
   const params = {
     timeframe:    state.timeframe || '1h',
@@ -1620,8 +1620,8 @@ function addCurrentPairToWatchlist() {
 }
 
 async function addAlertFromPanel() {
-  const s1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const s2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const s1 = _expandSym(document.getElementById('sym1-input').value);
+  const s2 = _expandSym(document.getElementById('sym2-input').value);
   if (!s1 || !s2) { showToast(t('toast_enter_symbols'), 'warn'); return; }
   const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 0;
   if (!entryZ) { showToast('Укажите Entry Z-score', 'warn'); return; }
@@ -1701,8 +1701,8 @@ function loadPairIntoAnalysis(sym1, sym2, item) {
     if (item.sizing) setSizingMethod(item.sizing);
     if (item.leverage) document.getElementById('leverage-input').value = item.leverage;
   }
-  document.getElementById('sym1-input').value = sym1;
-  document.getElementById('sym2-input').value = sym2;
+  document.getElementById('sym1-input').value = _dispSym(sym1);
+  document.getElementById('sym2-input').value = _dispSym(sym2);
   handleSymbolInputChange();
   setMode('trade');
   runAnalyze();
@@ -1716,7 +1716,7 @@ function renderWatchlist() {
     list.innerHTML = `<div class="text-center text-muted text-[10px] py-6">${t('wl_no_items')}</div>`;
     return;
   }
-  const _wlNorm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const _wlNorm = s => s.split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
   const _wlCurS1 = _wlNorm(document.getElementById('sym1-input')?.value || '');
   const _wlCurS2 = _wlNorm(document.getElementById('sym2-input')?.value || '');
   const _wlCurTf = state.timeframe || '1h';
@@ -1785,8 +1785,8 @@ function renderWatchlist() {
         <div class="flex items-center gap-1 min-w-0 flex-1">
           ${alertDot}
           <div class="flex flex-col min-w-0">
-            <span class="text-[10px] font-medium text-white truncate">${w.sym1}</span>
-            <span class="text-[10px] text-muted truncate">${w.sym2}</span>
+            <span class="text-[10px] font-medium text-white truncate">${_dispSym(w.sym1)}</span>
+            <span class="text-[10px] text-muted truncate">${_dispSym(w.sym2)}</span>
           </div>
         </div>
         <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px] shrink-0" title="Telegram алерт">🔔</button>
@@ -1887,7 +1887,7 @@ async function checkRecentAlerts() {
       const toastKey = `${newest.id}:${newest.last_fired_at}`;
       if (toastKey !== _lastAlertToastId) {
         _lastAlertToastId = toastKey;
-        const pair = newest.symbol1.split(':')[0] + ' / ' + newest.symbol2.split(':')[0];
+        const pair = _dispSym(newest.symbol1) + ' / ' + _dispSym(newest.symbol2);
         const ago = _timeAgo(newest.last_fired_at);
         showToast(
           `🔔 Алерт: ${pair} — ${ago}`,
@@ -1929,7 +1929,7 @@ function renderAlerts(alerts) {
     tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">No active alerts.</td></tr>`;
     return;
   }
-  const _alNorm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const _alNorm = s => s.split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
   const _alCurS1 = _alNorm(document.getElementById('sym1-input')?.value || '');
   const _alCurS2 = _alNorm(document.getElementById('sym2-input')?.value || '');
   const _alCurTf = state.timeframe || '1h';
@@ -1963,7 +1963,7 @@ function renderAlerts(alerts) {
       ? `<span class="${isRecent ? 'text-yellow-400 font-medium' : 'text-muted'} text-[10px]">${isRecent ? '⚡ ' : ''}${firedAgo}</span>`
       : '<span class="text-muted text-[10px]">—</span>';
     return `<tr class="border-b border-border/30 ${rowBg} cursor-pointer transition" onclick="_loadAlertIntoAnalysis(${JSON.stringify(tr).replace(/"/g, '&quot;')})">
-      <td class="text-xs font-medium">${tr.symbol1.split(':')[0]}<br/><span class="text-muted">${tr.symbol2.split(':')[0]}</span></td>
+      <td class="text-xs font-medium">${_dispSym(tr.symbol1)}<br/><span class="text-muted">${_dispSym(tr.symbol2)}</span></td>
       <td class="text-xs font-mono text-muted">${tf}</td>
       <td class="text-xs font-mono text-yellow-400">±${Math.abs(tr.zscore).toFixed(2)}</td>
       <td class="text-xs font-mono text-muted">${zw}</td>
@@ -1995,8 +1995,8 @@ function _loadAlertIntoAnalysis(trig) {
   if (typeof trig === 'string') {
     try { trig = JSON.parse(trig); } catch { return; }
   }
-  document.getElementById('sym1-input').value = trig.symbol1.split(':')[0];
-  document.getElementById('sym2-input').value = trig.symbol2.split(':')[0];
+  document.getElementById('sym1-input').value = _dispSym(trig.symbol1);
+  document.getElementById('sym2-input').value = _dispSym(trig.symbol2);
   const tf = trig.timeframe || '1h';
   const zw = trig.zscore_window || 20;
   setTimeframe(tf);
@@ -2067,8 +2067,8 @@ function inferMarginAsset(symbol) {
 
 function getCurrentPairMeta() {
   if (state.pairMeta) return state.pairMeta;
-  const asset1 = inferMarginAsset(document.getElementById('sym1-input')?.value);
-  const asset2 = inferMarginAsset(document.getElementById('sym2-input')?.value);
+  const asset1 = inferMarginAsset(_expandSym(document.getElementById('sym1-input')?.value));
+  const asset2 = inferMarginAsset(_expandSym(document.getElementById('sym2-input')?.value));
   const shared = asset1 && asset1 === asset2 ? asset1 : null;
   return {
     margin_asset1: asset1,
@@ -2246,9 +2246,10 @@ function setMarketFilter(filter) {
 function populateDatalist(id, symbols) {
   const dl = document.getElementById(id);
   dl.innerHTML = '';
+  const useShort = (state.marketFilter || 'ALL') !== 'ALL';
   symbols.forEach(s => {
     const opt = document.createElement('option');
-    opt.value = s;
+    opt.value = useShort ? _dispSym(s) : s;
     dl.appendChild(opt);
   });
 }
@@ -2285,8 +2286,8 @@ function switchTab(name) {
 //  Analyze
 // ------------------------------------------------------------------ //
 async function runAnalyze() {
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   const limit = document.getElementById('limit-input').value;
   const zwindow = document.getElementById('zwindow-input').value;
 
@@ -2339,8 +2340,8 @@ async function runAnalyze() {
 // ------------------------------------------------------------------ //
 function saveAnalysisState() {
   const params = {
-    sym1:         document.getElementById('sym1-input').value.trim().toUpperCase(),
-    sym2:         document.getElementById('sym2-input').value.trim().toUpperCase(),
+    sym1:         _expandSym(document.getElementById('sym1-input').value),
+    sym2:         _expandSym(document.getElementById('sym2-input').value),
     tf:           state.timeframe,
     limit:        document.getElementById('limit-input').value,
     zwindow:      document.getElementById('zwindow-input').value,
@@ -2362,8 +2363,8 @@ function restoreAnalysisState() {
     return;
   }
   if (saved.marketFilter) setMarketFilter(saved.marketFilter);
-  document.getElementById('sym1-input').value = saved.sym1;
-  document.getElementById('sym2-input').value = saved.sym2;
+  document.getElementById('sym1-input').value = _dispSym(saved.sym1 || '');
+  document.getElementById('sym2-input').value = _dispSym(saved.sym2 || '');
   setTimeframe(saved.tf || '1h');
   if (saved.limit)   document.getElementById('limit-input').value   = saved.limit;
   if (saved.zwindow) document.getElementById('zwindow-input').value = saved.zwindow;
@@ -2640,8 +2641,8 @@ function renderPriceChart(data, sym1, sym2) {
   const ctx = document.getElementById('price-chart').getContext('2d');
   if (state.priceChart) { state.priceChart.destroy(); }
 
-  document.getElementById('price-label1').textContent = sym1;
-  document.getElementById('price-label2').textContent = sym2;
+  document.getElementById('price-label1').textContent = _dispSym(sym1);
+  document.getElementById('price-label2').textContent = _dispSym(sym2);
 
   const labels = data.timestamps.map(ts => ts.substring(0, 16));
   const base1 = data.price1[0];
@@ -2690,8 +2691,8 @@ function renderPriceChart(data, sym1, sym2) {
 //  Backtest
 // ------------------------------------------------------------------ //
 async function runBacktest() {
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   const limit   = document.getElementById('limit-input').value;
   const zwindow = document.getElementById('zwindow-input').value;
   const entryZ  = document.getElementById('entry-z-input').value;
@@ -2769,8 +2770,8 @@ function renderBacktest(data) {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-8">${t('no_trades')}</td></tr>`;
     return;
   }
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   let cumulative = 0;
   tbody.innerHTML = data.trades.map(tr => {
     cumulative += tr.pnl;
@@ -2835,7 +2836,7 @@ async function loadAllPositions() {
       const sideClass = p.side === 'long' ? 'text-green-400' : 'text-red-400';
       const asset = inferMarginAsset(p.symbol);
       return `<tr>
-        <td class="font-medium text-white">${p.symbol}</td>
+        <td class="font-medium text-white">${_dispSym(p.symbol)}</td>
         <td class="${sideClass} font-semibold">${p.side?.toUpperCase()}</td>
         <td>${fmt(p.size, 4)}</td>
         <td>${fmt(p.entry_price, 4)}</td>
@@ -2890,6 +2891,16 @@ function _symShort(ccxt) {
   const base = ccxt.slice(0, slash);
   const quote = colon !== -1 ? ccxt.slice(slash + 1, colon) : ccxt.slice(slash + 1);
   return base + quote;
+}
+// "BTCUSDT" / "BTC/USDT:USDT" / "BTC" → "BTC"  (display only)
+function _dispSym(sym) {
+  return _symShort(sym || '').replace(/USDT$|USDC$/, '');
+}
+// "BTC" → "BTCUSDT" or "BTCUSDC" based on active market filter  (before API calls)
+function _expandSym(s) {
+  s = (s || '').trim().toUpperCase();
+  if (!s || /USDT$|USDC$/.test(s)) return s;
+  return s + (state.marketFilter === 'USDC' ? 'USDC' : 'USDT');
 }
 
 function _formatDuration(openedAt) {
@@ -3068,8 +3079,8 @@ function _updateExecPopup(execId, data) {
   const colors = _EXEC_STATUS_COLORS[status] || _EXEC_STATUS_COLORS.placing;
 
   // Pair label
-  const s1 = _symShort(data.leg1?.symbol || '');
-  const s2 = _symShort(data.leg2?.symbol || '');
+  const s1 = _dispSym(data.leg1?.symbol || data.symbol1 || '');
+  const s2 = _dispSym(data.leg2?.symbol || data.symbol2 || '');
   const actionLabel = data.is_close
     ? (currentLang === 'ru' ? '↙ Закрытие' : '↙ Close')
     : (currentLang === 'ru' ? '↗ Открытие' : '↗ Open');
@@ -3089,7 +3100,7 @@ function _updateExecPopup(execId, data) {
     const pct = leg.qty > 0 ? Math.min(100, Math.round(leg.filled / leg.qty * 100)) : 0;
     const barColor   = leg.status === 'filled' ? '#3fb950' : leg.status === 'dust' ? '#d29922' : leg.status === 'failed' ? '#f85149' : '#58a6ff';
     const statusCls  = leg.status === 'filled' ? 'text-green-400' : leg.status === 'dust' ? 'text-yellow-300' : leg.status === 'failed' ? 'text-red-400' : 'text-blue-300';
-    const sym        = (leg.symbol || '').split(':')[0];
+    const sym        = _dispSym(leg.symbol || '');
     const priceStr   = leg.avg_price ? ` @ ${leg.avg_price}` : '';
     return `<div>
       <div class="flex justify-between items-center mb-1">
@@ -3298,7 +3309,7 @@ function renderStrategyPositions(positions) {
     if (!currentIds.has(id)) document.getElementById(`pos-row-${id}`)?.remove();
   });
 
-  const _spNorm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const _spNorm = s => s.split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
   const _spCurS1 = _spNorm(document.getElementById('sym1-input')?.value || '');
   const _spCurS2 = _spNorm(document.getElementById('sym2-input')?.value || '');
   const _spCurTf = state.timeframe || '1h';
@@ -3342,8 +3353,8 @@ function renderStrategyPositions(positions) {
     const pnl = pos.unrealized_pnl;
     const pnlClass = pnl === null ? 'text-muted' : pnl >= 0 ? 'text-green-400' : 'text-red-400';
     const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2);
-    const s1 = _symShort(pos.symbol1);
-    const s2 = _symShort(pos.symbol2);
+    const s1 = _dispSym(pos.symbol1);
+    const s2 = _dispSym(pos.symbol2);
 
     const tr = document.createElement('tr');
     tr.id = `pos-row-${pos.id}`;
@@ -3441,9 +3452,9 @@ async function _loadSparkline(pos) {
   try {
     // When this position matches the currently analyzed pair, reuse historyData
     // so the z-score label is identical to the header value.
-    const normSym = s => s.split(':')[0].replace('/', '').toUpperCase();
-    const curSym1 = document.getElementById('sym1-input')?.value?.toUpperCase();
-    const curSym2 = document.getElementById('sym2-input')?.value?.toUpperCase();
+    const normSym = s => _dispSym(s);
+    const curSym1 = _dispSym(document.getElementById('sym1-input')?.value || '');
+    const curSym2 = _dispSym(document.getElementById('sym2-input')?.value || '');
     const isCurrent = state.historyData?.zscore?.length &&
       normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2;
 
@@ -3549,8 +3560,8 @@ async function _loadSparkline(pos) {
 function _loadPosIntoAnalysis(posId) {
   const pos = _stratPosMap[posId];
   if (!pos) return;
-  document.getElementById('sym1-input').value = _symShort(pos.symbol1);
-  document.getElementById('sym2-input').value = _symShort(pos.symbol2);
+  document.getElementById('sym1-input').value = _dispSym(pos.symbol1);
+  document.getElementById('sym2-input').value = _dispSym(pos.symbol2);
   state.hedgeRatio = pos.hedge_ratio;
   state.pendingTriggers = { tp: pos.tp_zscore ?? null, sl: pos.sl_zscore ?? null };
   if (pos.sizing_method) setSizingMethod(pos.sizing_method);
@@ -3566,8 +3577,8 @@ function _loadPosIntoAnalysis(posId) {
 async function _closePos(posId, mode) {
   const pos = _stratPosMap[posId];
   if (!pos) return;
-  const s1 = _symShort(pos.symbol1);
-  const s2 = _symShort(pos.symbol2);
+  const s1 = _dispSym(pos.symbol1);
+  const s2 = _dispSym(pos.symbol2);
   const pnl = pos.unrealized_pnl;
   const pnlHint = pnl !== null ? ` (PnL: ${pnl >= 0 ? '+' : ''}$${fmt(Math.abs(pnl), 2)})` : '';
   const modeLabel = mode === 'market'
@@ -3742,7 +3753,7 @@ async function _setTriggers(posId) {
 async function _deleteDbPos(posId) {
   const pos = _stratPosMap[posId];
   if (!pos) return;
-  const pair = `${_symShort(pos.symbol1)}/${_symShort(pos.symbol2)}`;
+  const pair = `${_dispSym(pos.symbol1)}/${_dispSym(pos.symbol2)}`;
   const msg = t('delete_db_confirm').replace('{pair}', pair);
   if (!window.confirm(msg)) return;
   try {
@@ -3788,8 +3799,8 @@ async function loadTradeJournal() {
     });
 
     tbody.innerHTML = trades.map(tr => {
-      const s1 = _symShort(tr.symbol1);
-      const s2 = _symShort(tr.symbol2);
+      const s1 = _dispSym(tr.symbol1);
+      const s2 = _dispSym(tr.symbol2);
       const isLong = tr.side === 'long_spread';
       const sideClass = isLong ? 'text-green-400' : 'text-red-400';
       const sideLabel = isLong ? '▲' : '▼';
@@ -3841,9 +3852,9 @@ function updateThresholdLines() {
 }
 
 function _updateStrategyPosHighlights() {
-  const norm = s => s.split(':')[0].replace('/', '').toUpperCase();
-  const curS1 = norm(document.getElementById('sym1-input')?.value || '');
-  const curS2 = norm(document.getElementById('sym2-input')?.value || '');
+  const norm = s => _dispSym(s);
+  const curS1 = _dispSym(document.getElementById('sym1-input')?.value || '');
+  const curS2 = _dispSym(document.getElementById('sym2-input')?.value || '');
   const curTf = state.timeframe || '1h';
   const curZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
   Object.keys(_stratPosMap).forEach(id => {
@@ -3860,8 +3871,8 @@ function _updateStrategyPosHighlights() {
 
 function _updatePositionAnnotations() {
   if (!state.spreadChart || !state.historyData) return;
-  const sym1 = _symShort(document.getElementById('sym1-input').value.trim().toUpperCase());
-  const sym2 = _symShort(document.getElementById('sym2-input').value.trim().toUpperCase());
+  const sym1 = _dispSym(document.getElementById('sym1-input').value);
+  const sym2 = _dispSym(document.getElementById('sym2-input').value);
   const timestamps = state.historyData.timestamps;
   if (!timestamps || !timestamps.length) return;
 
@@ -3910,7 +3921,7 @@ function _updatePositionAnnotations() {
 
   // ── Find open position matching the current chart pair ─────────────
   const pos = Object.values(_stratPosMap).find(p =>
-    _symShort(p.symbol1) === sym1 && _symShort(p.symbol2) === sym2
+    _dispSym(p.symbol1) === sym1 && _dispSym(p.symbol2) === sym2
   );
 
   // ── TP / SL lines from position ────────────────────────────────────
@@ -3966,7 +3977,7 @@ function _updatePositionAnnotations() {
     const chartEnd   = _utcParse(timestamps[timestamps.length - 1]);
 
     _cachedJournalTrades.forEach((tr, i) => {
-      if (_symShort(tr.symbol1) !== sym1 || _symShort(tr.symbol2) !== sym2) return;
+      if (_dispSym(tr.symbol1) !== sym1 || _dispSym(tr.symbol2) !== sym2) return;
 
       const entryMs = tr.opened_at ? _utcParse(tr.opened_at) : null;
       const exitMs  = tr.closed_at ? _utcParse(tr.closed_at) : null;
@@ -4056,8 +4067,8 @@ function setSizingMethod(method) {
 }
 
 function updateSizePreview() {
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   const sizeUsd = parseFloat(document.getElementById('pos-size-input').value) || 1000;
   const preview = document.getElementById('size-preview');
 
@@ -4129,8 +4140,8 @@ function enableTrading(yes, sym1, sym2) {
 }
 
 async function executeTrade(action, side) {
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
   const leverage = parseInt(document.getElementById('leverage-input').value) || 1;
 
@@ -4200,8 +4211,8 @@ function setExecMode(mode) {
 }
 
 async function fetchPreTradeCheck() {
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
   const leverage = parseInt(document.getElementById('leverage-input').value) || 1;
   const results = document.getElementById('pretrade-results');
@@ -4267,8 +4278,8 @@ function renderPreTrade(data) {
 
   if (data.sizes) {
     const s = data.sizes;
-    const asset1 = pair.margin_asset1 || inferMarginAsset(document.getElementById('sym1-input')?.value);
-    const asset2 = pair.margin_asset2 || inferMarginAsset(document.getElementById('sym2-input')?.value);
+    const asset1 = pair.margin_asset1 || inferMarginAsset(_expandSym(document.getElementById('sym1-input')?.value));
+    const asset2 = pair.margin_asset2 || inferMarginAsset(_expandSym(document.getElementById('sym2-input')?.value));
     html += `<div class="border-t border-border pt-1.5 mt-1 text-muted font-mono text-[10px] space-y-0.5">
       <div>S1: <span class="text-white">${Number(s.rounded_qty1).toFixed(6)}</span> × $${Number(data.prices?.price1 || 0).toFixed(2)} = <span class="text-yellow-300">${formatAssetAmount(Number(s.notional1), asset1)}</span></div>
       <div>S2: <span class="text-white">${Number(s.rounded_qty2).toFixed(6)}</span> × $${Number(data.prices?.price2 || 0).toFixed(2)} = <span class="text-yellow-300">${formatAssetAmount(Number(s.notional2), asset2)}</span></div>
@@ -4283,8 +4294,8 @@ function renderPreTrade(data) {
 }
 
 async function startSmartExecution(side) {
-  const sym1 = document.getElementById('sym1-input').value.trim().toUpperCase();
-  const sym2 = document.getElementById('sym2-input').value.trim().toUpperCase();
+  const sym1 = _expandSym(document.getElementById('sym1-input').value);
+  const sym2 = _expandSym(document.getElementById('sym2-input').value);
   const size  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
   const leverage = parseInt(document.getElementById('leverage-input').value) || 1;
   const passiveS = parseFloat(document.getElementById('passive-s-input').value) || 30;
@@ -4447,11 +4458,10 @@ function updateLiveData(msg) {
     else              _statColor(zEl, C_YELLOW);
 
     // Update z-score label in matching position rows in real-time
-    const normSym = s => s.split(':')[0].replace('/', '').toUpperCase();
-    const curSym1 = document.getElementById('sym1-input')?.value?.toUpperCase();
-    const curSym2 = document.getElementById('sym2-input')?.value?.toUpperCase();
+    const curSym1 = _dispSym(document.getElementById('sym1-input')?.value || '');
+    const curSym2 = _dispSym(document.getElementById('sym2-input')?.value || '');
     for (const pos of Object.values(_stratPosMap)) {
-      if (normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2) {
+      if (_dispSym(pos.symbol1) === curSym1 && _dispSym(pos.symbol2) === curSym2) {
         const zLabel = document.getElementById(`z-cur-${pos.id}`);
         if (zLabel) {
           const zColor = Math.abs(z) >= 2.5 ? '#f85149' : Math.abs(z) >= 1.5 ? '#d29922' : '#8b949e';
@@ -6433,8 +6443,8 @@ function renderGuide(idx) {
 }
 
 function applyGuideExample(ex) {
-  if (ex.sym1) document.getElementById('sym1-input').value = ex.sym1;
-  if (ex.sym2) document.getElementById('sym2-input').value = ex.sym2;
+  if (ex.sym1) document.getElementById('sym1-input').value = _dispSym(ex.sym1);
+  if (ex.sym2) document.getElementById('sym2-input').value = _dispSym(ex.sym2);
   state.pairMeta = null;
   updatePairContext();
   if (ex.tf)   setTimeframe(ex.tf);

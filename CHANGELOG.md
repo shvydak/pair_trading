@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-03-18 — UI: короткие символы без USDT/USDC суффикса
+
+### Что изменено
+
+**Frontend (`index.html`):**
+- **Новый хелпер `_dispSym(sym)`** — `"BTC/USDT:USDT"` / `"BTCUSDT"` → `"BTC"` (только для отображения)
+- **Новый хелпер `_expandSym(s)`** — `"BTC"` → `"BTCUSDT"` или `"BTCUSDC"` по активному market filter (перед отправкой в API)
+- **Все места отображения** используют `_dispSym()`: watchlist карточки, таблица Strategy Positions, таблица Exchange Positions, вкладка Alerts, журнал, popup умного исполнения, price chart labels, confirm-диалоги закрытия/удаления
+- **Все читки инпутов для API** обёрнуты в `_expandSym()`: `runAnalyze`, `runBacktest`, `executeTrade`, `fetchPreTradeCheck`, `startSmartExecution`, `addCurrentPairToWatchlist`, `addAlertFromPanel`, `addWatchlistItem`, `updateSizePreview`, `saveAnalysisState`, `getCurrentPairMeta`
+- **Все сеттеры инпутов** используют `_dispSym()` при загрузке пары из кода: `loadPairIntoAnalysis`, `_loadPosIntoAnalysis`, `_loadAlertIntoAnalysis`, `restoreAnalysisState`, `applyGuideExample` — backward-compatible (старые сохранённые состояния с `"BTCUSDT"` корректно конвертируются в `"BTC"` при восстановлении)
+- **Все нормализующие лямбды** (`_wlNorm`, `_spNorm`, `_alNorm`, `normSym` в `_loadSparkline` и `updateLiveData`) дополнены `.replace(/USDT$|USDC$/,'')` — сравнения `"BTC" === "BTC"` работают для значений из инпута и из БД одновременно
+- **`populateDatalist`** — при filter=USDT или USDC показывает короткие символы (`BTC`, `ETH`...); при ALL — полные (иначе два одинаковых "BTC" из USDT-M и USDC-M)
+- **HTML плейсхолдеры** обновлены: `BTCUSDT` → `BTC`, `ETHUSDT` → `ETH` (sym1-input, sym2-input, wl-sym1, wl-sym2)
+
+### Итого тестов: 213 (без изменений — все изменения в frontend JS)
+
+---
+
 ## 2026-03-18 — Watchlist: несколько таймфреймов для одной пары
 
 ### Что изменено
