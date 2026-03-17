@@ -1583,6 +1583,26 @@ function saveWatchlist(items) {
   localStorage.setItem('pt_watchlist', JSON.stringify(items));
 }
 
+function _saveWatchlistStats(sym1, sym2, timeframe, zwindow, data) {
+  const _norm = s => s.split(':')[0].replace('/', '').toUpperCase();
+  const n1 = _norm(sym1), n2 = _norm(sym2);
+  const zw = parseInt(zwindow) || 20;
+  const items = getWatchlist();
+  let changed = false;
+  items.forEach(w => {
+    if (_norm(w.sym1) === n1 && _norm(w.sym2) === n2
+        && (w.timeframe || '1h') === timeframe
+        && (parseInt(w.zwindow) || 20) === zw) {
+      w.hl    = data.stats?.half_life        ?? null;
+      w.hurst = data.stats?.hurst_exponent   ?? null;
+      w.corr  = data.stats?.correlation      ?? null;
+      w.pval  = data.stats?.cointegration?.pvalue ?? null;
+      changed = true;
+    }
+  });
+  if (changed) saveWatchlist(items);
+}
+
 function showAddWatchlistModal() {
   const form = document.getElementById('watchlist-add-form');
   form.classList.toggle('hidden');
@@ -1779,26 +1799,58 @@ function renderWatchlist() {
       </div>`;
     }
 
+    // Watchlist stats colors (same thresholds as header)
+    const hl = w.hl != null ? w.hl : null;
+    const hlDisplay = hl != null ? hl.toFixed(1) : '—';
+    const hlColor = hl == null ? '#768390' : (hl >= 10 && hl <= 50 ? C_GREEN : (hl < 5 || hl > 200 ? C_RED : C_YELLOW));
+
+    const hu = w.hurst != null ? w.hurst : null;
+    const huDisplay = hu != null ? hu.toFixed(3) : '—';
+    const huColor = hu == null ? '#768390' : (hu < 0.4 ? C_GREEN : hu < 0.6 ? C_YELLOW : C_RED);
+
+    const co = w.corr != null ? w.corr : null;
+    const coDisplay = co != null ? co.toFixed(3) : '—';
+    const coColor = co == null ? '#768390' : (co >= 0.75 ? C_GREEN : co >= 0.5 ? C_YELLOW : C_RED);
+
+    const pv = w.pval != null ? w.pval : null;
+    const pvDisplay = pv != null ? 'p=' + pv.toFixed(4) : '—';
+    const pvColor = pv == null ? '#768390' : (pv < 0.05 ? C_GREEN : pv < 0.10 ? C_YELLOW : C_RED);
+
     return header + `
     <div class="px-2 py-1.5 border-b border-border ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-card'} cursor-pointer transition group" onclick="loadPairFromWatchlist(${i})">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-1 min-w-0 flex-1">
-          ${alertDot}
+      <div class="flex items-start justify-between gap-1">
+        <div class="flex items-start gap-1 min-w-0 flex-1">
+          <span class="mt-0.5 shrink-0">${alertDot}</span>
           <div class="flex flex-col min-w-0">
             <span class="text-[10px] font-medium text-white truncate">${_dispSym(w.sym1)}</span>
             <span class="text-[10px] text-muted truncate">${_dispSym(w.sym2)}</span>
           </div>
         </div>
-        <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px] shrink-0" title="Telegram алерт">🔔</button>
-        <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px] shrink-0 ml-1" title="${t('remove_from_watchlist')}">✕</button>
+        <div class="flex flex-col items-end shrink-0">
+          <span class="text-[11px] font-mono font-bold leading-none ${zColor}">${zDisplay}${zArrow}</span>
+          <div class="flex items-center gap-0.5 mt-0.5">
+            <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px]" title="Telegram алерт">🔔</button>
+            <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px]" title="${t('remove_from_watchlist')}">✕</button>
+          </div>
+        </div>
       </div>
-      <div class="flex items-center justify-between mt-0.5">
-        <span class="text-[9px] text-muted">Z</span>
-        <span class="text-[10px] font-mono ${zColor}">${zDisplay}${zArrow}</span>
-      </div>
-      <div class="flex items-center justify-between">
-        <span class="text-[9px] text-muted">Sprd</span>
-        <span class="text-[10px] font-mono text-muted">${spreadDisplay}</span>
+      <div class="grid grid-cols-2 gap-x-2 mt-1">
+        <div class="flex justify-between">
+          <span class="text-[9px] text-muted">HL</span>
+          <span class="text-[9px] font-mono" style="color:${hlColor}">${hlDisplay}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-[9px] text-muted">H</span>
+          <span class="text-[9px] font-mono" style="color:${huColor}">${huDisplay}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-[9px] text-muted">ρ</span>
+          <span class="text-[9px] font-mono" style="color:${coColor}">${coDisplay}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-[9px] text-muted">p</span>
+          <span class="text-[9px] font-mono" style="color:${pvColor}">${pvDisplay}</span>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -2322,6 +2374,7 @@ async function runAnalyze() {
     connectWebSocket(sym1, sym2, zwindow);
     updateLastUpdate();
     saveAnalysisState();
+    _saveWatchlistStats(sym1, sym2, state.timeframe, zwindow, data);
     loadTradeJournal();
     renderWatchlist();
     _updateStrategyPosHighlights();
