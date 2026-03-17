@@ -2670,6 +2670,7 @@ function renderSpreadChart(data) {
             axis.min = -absMax;
             axis.max = absMax;
           },
+          afterFit: function(scale) { scale.width = Math.max(scale.width, 72); },
         },
         yZ: {
           position: 'right',
@@ -2734,7 +2735,14 @@ function renderPriceChart(data, sym1, sym2) {
       },
       scales: {
         x: { ticks: { color: '#8b949e', maxTicksLimit: 10, maxRotation: 0, font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' } },
-        y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' }, title: { display: true, text: t('indexed_label'), color: '#8b949e', font: { size: 11 } } },
+        y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: 'rgba(48,54,61,0.5)' }, title: { display: true, text: t('indexed_label'), color: '#8b949e', font: { size: 11 } }, afterFit: function(scale) { scale.width = Math.max(scale.width, 72); } },
+        yGhost: {
+          position: 'right',
+          ticks: { color: 'transparent', font: { size: 11 } },
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: ' ', font: { size: 11 } },
+          border: { color: 'transparent' },
+        },
       }
     }
   });
