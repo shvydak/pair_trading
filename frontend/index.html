@@ -3390,23 +3390,30 @@ async function _loadSparkline(pos) {
       zLabel.style.color = zColor;
     }
 
-    // Add PnL equivalent text directly below Z-scores in the table
-    const std = data?.stats?.spread_std;
-    if (std != null && pos.size_usd != null) {
-      const pnlPerZ = std * pos.size_usd;
-      
-      const entryPnlEl = document.getElementById(`entry-z-pnl-${pos.id}`);
-      if (entryPnlEl && pos.entry_zscore != null) {
-        const epnl = pos.entry_zscore * pnlPerZ;
-        const eStr = (epnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(epnl), 2);
-        entryPnlEl.textContent = eStr;
-        entryPnlEl.title = currentLang === 'ru' ? 'Спред PnL при Z=0' : 'Spread PnL at Z=0';
+    // Compute PnL from actual spread data — same basis as the main chart
+    if (data.spread?.length && pos.size_usd != null) {
+      const beta = Math.abs(pos.hedge_ratio ?? data.hedge_ratio ?? 1);
+      const dollarPerUnit = pos.size_usd / (1 + beta);
+      const validSpread = data.spread.filter(v => v != null && !isNaN(v));
+      const meanSpread = validSpread.reduce((a, b) => a + b, 0) / validSpread.length;
+      const dollarData = data.spread.map(s => s != null ? (s - meanSpread) * dollarPerUnit : null);
+
+      // Current PnL = last point of dollar spread (same as chart)
+      const currentPnl = dollarData.filter(v => v != null).at(-1);
+      const curPnlEl = document.getElementById(`z-cur-pnl-${pos.id}`);
+      if (curPnlEl && currentPnl != null) {
+        curPnlEl.textContent = (currentPnl >= 0 ? '+$' : '-$') + fmt(Math.abs(currentPnl), 2);
       }
 
-      const curPnlEl = document.getElementById(`z-cur-pnl-${pos.id}`);
-      if (curPnlEl) {
-        const cpnl = currentZ * pnlPerZ;
-        curPnlEl.textContent = (cpnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(cpnl), 2);
+      // Entry PnL = dollar spread value at entry timestamp
+      const entryPnlEl = document.getElementById(`entry-z-pnl-${pos.id}`);
+      if (entryPnlEl && pos.opened_at && data.timestamps?.length) {
+        const toMs = ts => new Date(ts.replace(' ', 'T') + (ts.includes('+') || ts.endsWith('Z') ? '' : 'Z')).getTime();
+        const entryMs = toMs(pos.opened_at);
+        let bestIdx = 0, minDiff = Infinity;
+        data.timestamps.forEach((ts, i) => { const d = Math.abs(toMs(ts) - entryMs); if (d < minDiff) { minDiff = d; bestIdx = i; } });
+        const ePnl = dollarData[bestIdx];
+        if (ePnl != null) entryPnlEl.textContent = (ePnl >= 0 ? '+$' : '-$') + fmt(Math.abs(ePnl), 2);
       }
     }
 
