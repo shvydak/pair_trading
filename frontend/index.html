@@ -4310,9 +4310,17 @@ function refreshLiveCharts() {
 
   if (state.spreadChart) {
     state.spreadChart.data.labels = labels;
-    state.spreadChart.data.datasets[0].data = _spreadToDollar(history.spread);
+    const dollarData = _spreadToDollar(history.spread);
+    state.spreadChart.data.datasets[0].data = dollarData;
     state.spreadChart.data.datasets[1].data = history.zscore;
     state.spreadChart.update('none');
+
+    // Keep PnL label in sync with the last point of the blue line
+    const lastDollar = dollarData.filter(v => v != null && !isNaN(v)).at(-1);
+    const pnlEl = document.getElementById('stat-zscore-pnl');
+    if (pnlEl && lastDollar != null) {
+      pnlEl.textContent = (lastDollar >= 0 ? '+$' : '-$') + fmt(Math.abs(lastDollar), 2);
+    }
   }
 
   if (state.priceChart && Array.isArray(history.price1) && Array.isArray(history.price2) && history.price1.length && history.price2.length) {
