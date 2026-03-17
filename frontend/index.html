@@ -4469,7 +4469,7 @@ function renderApiStatus(data) {
     const usdc = b.USDC?.free ?? null;
     const dot = `<span style="width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;flex-shrink:0"></span>`;
     const bal = (label, val) =>
-      `<span class="text-muted">${label}</span><span class="font-mono" style="color:#e6edf3">$${fmt(val, 0)}</span>`;
+      `<span class="text-muted">${label}</span><span class="font-mono" style="color:#e6edf3">$${fmt(val, 2)}</span>`;
     el.innerHTML = `${dot}${bal('USDT·', usdt)}&nbsp;${bal('USDC·', usdc)}`;
   } else if (data.reason === 'no_keys') {
     el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#6e7681;display:inline-block"></span><span class="text-muted">Binance</span>`;
