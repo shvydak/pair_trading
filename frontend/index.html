@@ -1817,7 +1817,7 @@ function renderWatchlist() {
     const pvColor = pv == null ? '#768390' : (pv < 0.05 ? C_GREEN : pv < 0.10 ? C_YELLOW : C_RED);
 
     return header + `
-    <div class="px-2 py-1.5 border-b border-border ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-card'} cursor-pointer transition group" onclick="loadPairFromWatchlist(${i})">
+    <div class="px-2 py-1.5 bg-card ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-panel'} cursor-pointer transition group" style="border-bottom:4px solid #0f1117" onclick="loadPairFromWatchlist(${i})">
       <div class="flex items-start justify-between gap-1">
         <div class="flex items-start gap-1 min-w-0 flex-1">
           <span class="mt-0.5 shrink-0">${alertDot}</span>
