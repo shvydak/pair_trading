@@ -3798,6 +3798,18 @@ function _updatePositionAnnotations() {
     return (spread[idx] - f.meanSpread) * f.dollarPerUnit;
   }
 
+  // Helper: get PnL value at a chart label — reads directly from chart dataset (most reliable)
+  function _pnlAtLabel(lbl) {
+    const chartLabels = state.spreadChart.data.labels;
+    const chartData   = state.spreadChart.data.datasets[0].data;
+    const idx = chartLabels.findIndex(l => l === lbl);
+
+    if (idx >= 0 && chartData[idx] != null) return chartData[idx];
+    // fallback: compute from spread
+    const idx2 = timestamps.findIndex(ts => ts.substring(0, 16) === lbl);
+    return idx2 >= 0 ? _pnlAt(idx2) : 0;
+  }
+
   // ── Clean up old trade markers ─────────────────────────────────────
   Object.keys(ann).forEach(key => {
     if (key.startsWith('trade_')) delete ann[key];
@@ -3833,11 +3845,12 @@ function _updatePositionAnnotations() {
       borderColor: 'rgba(88,166,255,0.25)', borderWidth: 1, borderDash: [3, 4],
     };
 
-    // Triangle marker + Z-score label
+    // Triangle marker + Z-score label — anchored to PnL (blue) line
+    const entryPnl = _pnlAtLabel(lbl);
     ann.entryPoint = {
       type: 'label',
-      xScaleID: 'x', yScaleID: 'yZ',
-      xValue: lbl, yValue: zVal,
+      xScaleID: 'x', yScaleID: 'ySpread',
+      xValue: lbl, yValue: entryPnl,
       content: marker,
       color: color,
       font: { size: 14, weight: 'bold' },
@@ -3846,9 +3859,9 @@ function _updatePositionAnnotations() {
     };
     ann.entryLabel = {
       type: 'label',
-      xScaleID: 'x', yScaleID: 'yZ',
-      xValue: lbl, yValue: zVal,
-      content: (currentLang === 'ru' ? 'Вход Z ' : 'Entry Z ') + (zVal > 0 ? '+' : '') + zVal.toFixed(2),
+      xScaleID: 'x', yScaleID: 'ySpread',
+      xValue: lbl, yValue: entryPnl,
+      content: (currentLang === 'ru' ? 'Вход ' : 'Entry ') + (entryPnl >= 0 ? '+$' : '-$') + fmt(Math.abs(entryPnl), 2),
       color: '#8b949e',
       font: { size: 9 },
       padding: 2,
@@ -3872,13 +3885,13 @@ function _updatePositionAnnotations() {
       const isLong = tr.side === 'long_spread';
       const pnlOk = (tr.pnl || 0) >= 0;
 
-      // Entry triangle (smaller, semi-transparent)
-      if (entryMs && entryMs >= chartStart && entryMs <= chartEnd && tr.entry_zscore != null) {
+      // Entry triangle (smaller, semi-transparent) — anchored to PnL line
+      if (entryMs && entryMs >= chartStart && entryMs <= chartEnd) {
         const entryLbl = _closestLabel(tr.opened_at);
         ann[`trade_entry_${i}`] = {
           type: 'label',
-          xScaleID: 'x', yScaleID: 'yZ',
-          xValue: entryLbl, yValue: tr.entry_zscore,
+          xScaleID: 'x', yScaleID: 'ySpread',
+          xValue: entryLbl, yValue: _pnlAtLabel(entryLbl),
           content: isLong ? '▲' : '▼',
           color: (isLong ? '#3fb950' : '#f85149') + 'aa',
           font: { size: 10 },
@@ -3887,14 +3900,14 @@ function _updatePositionAnnotations() {
         };
       }
 
-      // Exit marker: ✕ with PnL label
-      if (exitMs && exitMs >= chartStart && exitMs <= chartEnd && tr.exit_zscore != null) {
+      // Exit marker: ✕ with PnL label — anchored to PnL line
+      if (exitMs && exitMs >= chartStart && exitMs <= chartEnd) {
         const exitLbl2 = _closestLabel(tr.closed_at);
         const pnlStr = (tr.pnl >= 0 ? '+' : '') + '$' + fmt(Math.abs(tr.pnl || 0), 2);
         ann[`trade_exit_${i}`] = {
           type: 'label',
-          xScaleID: 'x', yScaleID: 'yZ',
-          xValue: exitLbl2, yValue: tr.exit_zscore,
+          xScaleID: 'x', yScaleID: 'ySpread',
+          xValue: exitLbl2, yValue: _pnlAtLabel(exitLbl2),
           content: '✕',
           color: pnlOk ? '#3fb950' : '#f85149',
           font: { size: 11, weight: 'bold' },
@@ -3903,8 +3916,8 @@ function _updatePositionAnnotations() {
         };
         ann[`trade_pnl_${i}`] = {
           type: 'label',
-          xScaleID: 'x', yScaleID: 'yZ',
-          xValue: exitLbl2, yValue: tr.exit_zscore,
+          xScaleID: 'x', yScaleID: 'ySpread',
+          xValue: exitLbl2, yValue: _pnlAtLabel(exitLbl2),
           content: pnlStr,
           color: pnlOk ? '#3fb950' : '#f85149',
           font: { size: 8, weight: 'bold' },
