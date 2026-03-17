@@ -1425,11 +1425,8 @@ window.addEventListener('DOMContentLoaded', () => {
   loadExecHistory();
   loadTradeJournal();
   restoreAnalysisState();
-  // Auto-refresh positions every 5s (same cadence as PriceCache)
-  setInterval(() => { loadStrategyPositions(); refreshPositions(); }, 5000);
-  // Check for recently fired alerts on startup and every 60s
-  checkRecentAlerts();
-  setInterval(checkRecentAlerts, 60000);
+  // Auto-refresh positions + alerts every 5s (same cadence as PriceCache)
+  setInterval(() => { loadStrategyPositions(); refreshPositions(); checkRecentAlerts(); }, 5000);
 });
 
 // ------------------------------------------------------------------ //
@@ -1840,6 +1837,7 @@ async function checkRecentAlerts() {
           8000,
           () => setBottomTab('alerts')
         );
+        loadAlertsTab(); // refresh the Alerts tab table immediately
       }
     }
   } catch {}
