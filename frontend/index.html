@@ -2452,6 +2452,34 @@ function _spreadToDollar(spreadArr) {
   return spreadArr.map(s => (s - meanSpread) * dollarPerUnit);
 }
 
+// Returns {spread, dollarPerUnit} adjusted for the selected sizing method.
+// Equal  → β_eff=1  (log(P1) - log(P2)), dollarPerUnit = size/2
+// ATR    → β_eff=ATR1/ATR2,               dollarPerUnit = size/(1+β_eff)
+// OLS    → unchanged (data.spread, OLS β)
+function _effectiveSpreadData(data) {
+  const olsBeta  = Math.abs(state.hedgeRatio || 1);
+  const sizeUsd  = parseFloat(document.getElementById('pos-size-input').value) || 1000;
+  if (sizingMethod === 'equal') {
+    const spread = data.price1.map((p1, i) => {
+      const p2 = data.price2[i];
+      return (p1 > 0 && p2 > 0) ? Math.log(p1) - Math.log(p2) : null;
+    });
+    return { spread, dollarPerUnit: sizeUsd / 2 };
+  }
+  if (sizingMethod === 'atr') {
+    const atr1 = state.atr1, atr2 = state.atr2;
+    if (atr1 && atr2 && atr2 > 0) {
+      const betaEff = atr1 / atr2;
+      const spread  = data.price1.map((p1, i) => {
+        const p2 = data.price2[i];
+        return (p1 > 0 && p2 > 0) ? Math.log(p1) - betaEff * Math.log(p2) : null;
+      });
+      return { spread, dollarPerUnit: sizeUsd / (1 + betaEff) };
+    }
+  }
+  return { spread: data.spread, dollarPerUnit: sizeUsd / (1 + olsBeta) };
+}
+
 function _updateZScorePnlLabel(z) {
   const pnlEl = document.getElementById('stat-zscore-pnl');
   if (!pnlEl) return;
@@ -2471,17 +2499,15 @@ function renderSpreadChart(data) {
   const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 2.0;
   const exitZ  = parseFloat(document.getElementById('exit-z-input').value)  || 0.5;
 
-  // Compute dollar PnL conversion factor
-  const sizeUsd = parseFloat(document.getElementById('pos-size-input').value) || 1000;
-  const beta = Math.abs(state.hedgeRatio || 1);
-  const dollarPerUnit = sizeUsd / (1 + beta);
-  const validSpread = data.spread.filter(v => v != null && !isNaN(v));
+  // Compute dollar PnL conversion factor (respects selected sizing method)
+  const { spread: effectiveSpread, dollarPerUnit } = _effectiveSpreadData(data);
+  const validSpread = effectiveSpread.filter(v => v != null && !isNaN(v));
   const meanSpread = validSpread.length > 0
     ? validSpread.reduce((a, b) => a + b, 0) / validSpread.length
     : 0;
   state._spreadDollarFactor = { meanSpread, dollarPerUnit };
-  
-  const dollarData = _spreadToDollar(data.spread);
+
+  const dollarData = _spreadToDollar(effectiveSpread);
 
   // Use last point of the chart (same basis as graph) for the PnL label
   const lastDollar = dollarData.filter(v => v != null && !isNaN(v)).at(-1);
@@ -4008,6 +4034,7 @@ function setSizingMethod(method) {
     btn.classList.toggle('text-muted', !active);
   });
   updateSizePreview();
+  if (state.historyData) renderSpreadChart(state.historyData);
 }
 
 function updateSizePreview() {
@@ -4368,7 +4395,8 @@ function refreshLiveCharts() {
 
   if (state.spreadChart) {
     state.spreadChart.data.labels = labels;
-    const dollarData = _spreadToDollar(history.spread);
+    const { spread: effSpread } = _effectiveSpreadData(history);
+    const dollarData = _spreadToDollar(effSpread);
     state.spreadChart.data.datasets[0].data = dollarData;
     state.spreadChart.data.datasets[1].data = history.zscore;
     state.spreadChart.update('none');
