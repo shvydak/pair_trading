@@ -220,7 +220,9 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 ### Watchlist
 
 - `localStorage['pt_watchlist']` — сохраняет **все параметры анализа** при добавлении пары
-- Z-score/spread обновляются каждые **5 сек** через `POST /api/watchlist/data` (PriceCache)
+- **Ключ дедупликации**: `(sym1, sym2, timeframe)` — одна и та же пара с разным таймфреймом хранится как отдельная запись; добавление BTC/ETH 5m не перезаписывает BTC/ETH 4h
+- **Группировка по таймфреймам** в `renderWatchlist()`: заголовки-разделители, порядок 5m→15m→30m→1h→2h→4h→8h→1d
+- Z-score/spread обновляются каждые **5 сек** через `POST /api/watchlist/data` (PriceCache); ответ содержит `timeframe` для точного матчинга записей
 - Threshold индикация: `|z| >= entryZ*0.75` → жёлтый; `|z| >= entryZ` → красный + мигание
 - Подсветка активной пары обновляется сразу после `runAnalyze()` (не ждёт 5s тик)
 

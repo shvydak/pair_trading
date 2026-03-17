@@ -1662,7 +1662,8 @@ async function addAlertFromPanel() {
 
 function _addToWatchlist(s1, s2, params) {
   const items = getWatchlist();
-  const idx = items.findIndex(w => w.sym1 === s1 && w.sym2 === s2);
+  const tf = (params && params.timeframe) || state.timeframe || '1h';
+  const idx = items.findIndex(w => w.sym1 === s1 && w.sym2 === s2 && (w.timeframe || '1h') === tf);
   if (idx >= 0) {
     // Update params but preserve live data
     if (params) items[idx] = { ...items[idx], ...params };
@@ -1722,7 +1723,16 @@ function renderWatchlist() {
   const _wlCurZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
   const _wlCurEz = parseFloat(document.getElementById('entry-z-input')?.value) || 2;
 
-  list.innerHTML = items.map((w, i) => {
+  // Sort items by timeframe order then render with group headers
+  const TF_ORDER = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+  const sorted = [...items.map((w, i) => ({ w, i }))].sort((a, b) => {
+    const ia = TF_ORDER.indexOf(a.w.timeframe || '1h');
+    const ib = TF_ORDER.indexOf(b.w.timeframe || '1h');
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+
+  let lastTf = null;
+  list.innerHTML = sorted.map(({ w, i }) => {
     const az = w.zscore != null ? Math.abs(w.zscore) : null;
     const entryZ = parseFloat(w.entryZ) || 2;
     const isActivePair = _wlCurS1 && _wlCurS2
@@ -1755,20 +1765,27 @@ function renderWatchlist() {
     // Direction arrow (from previous update)
     const zArrow = w._zDir > 0 ? ' ↑' : w._zDir < 0 ? ' ↓' : '';
 
-    const tf = w.timeframe || '';
+    const wTf = w.timeframe || '1h';
     const zDisplay = w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '—';
     const spreadDisplay = w.spread != null ? w.spread.toFixed(4) : '—';
 
-    return `
+    // Timeframe group header
+    let header = '';
+    if (wTf !== lastTf) {
+      lastTf = wTf;
+      header = `<div class="px-2 py-1 flex items-center gap-1 sticky top-0 bg-panel z-10">
+        <span class="text-[9px] font-semibold text-accent uppercase tracking-widest">${wTf}</span>
+        <div class="flex-1 h-px bg-border"></div>
+      </div>`;
+    }
+
+    return header + `
     <div class="px-2 py-1.5 border-b border-border ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-card'} cursor-pointer transition group" onclick="loadPairFromWatchlist(${i})">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-1 min-w-0 flex-1">
           ${alertDot}
           <div class="flex flex-col min-w-0">
-            <div class="flex items-center gap-1">
-              <span class="text-[10px] font-medium text-white truncate">${w.sym1}</span>
-              ${tf ? `<span class="text-[9px] text-muted shrink-0">${tf}</span>` : ''}
-            </div>
+            <span class="text-[10px] font-medium text-white truncate">${w.sym1}</span>
             <span class="text-[10px] text-muted truncate">${w.sym2}</span>
           </div>
         </div>
@@ -1819,7 +1836,8 @@ async function updateWatchlistZScores() {
 
   let changed = false;
   for (const row of data) {
-    const w = items.find(x => x.sym1 === row.sym1 && x.sym2 === row.sym2);
+    const rowTf = row.timeframe || '1h';
+    const w = items.find(x => x.sym1 === row.sym1 && x.sym2 === row.sym2 && (x.timeframe || '1h') === rowTf);
     if (!w) continue;
     if (row.current_zscore != null) {
       const prevZ = w.zscore;

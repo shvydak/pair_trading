@@ -698,6 +698,7 @@ async def get_watchlist_data(items: list[WatchlistItem]):
             except Exception as e:
                 log.warning(f"watchlist fetch error {tag}: {e}")
                 results.append({"sym1": item.sym1, "sym2": item.sym2,
+                                 "timeframe": item.timeframe,
                                  "current_zscore": None, "spread": None})
                 continue
 
@@ -713,6 +714,7 @@ async def get_watchlist_data(items: list[WatchlistItem]):
         results.append({
             "sym1": item.sym1,
             "sym2": item.sym2,
+            "timeframe": item.timeframe,
             "current_zscore": current_z,
             "spread": last_spread,
         })
