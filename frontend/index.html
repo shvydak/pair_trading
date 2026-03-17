@@ -884,13 +884,20 @@
       </div>
     </div>
 
+    <!-- Resize handle between charts -->
+    <div id="charts-resize-handle" style="height:5px;cursor:row-resize;background:transparent;flex-shrink:0;position:relative;z-index:10" class="border-t border-border hover:border-accent group">
+      <div style="position:absolute;left:50%;transform:translateX(-50%);top:0;bottom:0;display:flex;align-items:center;pointer-events:none">
+        <div style="width:32px;height:3px;border-radius:2px;background:#30363d" class="group-hover:bg-accent transition-colors"></div>
+      </div>
+    </div>
+
     <!-- Price chart -->
-    <div class="h-36 shrink-0 p-2 border-t border-border">
+    <div id="price-chart-panel" style="height:144px;min-height:60px;flex-shrink:0;padding:8px;overflow:hidden">
       <div class="flex items-center gap-3 text-xs text-muted mb-1 px-1">
         <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-blue-400 inline-block"></span> <span id="price-label1">S1</span></span>
         <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-orange-400 inline-block"></span> <span id="price-label2">S2</span></span>
       </div>
-      <div class="h-full relative" style="height:calc(100% - 20px)">
+      <div class="relative" style="height:calc(100% - 20px)">
         <canvas id="price-chart"></canvas>
       </div>
     </div>
@@ -1416,6 +1423,8 @@ window.addEventListener('DOMContentLoaded', () => {
   setMode(savedMode);
   // Bottom panel resize
   initBottomPanelResize();
+  // Charts vertical resize
+  initChartsResize();
   // Watchlist
   renderWatchlist();
   startWatchlistUpdater();
@@ -1526,6 +1535,37 @@ function initBottomPanelResize() {
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+function initChartsResize() {
+  const handle = document.getElementById('charts-resize-handle');
+  const pricePanel = document.getElementById('price-chart-panel');
+  if (!handle || !pricePanel) return;
+  const savedH = localStorage.getItem('pt_price_chart_h');
+  if (savedH) pricePanel.style.height = savedH + 'px';
+  let startY, startH;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startY = e.clientY;
+    startH = pricePanel.offsetHeight;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'row-resize';
+    const onMove = ev => {
+      const diff = startY - ev.clientY;
+      const newH = Math.max(60, Math.min(600, startH + diff));
+      pricePanel.style.height = newH + 'px';
+      if (state.priceChart) state.priceChart.resize();
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      localStorage.setItem('pt_price_chart_h', pricePanel.offsetHeight);
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
