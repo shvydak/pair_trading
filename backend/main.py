@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import math
 import os
@@ -69,6 +70,12 @@ _EXEC_TTL = 7200  # remove terminal executions after 2 hours
 _exec_saved_to_db: set[str] = set()
 
 SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
+
+
+async def _run_sync(func, *args):
+    """Run a CPU-bound function in a thread-pool so it doesn't block the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args))
 
 
 # ---------------------------------------------------------------------------
@@ -283,62 +290,116 @@ async def monitor_position_triggers() -> None:
 
     Fetches OHLCV directly (not via price_cache) with a small limit so it
     can run every 2 s without hitting Binance rate limits.
+
+    Optimisations:
+    - All OHLCV fetches for the cycle are gathered in parallel (one batch).
+    - Hedge ratio for standalone triggers is cached with 60 s TTL.
     """
     await asyncio.sleep(15)  # wait for startup
     closing_tags: set[str] = set()     # tags currently being closed (smart)
+    closing_pairs: set[tuple] = set()  # (sym1,sym2) pairs being closed — prevents double close across position TP + standalone trigger
     alert_states: dict[str, str] = {}  # tag → "idle" | "alerted" (hysteresis)
+    # Hedge ratio cache for standalone triggers: (sym1, sym2, tf, limit) → (hedge, timestamp)
+    _hedge_cache: dict[tuple, tuple[float, float]] = {}
+    _HEDGE_TTL = 60.0  # recompute hedge ratio once per minute
 
     while True:
         try:
             current_tags: set[str] = set()
 
-            # ── 1. Legacy: open_positions with tp_zscore/sl_zscore ──────────
+            # ── Collect all items that need OHLCV data ──────────────────────
             positions = db.get_open_positions()
+            active_triggers = db.get_active_triggers()
+
+            # Build a list of fetch tasks: (key, sym1, sym2, tf, limit)
+            fetch_specs = []  # list of (fetch_key, sym1, sym2, tf, limit)
+            # Map from fetch_key to items that need this data
+            pos_items = []   # (pos, tag, tp, sl, fetch_key)
+            trig_items = []  # (trig, tag, fetch_key)
+
             for pos in positions:
                 tp = pos.get("tp_zscore")
                 sl = pos.get("sl_zscore")
                 if tp is None and sl is None:
                     continue
-
                 pos_id = pos["id"]
                 tag = f"pos_{pos_id}"
                 current_tags.add(tag)
-
                 if tag in closing_tags:
-                    continue  # smart close already in flight
-
+                    continue
                 pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
                 pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                # Use the position's saved candle_limit so the monitor z-score
-                # matches the frontend chart. Cap at 500 to avoid API overload.
                 limit = min(pos.get("candle_limit") or (pos_zw * 5), 500)
+                fk = (pos["symbol1"], pos["symbol2"], pos_tf, limit)
+                fetch_specs.append(fk)
+                pos_items.append((pos, tag, tp, sl, fk))
 
-                try:
+            for trig in active_triggers:
+                trig_id = trig["id"]
+                tag = f"trig_{trig_id}"
+                current_tags.add(tag)
+                if tag in closing_tags:
+                    continue
+                sym1, sym2 = trig["symbol1"], trig["symbol2"]
+                trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
+                trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
+                limit = max(trig_zw * 3, 60)
+                fk = (sym1, sym2, trig_tf, limit)
+                fetch_specs.append(fk)
+                trig_items.append((trig, tag, fk))
+
+            # ── Deduplicate and fetch all OHLCV in parallel ─────────────────
+            unique_specs = list(set(fetch_specs))
+            ohlcv_data = {}  # fk → (p1, p2) aligned Series
+            if unique_specs:
+                async def _fetch_pair(fk):
+                    s1, s2, tf, lim = fk
                     df1, df2 = await asyncio.gather(
-                        client.fetch_ohlcv(pos["symbol1"], pos_tf, limit),
-                        client.fetch_ohlcv(pos["symbol2"], pos_tf, limit),
+                        client.fetch_ohlcv(s1, tf, lim),
+                        client.fetch_ohlcv(s2, tf, lim),
                     )
                     p1, p2 = df1["close"], df2["close"]
                     p1, p2 = p1.align(p2, join="inner")
+                    return fk, p1, p2
+
+                results = await asyncio.gather(
+                    *[_fetch_pair(fk) for fk in unique_specs],
+                    return_exceptions=True,
+                )
+                for r in results:
+                    if isinstance(r, Exception):
+                        log.warning(f"monitor: batch fetch error: {r}")
+                        continue
+                    fk, p1, p2 = r
+                    ohlcv_data[fk] = (p1, p2)
+
+            # ── 1. Legacy: open_positions with tp_zscore/sl_zscore ──────────
+            for pos, tag, tp, sl, fk in pos_items:
+                pos_id = pos["id"]
+                pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
+                if fk not in ohlcv_data:
+                    continue
+                try:
+                    p1, p2 = ohlcv_data[fk]
                     hedge = pos["hedge_ratio"]
                     spread = strategy.calculate_spread(p1, p2, hedge)
                     zscore_series = strategy.calculate_zscore(spread, window=pos_zw)
                     current_z = float(zscore_series.dropna().iloc[-1])
 
-                    side = pos["side"]
+                    # Direction-agnostic: TP = mean reversion (|z| shrinks),
+                    # SL = divergence (|z| grows). Works for any side/sign.
+                    abs_z = abs(current_z)
                     trigger = None
-                    if side == "long_spread":
-                        if tp is not None and current_z >= -tp:
-                            trigger = "tp"
-                        elif sl is not None and current_z <= -sl:
-                            trigger = "sl"
-                    else:  # short_spread
-                        if tp is not None and current_z <= tp:
-                            trigger = "tp"
-                        elif sl is not None and current_z >= sl:
-                            trigger = "sl"
+                    if tp is not None and abs_z <= tp:
+                        trigger = "tp"
+                    elif sl is not None and abs_z >= sl:
+                        trigger = "sl"
 
                     if trigger:
+                        sym1, sym2 = pos["symbol1"], pos["symbol2"]
+                        # Guard: if another source already started a close for this pair, skip
+                        if (sym1, sym2) in closing_pairs:
+                            continue
                         threshold = tp if trigger == "tp" else sl
                         log.info(
                             f"TRIGGER {trigger.upper()} | pos={pos_id} "
@@ -352,7 +413,6 @@ async def monitor_position_triggers() -> None:
                         # Safety: check that the position still exists on the exchange.
                         live_positions = await client.get_positions()
                         live_syms = {p["symbol"] for p in live_positions if p.get("size")}
-                        sym1, sym2 = pos["symbol1"], pos["symbol2"]
                         if sym1 not in live_syms and sym2 not in live_syms:
                             log.warning(
                                 f"TRIGGER {trigger.upper()} | pos={pos_id} | "
@@ -366,6 +426,8 @@ async def monitor_position_triggers() -> None:
                         # Clear TP/SL in DB immediately — prevents re-firing on the
                         # next monitor cycle regardless of closing_tags state.
                         db.set_position_triggers(pos_id, None, None, False)
+
+                        closing_pairs.add((sym1, sym2))  # block standalone triggers for same pair
 
                         smart_key = "tp_smart" if trigger == "tp" else "sl_smart"
                         use_smart = bool(pos.get(smart_key, True))
@@ -387,28 +449,30 @@ async def monitor_position_triggers() -> None:
                     log.warning(f"monitor: error checking pos {pos_id}: {e}")
 
             # ── 2. Standalone triggers table ────────────────────────────────
-            active_triggers = db.get_active_triggers()
-            for trig in active_triggers:
+            now_mono = time.monotonic()
+            for trig, tag, fk in trig_items:
                 trig_id = trig["id"]
-                tag = f"trig_{trig_id}"
-                current_tags.add(tag)
-
-                if tag in closing_tags:
+                trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
+                if fk not in ohlcv_data:
                     continue
 
                 sym1, sym2 = trig["symbol1"], trig["symbol2"]
-                trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
-                trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                limit = max(trig_zw * 3, 60)
+
+                # Guard: if position TP/SL already started a close for this pair, skip
+                if (sym1, sym2) in closing_pairs:
+                    continue
 
                 try:
-                    df1, df2 = await asyncio.gather(
-                        client.fetch_ohlcv(sym1, trig_tf, limit),
-                        client.fetch_ohlcv(sym2, trig_tf, limit),
-                    )
-                    p1, p2 = df1["close"], df2["close"]
-                    p1, p2 = p1.align(p2, join="inner")
-                    hedge = strategy.calculate_hedge_ratio(p1, p2)
+                    p1, p2 = ohlcv_data[fk]
+
+                    # Hedge ratio cache: recompute only if expired (60s TTL)
+                    cached_hr = _hedge_cache.get(fk)
+                    if cached_hr and (now_mono - cached_hr[1]) < _HEDGE_TTL:
+                        hedge = cached_hr[0]
+                    else:
+                        hedge = strategy.calculate_hedge_ratio(p1, p2)
+                        _hedge_cache[fk] = (hedge, now_mono)
+
                     spread = strategy.calculate_spread(p1, p2, hedge)
                     zscore_series = strategy.calculate_zscore(spread, window=trig_zw)
                     current_z = float(zscore_series.dropna().iloc[-1])
@@ -433,19 +497,19 @@ async def monitor_position_triggers() -> None:
                             alert_states[tag] = "idle"
                         continue  # never close position for alert type
 
+                    # Direction-agnostic: same as position triggers
+                    abs_z = abs(current_z)
                     fired = False
-                    if trig_type == "tp":
-                        if side == "long_spread" and current_z >= -trig_z:
-                            fired = True
-                        elif side == "short_spread" and current_z <= trig_z:
-                            fired = True
-                    elif trig_type == "sl":
-                        if side == "long_spread" and current_z <= -trig_z:
-                            fired = True
-                        elif side == "short_spread" and current_z >= trig_z:
-                            fired = True
+                    if trig_type == "tp" and abs_z <= trig_z:
+                        fired = True
+                    elif trig_type == "sl" and abs_z >= trig_z:
+                        fired = True
 
                     if fired:
+                        # Guard: if position TP/SL already started a close for this pair, skip
+                        if (sym1, sym2) in closing_pairs:
+                            continue
+                        closing_pairs.add((sym1, sym2))
                         log.info(
                             f"STANDALONE TRIGGER FIRED | trig_id={trig_id} | "
                             f"{sym1}/{sym2} | {side} | {trig_type} z={trig_z} | "
@@ -495,8 +559,27 @@ async def monitor_position_triggers() -> None:
                 except Exception as e:
                     log.warning(f"monitor: error checking trigger {trig_id}: {e}")
 
+            # Clean up stale hedge cache entries
+            _hedge_cache_keys = list(_hedge_cache.keys())
+            active_fks = set(fk for _, _, fk in trig_items)
+            for hk in _hedge_cache_keys:
+                if hk not in active_fks:
+                    _hedge_cache.pop(hk, None)
+
             # ── Cleanup ─────────────────────────────────────────────────────
             closing_tags &= current_tags
+            # closing_pairs is rebuilt each cycle (local to the loop body),
+            # so it auto-resets. But we also keep pairs with active smart closes:
+            active_syms = set()
+            for t in closing_tags:
+                # Extract sym pair from pos_items or trig_items that are still closing
+                for pos, ptag, *_ in pos_items:
+                    if ptag == t:
+                        active_syms.add((pos["symbol1"], pos["symbol2"]))
+                for trig, ttag, *_ in trig_items:
+                    if ttag == t:
+                        active_syms.add((trig["symbol1"], trig["symbol2"]))
+            closing_pairs = active_syms
             alert_states = {k: v for k, v in alert_states.items() if k in current_tags}
 
         except Exception as e:
@@ -615,15 +698,21 @@ async def get_history(
         df1 = df1.loc[price1.index]
         df2 = df2.loc[price2.index]
 
-        hedge_ratio = strategy.calculate_hedge_ratio(price1, price2)
-        spread = strategy.calculate_spread(price1, price2, hedge_ratio)
-        zscore = strategy.calculate_zscore(spread, window=zscore_window)
-        coint_result = strategy.cointegration_test(price1, price2)
-        half_life = strategy.calculate_half_life(spread)
-        hurst = strategy.calculate_hurst_exponent(spread)
-        correlation = strategy.calculate_correlation(price1, price2)
-        atr1 = strategy.calculate_atr(df1)
-        atr2 = strategy.calculate_atr(df2)
+        # CPU-bound stats — run in thread pool so the event loop stays responsive
+        def _compute_stats():
+            hr = strategy.calculate_hedge_ratio(price1, price2)
+            sp = strategy.calculate_spread(price1, price2, hr)
+            zs = strategy.calculate_zscore(sp, window=zscore_window)
+            coint = strategy.cointegration_test(price1, price2)
+            hl = strategy.calculate_half_life(sp)
+            hu = strategy.calculate_hurst_exponent(sp)
+            corr = strategy.calculate_correlation(price1, price2)
+            a1 = strategy.calculate_atr(df1)
+            a2 = strategy.calculate_atr(df2)
+            return hr, sp, zs, coint, hl, hu, corr, a1, a2
+
+        hedge_ratio, spread, zscore, coint_result, half_life, hurst, correlation, atr1, atr2 = \
+            await _run_sync(_compute_stats)
 
         timestamps = [str(ts) for ts in price1.index]
 
@@ -669,6 +758,8 @@ async def get_watchlist_data(items: list[WatchlistItem]):
     results = []
     new_tags: set[str] = set()
 
+    # Phase 1: subscribe and collect cached data (or seed cache)
+    cached_items = []  # list of (item, cached_data) or None for failed items
     for item in items:
         sym1 = _normalise_symbol(item.sym1)
         sym2 = _normalise_symbol(item.sym2)
@@ -700,23 +791,52 @@ async def get_watchlist_data(items: list[WatchlistItem]):
                 results.append({"sym1": item.sym1, "sym2": item.sym2,
                                  "timeframe": item.timeframe,
                                  "current_zscore": None, "spread": None})
+                cached_items.append(None)
                 continue
 
-        p1 = cached["price1"]
-        p2 = cached["price2"]
-        hedge = strategy.calculate_hedge_ratio(p1, p2)
-        spread_series = strategy.calculate_spread(p1, p2, hedge)
-        zscore_series = strategy.calculate_zscore(spread_series, window=item.zscore_window)
-        zd = zscore_series.dropna()
-        current_z  = _safe_float(float(zd.iloc[-1])) if not zd.empty else None
-        last_spread = _safe_float(float(spread_series.iloc[-1])) if not spread_series.empty else None
+        cached_items.append((item, cached))
 
+    # Phase 2: compute all z-scores in a single thread-pool call
+    compute_indices = []  # indices into cached_items that need computation
+    compute_args = []     # (p1, p2, zw) tuples
+    for ci_idx, entry in enumerate(cached_items):
+        if entry is None:
+            continue
+        item, cached = entry
+        compute_indices.append(ci_idx)
+        compute_args.append((cached["price1"], cached["price2"], item.zscore_window))
+
+    def _batch_calc():
+        batch_results = []
+        for p1, p2, zw in compute_args:
+            h = strategy.calculate_hedge_ratio(p1, p2)
+            sp = strategy.calculate_spread(p1, p2, h)
+            zs = strategy.calculate_zscore(sp, window=zw)
+            zd = zs.dropna()
+            cz = float(zd.iloc[-1]) if not zd.empty else None
+            ls = float(sp.iloc[-1]) if not sp.empty else None
+            batch_results.append((cz, ls))
+        return batch_results
+
+    if compute_args:
+        batch = await _run_sync(_batch_calc)
+    else:
+        batch = []
+
+    # Phase 3: assemble results
+    batch_idx = 0
+    for ci_idx, entry in enumerate(cached_items):
+        if entry is None:
+            continue
+        item, _ = entry
+        cz, ls = batch[batch_idx]
+        batch_idx += 1
         results.append({
             "sym1": item.sym1,
             "sym2": item.sym2,
             "timeframe": item.timeframe,
-            "current_zscore": current_z,
-            "spread": last_spread,
+            "current_zscore": _safe_float(cz),
+            "spread": _safe_float(ls),
         })
 
     # Unsubscribe pairs removed from watchlist
@@ -1274,20 +1394,23 @@ async def start_smart_trade(req: SmartTradeRequest):
             qty1 = sizes["qty1"]
             qty2 = sizes["qty2"]
 
-            # Validate min notional
-            ok1, notional1, min1 = await client.check_min_notional(sym1, qty1, price1)
-            ok2, notional2, min2 = await client.check_min_notional(sym2, qty2, price2)
+            # Validate min notional (parallel)
+            (ok1, notional1, min1), (ok2, notional2, min2) = await asyncio.gather(
+                client.check_min_notional(sym1, qty1, price1),
+                client.check_min_notional(sym2, qty2, price2),
+            )
             if not ok1:
                 raise HTTPException(400, f"{sym1}: notional ${notional1:.2f} < min ${min1:.2f}")
             if not ok2:
                 raise HTTPException(400, f"{sym2}: notional ${notional2:.2f} < min ${min2:.2f}")
 
-            # Set leverage (best-effort)
-            for sym in (sym1, sym2):
+            # Set leverage (parallel, best-effort)
+            async def _set_lev(sym):
                 try:
                     await client.set_leverage(sym, req.leverage)
                 except Exception as lev_err:
                     log.warning(f"Could not set leverage for {sym}: {lev_err}")
+            await asyncio.gather(_set_lev(sym1), _set_lev(sym2))
 
             side1, side2 = ("buy", "sell") if req.side == "long_spread" else ("sell", "buy")
 

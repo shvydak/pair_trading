@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-03-18 — Производительность, исправление двойного закрытия, direction-agnostic TP/SL
+
+### Оптимизация производительности
+
+**Frontend (`index.html`):**
+- **Sparkline throttle (30 с)** — `_loadSparkline()` теперь пропускает API-запрос `/api/history` если данные для позиции были получены менее 30 секунд назад; кэш `_sparklineLastFetch` с TTL 30 с
+- **Убран двойной вызов `loadAllPositions()`** — в 5-секундном интервале вызывались и `loadStrategyPositions()` и `refreshPositions()` (оба alias на `loadAllPositions()`); теперь один вызов
+- **In-place обновление Z-score в watchlist** — `updateWatchlistZScores()` обновляет только `<span id="wl-z-${i}">` вместо полного `renderWatchlist()` при каждом тике; fallback на полный rebuild если DOM не найден
+
+**Backend (`main.py`):**
+- **`_run_sync()` — CPU-bound расчёты в thread-pool** — OLS, коинтеграция, z-score больше не блокируют asyncio event loop; используется `loop.run_in_executor()` для `/api/history` и `/api/watchlist/data`
+- **Batch вычисления для watchlist** — 14 пар в watchlist обрабатываются одним вызовом `_run_sync(_batch_calc)` вместо 14 последовательных
+- **Параллельные вызовы Binance в smart trade** — `check_min_notional` (2 leg) и `set_leverage` (2 symbol) выполняются через `asyncio.gather`
+- **Параллельные fetch OHLCV в мониторе** — все позиции и триггеры собирают fetch-спеки, дедуплицируются, выполняются одним `asyncio.gather`
+- **Кэш hedge ratio (60 с)** — standalone триггеры не пересчитывают hedge ratio каждые 2 с; `_hedge_cache` с TTL 60 с
+
+### Критический баг-фикс: двойное закрытие позиции
+
+**Проблема:** При срабатывании TP позиция закрывалась дважды — один раз через legacy `tp_zscore` поля позиции, второй через standalone trigger в таблице `triggers`. Разные `tag` ключи (`pos_X` vs `trig_Y`) означали что `closing_tags` не предотвращал дубль.
+
+**Решение (`main.py`):** Добавлен `closing_pairs: set[tuple]` — отслеживает `(sym1, sym2)` пары в процессе закрытия. Проверяется до запуска любого закрытия (и для position triggers, и для standalone triggers).
+
+### Критический баг-фикс: TP срабатывал сразу для short_spread
+
+**Проблема:** Условие `current_z <= tp` (напр. `-2.8 <= 2.2`) всегда истинно когда z отрицательный → TP срабатывал мгновенно после установки.
+
+**Решение — direction-agnostic TP/SL:**
+- **Backend `monitor_position_triggers`**: `abs_z = abs(current_z)`; TP когда `abs_z <= tp`, SL когда `abs_z >= sl`
+- **Frontend `_checkWsTriggers`**: `absZ = Math.abs(currentZ)`; аналогичная логика
+- TP/SL теперь задаются только положительными числами (напр. TP=0.5, SL=4.0)
+- На графике отображаются две симметричные горизонтальные линии (±threshold)
+
+### Исправление popup исполнения
+
+- **Popup не появлялся при открытии сделки**: добавлен `_execSeenIds` Set + немедленный первый poll
+- **Popup не появлялся при срабатывании TP**: backend-initiated closes обнаруживались только если poller активен; `_startExecPoller()` теперь вызывается всегда
+- **Старые popup при перезагрузке страницы**: `_execFirstPoll` flag — первый poll только открывает non-terminal executions
+- **Poller timing gap**: убрана 2с задержка до первого poll; убрана auto-stop логика
+
+### Итого тестов: 213 (без изменений)
+
+---
+
 ## 2026-03-18 — UI: короткие символы без USDT/USDC суффикса
 
 ### Что изменено

@@ -330,6 +330,11 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - Balance check formula: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Order of validation: balance → min_notional → lot_size → leverage (informational)
 - monitor_position_triggers runs every **2 s** — direct `fetch_ohlcv` with limit `min(candle_limit, 500)`; uses `pos.timeframe`/`pos.zscore_window`/`pos.candle_limit` from DB (not hardcoded constants)
+- **Direction-agnostic TP/SL**: uses `abs(current_z)` for comparison — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values are always positive (e.g. TP=0.5, SL=4.0); works identically for `long_spread` and `short_spread`
+- **Double-close prevention**: `closing_tags: dict[str, float]` (tag-based, e.g. `pos_5`, `trig_12`) + `closing_pairs: set[tuple]` (pair-based, e.g. `(sym1, sym2)`) — prevents same pair from being closed simultaneously by both position TP and standalone trigger
+- **Parallel OHLCV fetch**: monitor collects all fetch specs from positions and triggers, deduplicates by `(sym1, sym2, tf, limit)`, fetches all in single `asyncio.gather`
+- **Hedge ratio cache**: `_hedge_cache: dict[tuple, (float, float)]` with 60s TTL for standalone triggers — avoids recalculating every 2s
+- `_run_sync(func, *args)` — runs CPU-bound functions (OLS, cointegration, z-score) in thread-pool via `loop.run_in_executor()`
 - Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
 
 ## Telegram Bot (`telegram_bot.py`)
@@ -399,7 +404,10 @@ await tg_bot.stop()                            # stop polling + close session
 - **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — use 🗑 to remove stale record or `✕ M` (backend detects no open positions and cleans DB)
 - **Trade markers not showing on chart**: `loadTradeJournal()` must be called after `runAnalyze()` to populate `_cachedJournalTrades`; DB timestamps use `+00:00` format — `_utcParse` must handle timezone suffix without appending extra `Z`
 - **Active pair highlight**: compares **5 params**: sym1+sym2+timeframe+zscore_window+entryZ — ticker alone is insufficient
-- **`_pollAllExecutions` auto-opens popups**: only for non-terminal executions; terminal entries (OPEN/DONE/CANCELLED/FAILED) update if popup already open but never create new one
+- **`_pollAllExecutions` auto-opens popups**: `_execSeenIds` Set tracks shown popups; `_execFirstPoll` flag prevents opening old terminal popups on page reload; poller starts immediately (no 2s delay), runs continuously
+- **TP fires immediately for short_spread**: old signed comparison `current_z <= tp` always true when z is negative; fixed with `abs(current_z)` — direction-agnostic
+- **Double close on TP fire**: both position TP and standalone trigger fire for same pair → two close orders; fixed with `closing_pairs` set tracking `(sym1, sym2)`
+- **TP/SL input only accepts positive numbers**: correct behavior with direction-agnostic logic — chart shows symmetric lines at ±threshold
 - **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present in HTML at parse time — classes added only via `classList.add()` in JS produce no CSS rules. Use `element.style.color` with explicit hex values instead (see `_statColor`, `C_GREEN`/`C_YELLOW`/`C_RED` constants)
 
 ## Tests (`tests/`)

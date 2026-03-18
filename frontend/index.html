@@ -1435,7 +1435,7 @@ window.addEventListener('DOMContentLoaded', () => {
   loadTradeJournal();
   restoreAnalysisState();
   // Auto-refresh positions + alerts every 5s (same cadence as PriceCache)
-  setInterval(() => { loadStrategyPositions(); refreshPositions(); checkRecentAlerts(); }, 5000);
+  setInterval(() => { loadAllPositions(); checkRecentAlerts(); }, 5000);
 });
 
 // ------------------------------------------------------------------ //
@@ -1827,7 +1827,7 @@ function renderWatchlist() {
           </div>
         </div>
         <div class="flex flex-col items-end shrink-0">
-          <span class="text-[11px] font-mono font-bold leading-none ${zColor}">${zDisplay}${zArrow}</span>
+          <span id="wl-z-${i}" class="text-[11px] font-mono font-bold leading-none ${zColor}">${zDisplay}${zArrow}</span>
           <div class="flex items-center gap-0.5 mt-0.5">
             <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px]" title="Telegram алерт">🔔</button>
             <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px]" title="${t('remove_from_watchlist')}">✕</button>
@@ -1905,7 +1905,32 @@ async function updateWatchlistZScores() {
 
   if (changed) {
     saveWatchlist(items);
-    renderWatchlist();
+    // In-place z-score update: patch only changed z-score spans instead of rebuilding the entire DOM
+    const _wlNorm = s => s.split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
+    const TF_ORDER = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+    const sorted = [...items.map((w, idx) => ({ w, idx }))].sort((a, b) => {
+      const ia = TF_ORDER.indexOf(a.w.timeframe || '1h');
+      const ib = TF_ORDER.indexOf(b.w.timeframe || '1h');
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+    let needFullRebuild = false;
+    for (let si = 0; si < sorted.length; si++) {
+      const { w, idx } = sorted[si];
+      const zEl = document.getElementById(`wl-z-${idx}`);
+      if (!zEl) { needFullRebuild = true; break; }
+      const az = w.zscore != null ? Math.abs(w.zscore) : null;
+      const entryZ = parseFloat(w.entryZ) || 2;
+      const zDisplay = w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '—';
+      const zArrow = w._zDir > 0 ? ' ↑' : w._zDir < 0 ? ' ↓' : '';
+      zEl.textContent = zDisplay + zArrow;
+      // Update z-score color classes
+      const isRed = az != null && az >= entryZ;
+      const isYellow = az != null && !isRed && az >= entryZ * 0.75;
+      zEl.className = `text-[11px] font-mono font-bold leading-none ${
+        az == null ? 'text-muted' : isRed ? 'text-red font-bold' : isYellow ? 'text-yellow font-semibold' : w.zscore > 0 ? 'text-green' : 'text-red'
+      }`;
+    }
+    if (needFullRebuild) renderWatchlist();
   }
 }
 
@@ -2879,9 +2904,11 @@ async function loadAllPositions() {
     // Strategy positions (enriched)
     const stratPos = allData.strategy_positions || [];
     renderStrategyPositions(stratPos);
-    // Start exec poller if any position has TP/SL set — ensures we catch
-    // backend-initiated closes even when _checkWsTriggers hasn't fired.
-    if (stratPos.some(p => p.tp_zscore != null || p.sl_zscore != null)) _startExecPoller();
+    // Always start exec poller — it self-stops when nothing is active.
+    // This ensures we catch backend-initiated closes (TP/SL monitor clears
+    // triggers in DB before starting the close execution, so checking
+    // tp_zscore/sl_zscore would miss already-firing executions).
+    _startExecPoller();
     const el = document.getElementById('strategy-pos-updated');
     if (el) el.textContent = t('updated') + ' ' + new Date().toLocaleTimeString();
 
@@ -2984,6 +3011,8 @@ const _execHistory       = new Map(); // execId → finalData (for reopen in sam
 const _execHistoryByDbId = new Map(); // db_id  → execId (for positions/journal 📋 btn)
 let   _posExecMap        = {};        // posId  → exec data (position row indicators)
 let   _execPollTimer     = null;
+const _execSeenIds       = new Set(); // exec_ids already shown as popup (prevents reopen loop)
+let   _execFirstPoll     = true;     // first poll after page load: seed _execSeenIds, only open non-terminal
 
 const _EXEC_STATUS_COLORS = {
   placing:    { badge: 'bg-yellow-900 text-yellow-300', dot: 'text-yellow-400' },
@@ -3034,6 +3063,7 @@ function _buildExecPopupCard(execId) {
 }
 
 function _openExecPopup(execId, initialData) {
+  _execSeenIds.add(execId); // mark as seen to prevent reopen loop
   if (_execPopups.has(execId)) {
     const st = _execPopups.get(execId);
     if (st.minimized) _setExecPopupMinimized(execId, false);
@@ -3257,18 +3287,23 @@ async function _pollAllExecutions() {
     const data  = await res.json();
     const execs = data.executions || [];
 
-    // Update existing popups; auto-open ONLY for actively running executions.
-    // Terminal entries (OPEN/DONE/CANCELLED/FAILED) linger in active_executions
-    // for up to 2h (TTL).  Opening a popup for them would create an infinite
-    // reopen loop: popup auto-closes after 15s → next poll re-opens it → repeat.
+    // Update existing popups or auto-open new ones.
+    // _execSeenIds prevents the reopen loop for terminal execs (linger 2h TTL).
+    // On first poll after page load: seed _execSeenIds with ALL existing ids,
+    // but only open popups for actively running (non-terminal) executions.
+    // After first poll: any NEW exec_id (including fast terminal) gets a popup.
     for (const ex of execs) {
       const isTerminal = _EXEC_TERMINAL.has((ex.status || '').toLowerCase());
       if (_execPopups.has(ex.exec_id)) {
         _updateExecPopup(ex.exec_id, ex);
-      } else if (!isTerminal) {
-        _openExecPopup(ex.exec_id, ex);
+      } else if (!_execSeenIds.has(ex.exec_id)) {
+        if (!_execFirstPoll || !isTerminal) {
+          _openExecPopup(ex.exec_id, ex);
+        }
       }
+      _execSeenIds.add(ex.exec_id);
     }
+    _execFirstPoll = false;
 
     // Update _posExecMap for position row exec-status indicators
     const newMap = {};
@@ -3282,18 +3317,15 @@ async function _pollAllExecutions() {
       if (el) el.innerHTML = _execStatusHtml(exec, +posId);
     }
 
-    // Stop poller when nothing active and no non-terminal popups
-    const hasActive          = execs.some(e => !_EXEC_TERMINAL.has((e.status || '').toLowerCase()));
-    const hasLivePopup       = [..._execPopups.values()].some(s => !_EXEC_TERMINAL.has((s.data?.status || '').toLowerCase()));
-    if (!hasActive && !hasLivePopup && _execPollTimer) {
-      clearInterval(_execPollTimer);
-      _execPollTimer = null;
-    }
+    // Note: poller no longer self-stops. It is lightweight (single GET) and
+    // runs continuously so backend-initiated executions (TP/SL closes) are
+    // discovered immediately. The guard in _startExecPoller prevents duplicates.
   } catch {}
 }
 
 function _startExecPoller() {
   if (_execPollTimer) return;
+  _pollAllExecutions();  // immediate first check — don't wait 2s
   _execPollTimer = setInterval(_pollAllExecutions, 2000);
 }
 function startExecPoller() { _startExecPoller(); }
@@ -3506,19 +3538,29 @@ function renderStrategyPositions(positions) {
   _updatePositionAnnotations();
 }
 
+// Sparkline throttle: skip API fetch if data was loaded < 30s ago (per position id)
+const _sparklineLastFetch = {};  // pos.id → timestamp (ms)
+const _SPARKLINE_TTL = 30_000;   // 30 seconds
+
 async function _loadSparkline(pos) {
   const canvas = document.getElementById(`sparkline-${pos.id}`);
   const zLabel = document.getElementById(`z-cur-${pos.id}`);
   if (!canvas) return;
-  try {
-    // When this position matches the currently analyzed pair, reuse historyData
-    // so the z-score label is identical to the header value.
-    const normSym = s => _dispSym(s);
-    const curSym1 = _dispSym(document.getElementById('sym1-input')?.value || '');
-    const curSym2 = _dispSym(document.getElementById('sym2-input')?.value || '');
-    const isCurrent = state.historyData?.zscore?.length &&
-      normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2;
 
+  // For non-current pairs, throttle API fetches to once per 30s
+  const normSym = s => _dispSym(s);
+  const curSym1 = _dispSym(document.getElementById('sym1-input')?.value || '');
+  const curSym2 = _dispSym(document.getElementById('sym2-input')?.value || '');
+  const isCurrent = state.historyData?.zscore?.length &&
+    normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2;
+  if (!isCurrent) {
+    const now = Date.now();
+    const lastFetch = _sparklineLastFetch[pos.id] || 0;
+    if (now - lastFetch < _SPARKLINE_TTL) return; // skip — data is fresh enough
+    _sparklineLastFetch[pos.id] = now;
+  }
+
+  try {
     let zscores;
     let data;
     if (isCurrent) {
@@ -4545,20 +4587,17 @@ function updateLiveData(msg) {
 let _lastTriggerToast = 0;
 function _checkWsTriggers(currentZ) {
   if (currentZ == null) return;
+  const absZ = Math.abs(currentZ);
   // Find any active position whose triggers match current z-score
+  // Direction-agnostic: TP = |z| shrinks (mean reversion), SL = |z| grows (divergence)
   for (const pos of Object.values(_stratPosMap)) {
     const tp = pos.tp_zscore;
     const sl = pos.sl_zscore;
     if (!tp && !sl) continue;
     const now = Date.now();
     if (now - _lastTriggerToast < 30000) continue; // debounce 30s
-    if (pos.side === 'long_spread') {
-      if (tp && currentZ >= -tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; startExecPoller(); }
-      else if (sl && currentZ <= -sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; startExecPoller(); }
-    } else {
-      if (tp && currentZ <= tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; startExecPoller(); }
-      else if (sl && currentZ >= sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; startExecPoller(); }
-    }
+    if (tp && absZ <= tp) { showToast(t('toast_tp_hit'), 'success'); _lastTriggerToast = now; startExecPoller(); }
+    else if (sl && absZ >= sl) { showToast(t('toast_sl_hit'), 'warn'); _lastTriggerToast = now; startExecPoller(); }
   }
 }
 
