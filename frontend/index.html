@@ -1434,8 +1434,8 @@ window.addEventListener('DOMContentLoaded', () => {
   loadExecHistory();
   loadTradeJournal();
   restoreAnalysisState();
-  // Auto-refresh positions + alerts every 5s (same cadence as PriceCache)
-  setInterval(() => { loadAllPositions(); checkRecentAlerts(); }, 5000);
+  // Auto-refresh positions + balances + alerts every 5s (single /api/dashboard call)
+  setInterval(loadAllPositions, 5000);
 });
 
 // ------------------------------------------------------------------ //
@@ -1906,7 +1906,6 @@ async function updateWatchlistZScores() {
   if (changed) {
     saveWatchlist(items);
     // In-place z-score update: patch only changed z-score spans instead of rebuilding the entire DOM
-    const _wlNorm = s => s.split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
     const TF_ORDER = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
     const sorted = [...items.map((w, idx) => ({ w, idx }))].sort((a, b) => {
       const ia = TF_ORDER.indexOf(a.w.timeframe || '1h');
@@ -2891,18 +2890,29 @@ function renderBacktest(data) {
 // ------------------------------------------------------------------ //
 async function loadAllPositions() {
   try {
-    const [allRes, balRes] = await Promise.all([
-      fetch(`${API}/api/all_positions`),
-      fetch(`${API}/api/balance`),
-    ]);
-    const allData = allRes.ok ? await allRes.json() : {};
-    const balData = balRes.ok ? await balRes.json() : {};
+    const res = await fetch(`${API}/api/dashboard`);
+    const dashData = res.ok ? await res.json() : {};
 
-    state.balances = balData.assets || null;
+    state.balances = dashData.balances || null;
     renderBalanceCards(state.balances);
 
+    // Process recent alerts (same logic as checkRecentAlerts)
+    const alerts = dashData.recent_alerts || [];
+    _setAlertsBadge(alerts.length);
+    if (alerts.length > 0) {
+      const newest = alerts[0];
+      const toastKey = `${newest.id}:${newest.last_fired_at}`;
+      if (toastKey !== _lastAlertToastId) {
+        _lastAlertToastId = toastKey;
+        const pair = _dispSym(newest.symbol1) + ' / ' + _dispSym(newest.symbol2);
+        const ago = _timeAgo(newest.last_fired_at);
+        showToast(`🔔 Алерт: ${pair} — ${ago}`, 'ok', 8000, () => setBottomTab('alerts'));
+        loadAlertsTab();
+      }
+    }
+
     // Strategy positions (enriched)
-    const stratPos = allData.strategy_positions || [];
+    const stratPos = dashData.strategy_positions || [];
     renderStrategyPositions(stratPos);
     // Always start exec poller — it self-stops when nothing is active.
     // This ensures we catch backend-initiated closes (TP/SL monitor clears
@@ -2914,7 +2924,7 @@ async function loadAllPositions() {
 
     // Exchange positions (raw)
     const tbody = document.getElementById('positions-body');
-    const positions = allData.exchange_positions || [];
+    const positions = dashData.exchange_positions || [];
     if (positions.length === 0) {
       tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-8">${t('no_positions')}</td></tr>`;
       return;
@@ -3011,6 +3021,7 @@ const _execHistory       = new Map(); // execId → finalData (for reopen in sam
 const _execHistoryByDbId = new Map(); // db_id  → execId (for positions/journal 📋 btn)
 let   _posExecMap        = {};        // posId  → exec data (position row indicators)
 let   _execPollTimer     = null;
+let   _execPollActive    = false; // true when non-terminal executions exist (use 2s interval)
 const _execSeenIds       = new Set(); // exec_ids already shown as popup (prevents reopen loop)
 let   _execFirstPoll     = true;     // first poll after page load: seed _execSeenIds, only open non-terminal
 
@@ -3317,16 +3328,22 @@ async function _pollAllExecutions() {
       if (el) el.innerHTML = _execStatusHtml(exec, +posId);
     }
 
-    // Note: poller no longer self-stops. It is lightweight (single GET) and
-    // runs continuously so backend-initiated executions (TP/SL closes) are
-    // discovered immediately. The guard in _startExecPoller prevents duplicates.
+    // Adaptive frequency: 2s when active execs exist, 5s when idle
+    _execPollActive = execs.some(ex => !_EXEC_TERMINAL.has((ex.status || '').toLowerCase()));
   } catch {}
 }
 
+function _scheduleNextExecPoll() {
+  const delay = _execPollActive ? 2000 : 5000;
+  _execPollTimer = setTimeout(async () => {
+    await _pollAllExecutions();
+    _scheduleNextExecPoll();
+  }, delay);
+}
 function _startExecPoller() {
   if (_execPollTimer) return;
-  _pollAllExecutions();  // immediate first check — don't wait 2s
-  _execPollTimer = setInterval(_pollAllExecutions, 2000);
+  _pollAllExecutions();  // immediate first check
+  _scheduleNextExecPoll();
 }
 function startExecPoller() { _startExecPoller(); }
 
@@ -3433,7 +3450,7 @@ function renderStrategyPositions(positions) {
       // Update smart close execution progress if any
       const execEl = document.getElementById(`exec-status-${pos.id}`);
       if (execEl) execEl.innerHTML = _execStatusHtml(_posExecMap[pos.id], pos.id);
-      _loadSparkline(pos); // refresh z-score + chart data in-place
+      // sparkline loaded via batch below
       return; // skip full rebuild
     }
 
@@ -3527,9 +3544,10 @@ function renderStrategyPositions(positions) {
       </td>
     `;
     tbody.appendChild(tr);
-    // Load sparkline only for newly created rows
-    _loadSparkline(pos);
   });
+
+  // Batch-load sparklines for all positions
+  _batchLoadSparklines(positions);
 
   // Re-init tooltips for dynamically rendered rows
   applyLocale();
@@ -3542,42 +3560,57 @@ function renderStrategyPositions(positions) {
 const _sparklineLastFetch = {};  // pos.id → timestamp (ms)
 const _SPARKLINE_TTL = 30_000;   // 30 seconds
 
-async function _loadSparkline(pos) {
+// Batch sparkline loader: collects non-current positions, fetches in single request
+async function _batchLoadSparklines(positions) {
+  const curSym1 = _dispSym(document.getElementById('sym1-input')?.value || '');
+  const curSym2 = _dispSym(document.getElementById('sym2-input')?.value || '');
+  const now = Date.now();
+  const toFetch = []; // positions needing API data
+
+  for (const pos of positions) {
+    if (!document.getElementById(`sparkline-${pos.id}`)) continue;
+    const isCurrent = state.historyData?.zscore?.length &&
+      _dispSym(pos.symbol1) === curSym1 && _dispSym(pos.symbol2) === curSym2;
+    if (isCurrent) {
+      // Use local data — no API call
+      _applySparklineData(pos, state.historyData);
+    } else {
+      const lastFetch = _sparklineLastFetch[pos.id] || 0;
+      if (now - lastFetch < _SPARKLINE_TTL) continue;
+      toFetch.push(pos);
+    }
+  }
+  if (toFetch.length === 0) return;
+
+  try {
+    const body = toFetch.map(pos => ({
+      sym1: pos.symbol1, sym2: pos.symbol2,
+      timeframe: pos.timeframe || '1h',
+      limit: pos.candle_limit || 100,
+      zscore_window: pos.zscore_window || 20,
+    }));
+    const res = await fetch(`${API}/api/batch/sparklines`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return;
+    const results = await res.json();
+    for (let i = 0; i < toFetch.length; i++) {
+      _sparklineLastFetch[toFetch[i].id] = Date.now();
+      if (results[i]) _applySparklineData(toFetch[i], results[i]);
+    }
+  } catch {}
+}
+
+// Apply sparkline data to a position's canvas and labels
+function _applySparklineData(pos, data) {
   const canvas = document.getElementById(`sparkline-${pos.id}`);
   const zLabel = document.getElementById(`z-cur-${pos.id}`);
   if (!canvas) return;
 
-  // For non-current pairs, throttle API fetches to once per 30s
-  const normSym = s => _dispSym(s);
-  const curSym1 = _dispSym(document.getElementById('sym1-input')?.value || '');
-  const curSym2 = _dispSym(document.getElementById('sym2-input')?.value || '');
-  const isCurrent = state.historyData?.zscore?.length &&
-    normSym(pos.symbol1) === curSym1 && normSym(pos.symbol2) === curSym2;
-  if (!isCurrent) {
-    const now = Date.now();
-    const lastFetch = _sparklineLastFetch[pos.id] || 0;
-    if (now - lastFetch < _SPARKLINE_TTL) return; // skip — data is fresh enough
-    _sparklineLastFetch[pos.id] = now;
-  }
-
   try {
-    let zscores;
-    let data;
-    if (isCurrent) {
-      data = state.historyData;
-      zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
-    } else {
-      const params = new URLSearchParams({
-        symbol1: pos.symbol1, symbol2: pos.symbol2,
-        timeframe:    pos.timeframe     || '1h',
-        limit:        pos.candle_limit  || 100,
-        zscore_window: pos.zscore_window || 20,
-      });
-      const res = await fetch(`${API}/api/history?${params}`);
-      if (!res.ok) return;
-      data = await res.json();
-      zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
-    }
+    const zscores = (data.zscore || []).filter(v => v !== null && v !== undefined);
     if (zscores.length === 0) return;
 
     const currentZ = zscores[zscores.length - 1];

@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-03-18 — Оптимизация запросов: dashboard endpoint, batch sparklines, PriceCache для анализа
+
+### Что изменено
+
+**Backend (`main.py`):**
+- **`GET /api/dashboard`** — новый объединённый эндпоинт: возвращает позиции (enriched) + балансы + недавние алерты одним запросом. Binance вызовы (`get_positions` + `get_all_balances`) выполняются параллельно через `asyncio.gather`
+- **`POST /api/batch/sparklines`** — новый batch эндпоинт: принимает массив `(sym1, sym2, timeframe, limit, zscore_window)`, возвращает z-score/spread/hedge_ratio для каждой позиции. Использует PriceCache когда данные доступны; остальные запрашивает параллельно с Binance. Все вычисления в одном `_run_sync` вызове
+- **PriceCache хранит полные DataFrames** — `_store[key]` теперь содержит `df1`/`df2` (full OHLCV) помимо `price1`/`price2` (close). Это позволяет `/api/history` использовать кеш для расчёта ATR
+- **`PriceCache.find_cached(sym1, sym2, tf, limit)`** — ищет кешированные данные для пары; возвращает entry с `cached_limit >= requested_limit`
+- **`/api/history` использует PriceCache** — если пара уже подписана в кеше (watchlist/WS), анализ берёт данные из кеша мгновенно вместо запроса к Binance (2-3 сек → <100мс)
+
+**Frontend (`index.html`):**
+- **`loadAllPositions()` → один `/api/dashboard`** — вместо 3 параллельных запросов (`/api/all_positions` + `/api/balance` + `/api/alerts/recent`). Алерты обрабатываются inline
+- **`_batchLoadSparklines(positions)`** — вместо N отдельных `/api/history` вызовов, все non-current позиции запрашиваются одним `POST /api/batch/sparklines`
+- **Adaptive exec poller** — 2 сек при активных исполнениях, 5 сек в покое (`setTimeout` вместо `setInterval`)
+
+### Влияние на запросы
+
+| До | После |
+|----|-------|
+| ~88 запросов/мин к backend | ~24 запросов/мин |
+| 3 запроса × 12/мин (positions+balance+alerts) | 1 × 12/мин (dashboard) |
+| N × 2/мин (sparklines per position) | 1 × 2/мин (batch) |
+| 30/мин (exec poller) | 12/мин (adaptive) |
+| Анализ watchlist-пары: 2-3 сек (Binance API) | <100мс (PriceCache) |
+
+### Новые тесты
+- `test_find_cached_exact_key` — точное совпадение ключа
+- `test_find_cached_larger_limit` — кеш с 500 строками покрывает запрос на 100
+- `test_find_cached_smaller_limit_misses` — кеш с 100 строками не покрывает запрос на 500
+- `test_find_cached_different_timeframe_misses` — другой таймфрейм не матчится
+- `test_find_cached_empty_store` — пустой кеш возвращает None
+
+### Итого тестов: 218 (+5)
+
+---
+
 ## 2026-03-18 — Производительность, исправление двойного закрытия, direction-agnostic TP/SL
 
 ### Оптимизация производительности

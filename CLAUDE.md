@@ -101,6 +101,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/db/positions/enriched` | Open positions from DB enriched with live Binance mark prices + unrealized PnL                                  |
 | DELETE | `/api/db/positions/{id}`     | Delete a DB position record (does NOT close exchange positions)                                                 |
 | GET    | `/api/all_positions`         | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
+| GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response       |
 | GET    | `/api/triggers`              | All active TP/SL triggers (standalone, independent of positions)                                                |
 | POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct}`   |
 | DELETE | `/api/triggers/{id}`         | Cancel an active trigger                                                                                        |
@@ -108,6 +109,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
 | GET    | `/api/executions/history`    | Persisted terminal execution snapshots from SQLite (`?limit=100`)                                               |
 | POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair                         |
+| POST   | `/api/batch/sparklines`      | Batch z-score/spread data for multiple positions; uses PriceCache when available                                 |
 | WS     | `/ws/stream`                 | Live spread/price/Z-score updates every 2 seconds for the active analysed pair                                  |
 
 ### `GET /api/pre_trade_check` — query params
@@ -151,6 +153,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `timeframe` — `5m`, `1h`, `4h`, `1d`
 - `limit` — number of candles (default 500, max 1500)
 - `zscore_window` — rolling window for z-score (default 20)
+- **PriceCache optimization**: if pair is subscribed in PriceCache (watchlist/WS) with `cached_limit >= limit`, data is read from cache instead of fetching from Binance — makes analysis of watchlist pairs near-instant
 
 ## Strategy Logic (`strategy.py`)
 
@@ -210,7 +213,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - **Tailwind CDN gotcha**: динамические классы через `classList.add()` не работают — CDN генерирует CSS только для классов в HTML. Используй `element.style.color` с hex-константами (`C_GREEN`/`C_YELLOW`/`C_RED`)
 - **Active pair highlight**: совпадение по **5 параметрам** (sym1+sym2+timeframe+zscore_window+entryZ); нормализация через `_wlNorm()`
 - **PnL sub-label under Z**: читает из данных графика (`dollarData.at(-1)`), NOT `z*std` формула
-- **Sparklines в позициях**: если пара совпадает с текущим анализом → читает из `state.historyData` (нет API-запроса); иначе → `GET /api/history` с параметрами из БД
+- **Sparklines в позициях**: `_batchLoadSparklines(positions)` — если пара совпадает с текущим анализом → читает из `state.historyData`; остальные → `POST /api/batch/sparklines` одним запросом (uses PriceCache on backend); throttle 30 с per position
 - **Trade markers**: используют `yScaleID: 'ySpread'`, `yValue` = dollar PnL; timestamps через `_utcParse` (обрабатывает оба формата: `2026-03-16 18:00:00` и `2026-03-16T18:17:28+00:00`)
 - **Analysis state**: сохраняется в `localStorage['pt_last']` после каждого Analyze; восстанавливается при загрузке
 - **i18n**: `I18N` object (en/ru), `t(key)`, `applyLocale()`; tooltip keys: `tip_entry_z`, `tip_exit_z`, `tip_zwindow`
@@ -229,7 +232,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 ### Positions Tab
 
 - **Strategy Positions** (DB+live enriched) + **Exchange Positions** (raw Binance)
-- `loadAllPositions()` → `GET /api/all_positions` — auto-refresh каждые 5 с; in-place DOM updates (без полного rebuild)
+- `loadAllPositions()` → `GET /api/dashboard` — auto-refresh каждые 5 с; returns positions + balances + recent alerts in one call; in-place DOM updates (без полного rebuild)
 - Actions: `↗` load pair | `✕ M` market close | `◎ S` smart close | `🗑` delete DB record
 - Row click = `↗`; `pos.tp_smart` defaults `true` для позиций без TP
 
@@ -270,14 +273,15 @@ Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
 >      **Никогда не создавай новые polling-таймеры на фронтенде, делающие прямые запросы к `/api/history` для получения live-данных — всегда используй `/api/watchlist/data` или WebSocket.**
 
 - **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
-- **Entry**: `{"price1": pd.Series, "price2": pd.Series}` — raw close prices, aligned
+- **Entry**: `{"price1": pd.Series, "price2": pd.Series, "df1": DataFrame, "df2": DataFrame}` — close prices + full OHLCV DataFrames, aligned
 - `price_cache.subscribe(sym1, sym2, tf, limit) → key` — registers pair; reference-counted
 - `price_cache.unsubscribe(key)` — decrements ref; entry removed when count reaches 0
 - `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
+- `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds any entry with matching `(sym1, sym2, tf)` and `cached_limit >= limit`; used by `/api/history` and `/api/batch/sparklines` to skip Binance calls for watchlist pairs
 - `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every **2 s** (`FEED_INTERVAL = 2`) via `fetch_ohlcv × 2`
 - **WebSocket** (`/ws/stream`): subscribes on connect, reads from cache each **2 s** loop, unsubscribes in `finally`
 - **monitor_position_triggers**: does **NOT** use PriceCache; fetches OHLCV directly every 2 s with limit `min(candle_limit, 500)` (reads `candle_limit` from DB position); no `monitored_keys` dict
-- **Watchlist** (`POST /api/watchlist/data`): maintains `_watchlist_keys: dict[tag → cache_key]` at module level; subscribes each pair on first call, unsubscribes pairs removed from watchlist; frontend polls every 5 s — one request for the whole watchlist; on cache miss seeds `price_cache._store[key]` directly before returning
+- **Watchlist** (`POST /api/watchlist/data`): maintains `_watchlist_keys: dict[tag → cache_key]` at module level; subscribes each pair on first call, unsubscribes pairs removed from watchlist; frontend polls every 5 s — one request for the whole watchlist; on cache miss seeds `price_cache._store[key]` directly (incl. df1/df2) before returning
 
 ## Logging & Persistence
 
@@ -404,7 +408,7 @@ await tg_bot.stop()                            # stop polling + close session
 - **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — use 🗑 to remove stale record or `✕ M` (backend detects no open positions and cleans DB)
 - **Trade markers not showing on chart**: `loadTradeJournal()` must be called after `runAnalyze()` to populate `_cachedJournalTrades`; DB timestamps use `+00:00` format — `_utcParse` must handle timezone suffix without appending extra `Z`
 - **Active pair highlight**: compares **5 params**: sym1+sym2+timeframe+zscore_window+entryZ — ticker alone is insufficient
-- **`_pollAllExecutions` auto-opens popups**: `_execSeenIds` Set tracks shown popups; `_execFirstPoll` flag prevents opening old terminal popups on page reload; poller starts immediately (no 2s delay), runs continuously
+- **`_pollAllExecutions` auto-opens popups**: `_execSeenIds` Set tracks shown popups; `_execFirstPoll` flag prevents opening old terminal popups on page reload; adaptive frequency: 2s with active executions, 5s idle (`setTimeout`-based)
 - **TP fires immediately for short_spread**: old signed comparison `current_z <= tp` always true when z is negative; fixed with `abs(current_z)` — direction-agnostic
 - **Double close on TP fire**: both position TP and standalone trigger fire for same pair → two close orders; fixed with `closing_pairs` set tracking `(sym1, sym2)`
 - **TP/SL input only accepts positive numbers**: correct behavior with direction-agnostic logic — chart shows symmetric lines at ±threshold
@@ -412,7 +416,7 @@ await tg_bot.stop()                            # stop polling + close session
 
 ## Tests (`tests/`)
 
-213 unit-тестов (9 файлов), все проходят ~3.0–4.0 сек. Запуск: `.venv/bin/pytest tests/ -v`
+218 unit-тестов (9 файлов), все проходят ~3.5–4.5 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл                    | Тестов | Покрытие                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -420,7 +424,7 @@ await tg_bot.stop()                            # stop polling + close session
 | `test_db.py`            | 56     | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern**, **execution_history** (save, idempotent, is_close, empty, limit, order, statuses) |
 | `test_helpers.py`       | 26     | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация                                                                                                                                                                                                                                                                                                               |
 | `test_order_manager.py` | 4      | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance                                                                                                                                                                                                                                                       |
-| `test_price_cache.py`   | 17     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle                                                                                                                                                                                                                                                                                                 |
+| `test_price_cache.py`   | 22     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle, `find_cached` (exact/larger/smaller limit, different tf, empty)                                                                                                                                                                                                                                |
 | `test_watchlist.py`     | 8      | WatchlistItem Pydantic model: defaults, custom fields, required fields validation                                                                                                                                                                                                                                                                                                     |
 | `test_telegram_bot.py`  | 56     | Formatters, is*configured, send() safety, all notify*\* content (via `_fire` mock); uses `asyncio.run()` — no pytest-asyncio needed                                                                                                                                                                                                                                                   |
 | `test_lifespan.py`      | 5      | asyncio graceful shutdown pattern: infinite tasks cancelled, `CancelledError` absorbed by `return_exceptions=True`, already-done tasks unharmed, mixed task types                                                                                                                                                                                                                     |

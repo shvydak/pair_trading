@@ -180,6 +180,48 @@ def test_full_lifecycle():
     assert key not in cache._refs
 
 
+# ---------------------------------------------------------------------------
+# find_cached
+# ---------------------------------------------------------------------------
+
+def test_find_cached_exact_key():
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    cache._store[key] = {"price1": pd.Series([1.0]), "price2": pd.Series([2.0])}
+    assert cache.find_cached("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500) is not None
+
+
+def test_find_cached_larger_limit():
+    """Cache has 500 rows → request for 100 should hit."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    cache._store[key] = {"price1": pd.Series([1.0]), "price2": pd.Series([2.0])}
+    result = cache.find_cached("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+    assert result is not None
+
+
+def test_find_cached_smaller_limit_misses():
+    """Cache has 100 rows → request for 500 should miss."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+    cache._store[key] = {"price1": pd.Series([1.0]), "price2": pd.Series([2.0])}
+    result = cache.find_cached("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    assert result is None
+
+
+def test_find_cached_different_timeframe_misses():
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    cache._store[key] = {"price1": pd.Series([1.0]), "price2": pd.Series([2.0])}
+    result = cache.find_cached("BTC/USDT:USDT", "ETH/USDT:USDT", "4h", 500)
+    assert result is None
+
+
+def test_find_cached_empty_store():
+    cache = PriceCache()
+    assert cache.find_cached("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500) is None
+
+
 def test_two_consumers_independent_unsubscribe():
     """
     WS + monitor both subscribe to the same key.

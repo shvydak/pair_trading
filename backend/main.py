@@ -74,7 +74,7 @@ SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
 
 async def _run_sync(func, *args):
     """Run a CPU-bound function in a thread-pool so it doesn't block the event loop."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, functools.partial(func, *args))
 
 
@@ -90,7 +90,7 @@ class PriceCache:
     subscriber is active.
 
     Key = (sym1, sym2, timeframe, limit)
-    Entry = {"price1": pd.Series, "price2": pd.Series}
+    Entry = {"price1": pd.Series, "price2": pd.Series, "df1": DataFrame, "df2": DataFrame}
     """
 
     FEED_INTERVAL = 2  # seconds between refreshes
@@ -115,6 +115,18 @@ class PriceCache:
     def get(self, key: tuple) -> Optional[dict]:
         return self._store.get(key)
 
+    def find_cached(self, sym1: str, sym2: str, tf: str, limit: int) -> Optional[dict]:
+        """Find a cache entry for (sym1, sym2, tf) with at least `limit` rows."""
+        # Exact key first
+        exact = self._store.get((sym1, sym2, tf, limit))
+        if exact is not None:
+            return exact
+        # Any key with same (sym1, sym2, tf) and enough data
+        for (s1, s2, t, l), entry in self._store.items():
+            if s1 == sym1 and s2 == sym2 and t == tf and l >= limit:
+                return entry
+        return None
+
     async def _refresh_one(self, key: tuple) -> None:
         sym1, sym2, tf, limit = key
         df1, df2 = await asyncio.gather(
@@ -124,7 +136,9 @@ class PriceCache:
         p1 = df1["close"]
         p2 = df2["close"]
         p1, p2 = p1.align(p2, join="inner")
-        self._store[key] = {"price1": p1, "price2": p2}
+        df1_aligned = df1.loc[p1.index]
+        df2_aligned = df2.loc[p2.index]
+        self._store[key] = {"price1": p1, "price2": p2, "df1": df1_aligned, "df2": df2_aligned}
 
     async def run(self) -> None:
         """Background task: refresh all subscribed keys every FEED_INTERVAL seconds."""
@@ -685,18 +699,26 @@ async def get_history(
         sym1 = meta1["symbol"]
         sym2 = meta2["symbol"]
 
-        df1, df2 = await asyncio.gather(
-            client.fetch_ohlcv(sym1, timeframe, limit),
-            client.fetch_ohlcv(sym2, timeframe, limit),
-        )
+        # Try PriceCache first — instant if pair is already tracked (watchlist/WS)
+        cached = price_cache.find_cached(sym1, sym2, timeframe, limit)
+        if cached and "df1" in cached and "df2" in cached:
+            price1 = cached["price1"].iloc[-limit:]
+            price2 = cached["price2"].iloc[-limit:]
+            df1 = cached["df1"].iloc[-limit:]
+            df2 = cached["df2"].iloc[-limit:]
+        else:
+            df1, df2 = await asyncio.gather(
+                client.fetch_ohlcv(sym1, timeframe, limit),
+                client.fetch_ohlcv(sym2, timeframe, limit),
+            )
 
-        price1 = df1["close"]
-        price2 = df2["close"]
+            price1 = df1["close"]
+            price2 = df2["close"]
 
-        # Align on common timestamps
-        price1, price2 = price1.align(price2, join="inner")
-        df1 = df1.loc[price1.index]
-        df2 = df2.loc[price2.index]
+            # Align on common timestamps
+            price1, price2 = price1.align(price2, join="inner")
+            df1 = df1.loc[price1.index]
+            df2 = df2.loc[price2.index]
 
         # CPU-bound stats — run in thread pool so the event loop stays responsive
         def _compute_stats():
@@ -784,7 +806,9 @@ async def get_watchlist_data(items: list[WatchlistItem]):
                 p1 = df1["close"]
                 p2 = df2["close"]
                 p1, p2 = p1.align(p2, join="inner")
-                price_cache._store[key] = {"price1": p1, "price2": p2}
+                df1_a = df1.loc[p1.index]
+                df2_a = df2.loc[p2.index]
+                price_cache._store[key] = {"price1": p1, "price2": p2, "df1": df1_a, "df2": df2_a}
                 cached = price_cache.get(key)
             except Exception as e:
                 log.warning(f"watchlist fetch error {tag}: {e}")
@@ -842,6 +866,108 @@ async def get_watchlist_data(items: list[WatchlistItem]):
     # Unsubscribe pairs removed from watchlist
     for tag in set(_watchlist_keys) - new_tags:
         price_cache.unsubscribe(_watchlist_keys.pop(tag))
+
+    return results
+
+
+class SparklineRequest(BaseModel):
+    sym1: str
+    sym2: str
+    timeframe: str = "1h"
+    limit: int = 100
+    zscore_window: int = 20
+
+
+@app.post("/api/batch/sparklines")
+async def batch_sparklines(items: list[SparklineRequest]):
+    """
+    Batch sparkline data for multiple positions in a single request.
+    Uses PriceCache when available; fetches from Binance otherwise.
+    Returns z-score array, spread array, hedge_ratio, and timestamps per item.
+    """
+    results = []
+
+    # Phase 1: resolve symbols and check cache
+    resolved = []   # (item, sym1, sym2)
+    to_fetch = []   # indices into resolved that need Binance fetch
+    for item in items:
+        sym1 = _normalise_symbol(item.sym1)
+        sym2 = _normalise_symbol(item.sym2)
+        resolved.append((item, sym1, sym2))
+
+    # Phase 2: get data — from cache or Binance
+    data_entries = []  # (price1, price2, df1, df2) per item
+    fetch_tasks = {}   # idx → asyncio task
+    for idx, (item, sym1, sym2) in enumerate(resolved):
+        cached = price_cache.find_cached(sym1, sym2, item.timeframe, item.limit)
+        if cached and "df1" in cached and "df2" in cached:
+            p1 = cached["price1"].iloc[-item.limit:]
+            p2 = cached["price2"].iloc[-item.limit:]
+            d1 = cached["df1"].iloc[-item.limit:]
+            d2 = cached["df2"].iloc[-item.limit:]
+            data_entries.append((p1, p2, d1, d2))
+        else:
+            data_entries.append(None)
+            to_fetch.append(idx)
+
+    if to_fetch:
+        async def _fetch_one(idx):
+            item, sym1, sym2 = resolved[idx]
+            df1, df2 = await asyncio.gather(
+                client.fetch_ohlcv(sym1, item.timeframe, item.limit),
+                client.fetch_ohlcv(sym2, item.timeframe, item.limit),
+            )
+            p1, p2 = df1["close"], df2["close"]
+            p1, p2 = p1.align(p2, join="inner")
+            return idx, p1, p2, df1.loc[p1.index], df2.loc[p2.index]
+
+        fetch_results = await asyncio.gather(
+            *[_fetch_one(i) for i in to_fetch],
+            return_exceptions=True,
+        )
+        for r in fetch_results:
+            if isinstance(r, Exception):
+                log.warning(f"batch sparkline fetch error: {r}")
+                continue
+            idx, p1, p2, d1, d2 = r
+            data_entries[idx] = (p1, p2, d1, d2)
+
+    # Phase 3: compute stats in single thread-pool call
+    compute_args = []  # (idx, p1, p2, zw)
+    for idx, entry in enumerate(data_entries):
+        if entry is None:
+            continue
+        p1, p2, _, _ = entry
+        compute_args.append((idx, p1, p2, resolved[idx][0].zscore_window))
+
+    def _batch_compute():
+        out = {}
+        for idx, p1, p2, zw in compute_args:
+            hr = strategy.calculate_hedge_ratio(p1, p2)
+            sp = strategy.calculate_spread(p1, p2, hr)
+            zs = strategy.calculate_zscore(sp, window=zw)
+            out[idx] = (hr, sp.tolist(), zs.tolist(), [str(t) for t in p1.index])
+        return out
+
+    computed = await _run_sync(_batch_compute) if compute_args else {}
+
+    # Phase 4: assemble results
+    for idx, (item, sym1, sym2) in enumerate(resolved):
+        if idx in computed:
+            hr, sp_list, zs_list, ts_list = computed[idx]
+            results.append(_clean({
+                "sym1": item.sym1, "sym2": item.sym2,
+                "timeframe": item.timeframe,
+                "zscore": zs_list, "spread": sp_list,
+                "hedge_ratio": hr, "timestamps": ts_list,
+            }))
+        else:
+            results.append({
+                "sym1": item.sym1, "sym2": item.sym2,
+                "timeframe": item.timeframe,
+                "zscore": [], "spread": [],
+                "hedge_ratio": None, "timestamps": [],
+            })
 
     return results
 
@@ -965,6 +1091,61 @@ async def get_balance(asset: Optional[str] = Query(None)):
         return _clean({"assets": balances})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/dashboard")
+async def get_dashboard(alert_minutes: int = Query(60)):
+    """
+    Combined endpoint: positions (enriched) + balances + recent alerts.
+    Replaces three separate polling calls with one round-trip.
+    """
+    db_positions = db.get_open_positions()
+
+    # Fetch live data + balances + alerts in parallel
+    try:
+        live_positions, balances = await asyncio.gather(
+            client.get_positions(),
+            client.get_all_balances(),
+        )
+        live_map = {p["symbol"]: p for p in live_positions}
+    except Exception:
+        live_positions = []
+        live_map = {}
+        balances = []
+
+    # Enrich strategy positions with live data
+    enriched = []
+    for pos in db_positions:
+        sym1, sym2 = pos["symbol1"], pos["symbol2"]
+        live1 = live_map.get(sym1, {})
+        live2 = live_map.get(sym2, {})
+        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
+        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
+        pnl = None
+        if (mark_price1 and pos.get("entry_price1")
+                and mark_price2 and pos.get("entry_price2")):
+            sign = 1 if pos["side"] == "long_spread" else -1
+            p1 = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
+            p2 = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
+            pnl = round(p1 + p2, 4)
+        enriched.append({
+            **pos,
+            "mark_price1": mark_price1,
+            "mark_price2": mark_price2,
+            "unrealized_pnl": pnl,
+            "liq_price1": live1.get("liquidation_price"),
+            "liq_price2": live2.get("liquidation_price"),
+        })
+
+    # Recent alerts — pure SQLite, no network call
+    recent_alerts = db.get_recent_alerts(alert_minutes)
+
+    return _clean({
+        "strategy_positions": enriched,
+        "exchange_positions": live_positions,
+        "balances": balances,
+        "recent_alerts": recent_alerts,
+    })
 
 
 @app.get("/api/db/positions")
