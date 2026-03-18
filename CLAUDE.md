@@ -2,11 +2,15 @@
 
 ## Communication with the user
 
+**Keep this file in English.** All future edits to CLAUDE.md should be in English only.
+
 When the user asks for an explanation: keep it **simple and short**; avoid code and jargon; use **plain examples** in the context of this project (pair trading: two correlated assets, spread, entry/exit by z-score, TP/SL). Offer code or technical details only if the user asks for them.
+
+**Professional trader role:** Think about the platform not only as a developer but also as a trader. Before implementing any trading-related feature, ask yourself: "what happens with multiple open positions?", "how does this behave on partial fills?", "what if symbols overlap across pairs?". If you spot an architectural risk — raise it before writing code. Discuss with the user as a beginner trader: explain trading consequences, not just technical ones.
 
 ## Changelog
 
-This file need to be updated with the latest bugs and fixes.
+This file needs to be updated with the latest bugs and fixes.
 Changes history: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Project Overview
@@ -92,7 +96,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/backtest`              | Full backtest; params: `sizing_method` (ols/atr/equal), `atr1`, `atr2`, `entry_threshold`, `exit_threshold`     |
 | GET    | `/api/status`                | Binance connection status + supported futures balances (USDT + USDC)                                            |
 | GET    | `/api/positions`             | Open positions from Binance (requires API keys)                                                                 |
-| GET    | `/api/balance`               | Futures balances (all supported assets, or `?asset=USDT` / `USDC`)                                              |
+| GET    | `/api/balance`               | Futures balances (all supported assets, or `?asset=USDT` / `USDC`)                                             |
 | GET    | `/api/pre_trade_check`       | Validate balance, min notional, lot sizes, leverage before trade                                                |
 | POST   | `/api/trade`                 | Place market order pair trade (instant, no retry)                                                               |
 | POST   | `/api/trade/smart`           | Start smart limit-order execution in background; returns `exec_id`                                              |
@@ -103,17 +107,17 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/db/positions/enriched` | Open positions from DB enriched with live Binance mark prices + unrealized PnL                                  |
 | DELETE | `/api/db/positions/{id}`     | Delete a DB position record (does NOT close exchange positions)                                                 |
 | GET    | `/api/all_positions`         | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
-| GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response       |
+| GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response      |
 | GET    | `/api/triggers`              | All active TP/SL triggers (standalone, independent of positions)                                                |
-| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct}`   |
+| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct}`  |
 | DELETE | `/api/triggers/{id}`         | Cancel an active trigger                                                                                        |
-| GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center           |
+| GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center          |
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
 | GET    | `/api/executions/history`    | Persisted terminal execution snapshots from SQLite (`?limit=100`)                                               |
-| POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair (legacy HTTP fallback)  |
-| POST   | `/api/batch/sparklines`      | Batch z-score/spread data for multiple positions; uses PriceCache when available                                 |
-| WS     | `/ws/stream`                 | Live spread/price/Z-score updates, event-driven on each kline (≤5 s timeout) for the active analysed pair       |
-| WS     | `/ws/watchlist`              | Event-driven watchlist z-score/spread feed; replaces 5 s HTTP polling; client sends full list, server pushes    |
+| POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair (legacy HTTP fallback) |
+| POST   | `/api/batch/sparklines`      | Batch z-score/spread data for multiple positions; uses PriceCache when available                                |
+| WS     | `/ws/stream`                 | Live spread/price/Z-score updates, event-driven on each kline (≤5 s timeout) for the active analysed pair      |
+| WS     | `/ws/watchlist`              | Event-driven watchlist z-score/spread feed; replaces 5 s HTTP polling; client sends full list, server pushes   |
 
 ### `GET /api/pre_trade_check` — query params
 
@@ -191,43 +195,43 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 
 ### Layout
 
-Трёхпанельный торговый терминал:
+Three-panel trading terminal:
 
-- **Header**: Trade/Backtest mode, Binance status, Guide, язык
-- **Trade mode**: три колонки — Watchlist (left) | Charts (center) | Trading Panel (right, scroll)
-- **Backtest mode**: charts с сигналами + контролы + таблица сделок
-- **Bottom panel**: resizable drag handle, вкладки: Позиции | Alerts | Журнал
-- TP/SL отображаются inline в строке позиции (badges), отдельной вкладки нет
+- **Header**: Trade/Backtest mode, Binance status, Guide, language toggle
+- **Trade mode**: three columns — Watchlist (left) | Charts (center) | Trading Panel (right, scroll)
+- **Backtest mode**: charts with signals + controls + trades table
+- **Bottom panel**: resizable drag handle, tabs: Positions | Alerts | Journal
+- TP/SL displayed inline in position row (badges), no separate tab
 
 ### Key Frontend Patterns
 
-- **Tailwind CDN gotcha**: динамические классы через `classList.add()` не работают — CDN генерирует CSS только для классов в HTML. Используй `element.style.color` с hex-константами (`C_GREEN`/`C_YELLOW`/`C_RED`)
-- **Active pair highlight**: совпадение по **5 параметрам** (sym1+sym2+timeframe+zscore_window+entryZ); нормализация через `_wlNorm()`
-- **PnL sub-label under Z**: читает из данных графика (`dollarData.at(-1)`), NOT `z*std` формула
-- **Sparklines в позициях**: `_batchLoadSparklines(positions)` — если пара совпадает с текущим анализом → читает из `state.historyData`; остальные → `POST /api/batch/sparklines` одним запросом (uses PriceCache on backend); throttle 30 с per position
-- **Trade markers**: используют `yScaleID: 'ySpread'`, `yValue` = dollar PnL; timestamps через `_utcParse` (обрабатывает оба формата: `2026-03-16 18:00:00` и `2026-03-16T18:17:28+00:00`)
-- **Analysis state**: сохраняется в `localStorage['pt_last']` после каждого Analyze; восстанавливается при загрузке
+- **Tailwind CDN gotcha**: dynamic classes via `classList.add()` don't work — CDN only generates CSS for classes present in HTML at parse time. Use `element.style.color` with hex constants (`C_GREEN`/`C_YELLOW`/`C_RED`)
+- **Active pair highlight**: matches on **5 parameters** (sym1+sym2+timeframe+zscore_window+entryZ); normalized via `_wlNorm()`
+- **PnL sub-label under Z**: reads from chart data (`dollarData.at(-1)`), NOT `z*std` formula
+- **Sparklines in positions**: `_batchLoadSparklines(positions)` — if pair matches current analysis → reads from `state.historyData`; others → `POST /api/batch/sparklines` in one request (uses PriceCache on backend); throttle 30s per position
+- **Trade markers**: use `yScaleID: 'ySpread'`, `yValue` = dollar PnL; timestamps via `_utcParse` (handles both formats: `2026-03-16 18:00:00` and `2026-03-16T18:17:28+00:00`)
+- **Analysis state**: saved to `localStorage['pt_last']` after each Analyze; restored on page load
 - **i18n**: `I18N` object (en/ru), `t(key)`, `applyLocale()`; tooltip keys: `tip_entry_z`, `tip_exit_z`, `tip_zwindow`
-- **Chart zoom**: `chartjs-plugin-zoom` + `hammerjs`; `_syncCharts` синхронизирует Spread и Price горизонтально
-- **Effective spread по методу сайзинга**: `_effectiveSpreadData(data)` возвращает `{spread, dollarPerUnit}` в зависимости от `sizingMethod` (OLS→β, Equal→β=1, ATR→β=atr1/atr2). `renderSpreadChart()` и `refreshLiveCharts()` **оба** должны использовать эту функцию — нельзя брать `data.spread` (OLS) напрямую, иначе `_spreadDollarFactor.meanSpread` и данные окажутся из разных баз → плоская линия на графике
+- **Chart zoom**: `chartjs-plugin-zoom` + `hammerjs`; `_syncCharts` syncs Spread and Price charts horizontally
+- **Effective spread by sizing method**: `_effectiveSpreadData(data)` returns `{spread, dollarPerUnit}` depending on `sizingMethod` (OLS→β, Equal→β=1, ATR→β=atr1/atr2). Both `renderSpreadChart()` and `refreshLiveCharts()` must use this function — never read `data.spread` (OLS) directly, otherwise `_spreadDollarFactor.meanSpread` and chart data come from different bases → flat line on chart
 
 ### Watchlist
 
-- `localStorage['pt_watchlist']` — сохраняет **все параметры анализа** при добавлении пары
-- **Ключ дедупликации**: `(sym1, sym2, timeframe)` — одна и та же пара с разным таймфреймом хранится как отдельная запись; добавление BTC/ETH 5m не перезаписывает BTC/ETH 4h
-- **Группировка по таймфреймам** в `renderWatchlist()`: заголовки-разделители, порядок 5m→15m→30m→1h→2h→4h→8h→1d
-- Z-score/spread обновляются **event-driven** через `WS /ws/watchlist` (приходят на каждый kline с Binance, max задержка 5 с); ответ содержит `timeframe` для точного матчинга записей
-- `connectWatchlistWS()` открывает WS при старте; `_sendWatchlistToWs()` шлёт обновлённый список при add/remove; реконнект с backoff (1 s → 30 s)
-- `_applyWatchlistUpdate(data)` — общая функция обработки входящих данных (in-place DOM патч)
-- Threshold индикация: `|z| >= entryZ*0.75` → жёлтый; `|z| >= entryZ` → красный + мигание
-- Подсветка активной пары обновляется сразу после `runAnalyze()` (не ждёт 5s тик)
+- `localStorage['pt_watchlist']` — saves **all analysis parameters** when adding a pair
+- **Dedup key**: `(sym1, sym2, timeframe)` — same pair with different timeframe stored as separate entry; adding BTC/ETH 5m does not overwrite BTC/ETH 4h
+- **Grouping by timeframe** in `renderWatchlist()`: section headers, order 5m→15m→30m→1h→2h→4h→8h→1d
+- Z-score/spread updated **event-driven** via `WS /ws/watchlist` (fires on each Binance kline, max 5s delay); response contains `timeframe` for exact record matching
+- `connectWatchlistWS()` opens WS on start; `_sendWatchlistToWs()` sends updated list on add/remove; reconnect with backoff (1s → 30s)
+- `_applyWatchlistUpdate(data)` — common handler for incoming data (in-place DOM patch)
+- Threshold indication: `|z| >= entryZ*0.75` → yellow; `|z| >= entryZ` → red + blinking
+- Active pair highlight updates immediately after `runAnalyze()` (no wait for 5s tick)
 
 ### Positions Tab
 
 - **Strategy Positions** (DB+live enriched) + **Exchange Positions** (raw Binance)
-- `loadAllPositions()` → `GET /api/dashboard` — auto-refresh каждые 5 с; returns positions + balances + recent alerts in one call; in-place DOM updates (без полного rebuild)
+- `loadAllPositions()` → `GET /api/dashboard` — auto-refresh every 5s; returns positions + balances + recent alerts in one call; in-place DOM updates (no full rebuild)
 - Actions: `↗` load pair | `✕ M` market close | `◎ S` smart close | `🗑` delete DB record
-- Row click = `↗`; `pos.tp_smart` defaults `true` для позиций без TP
+- Row click = `↗`; `pos.tp_smart` defaults `true` for positions without TP
 
 ### Trading Section
 
@@ -261,7 +265,7 @@ Live OHLCV candle buffer per `(symbol, timeframe)` — the single source of pric
 
 - Connects to `wss://fstream.binance.com/stream?streams={sym}@kline_{tf}` (one WS per symbol×timeframe)
 - Loads initial history via REST once on startup; WS updates the current candle in-place or appends when it closes
-- Auto-reconnect with exponential backoff (1 s → 60 s); REST refresh on each reconnect to fill gaps
+- Auto-reconnect with exponential backoff (1s → 60s); REST refresh on each reconnect to fill gaps
 - `get_dataframe() → pd.DataFrame | None` — returns deque as DataFrame; returns `None` if empty
 - `wait_for_update(after_gen) → int` — async, event-driven; safe for N concurrent waiters ("replace event" pattern)
 - `start()` / `stop()` — idempotent; `start()` is called from `PriceCache.run()`
@@ -282,14 +286,14 @@ Real-time order fill notifications via Binance Futures User Data Stream.
 
 Centralised pair-level cache, assembled from SymbolFeed buffers. Single source of truth for all live consumers.
 
-> **АРХИТЕКТУРНЫЙ ПРИНЦИП — соблюдать всегда:**
-> Все live-данные (chart WS, watchlist WS, монитор TP/SL) читают из PriceCache, который питается от Binance WS kline streams через SymbolFeed.
-> Прямые вызовы `client.fetch_ohlcv()` допустимы только в двух случаях:
+> **ARCHITECTURAL PRINCIPLE — always follow:**
+> All live data (chart WS, watchlist WS, TP/SL monitor) reads from PriceCache, which is fed by Binance WS kline streams via SymbolFeed.
+> Direct `client.fetch_ohlcv()` calls are only allowed in two cases:
 >
-> 1. Исторические данные для анализа/бэктеста (`/api/history`, `/api/backtest`)
-> 2. Первичное заполнение кэша при cache miss (seed в watchlist HTTP endpoint)
+> 1. Historical data for analysis/backtest (`/api/history`, `/api/backtest`)
+> 2. Initial cache fill on cache miss (seed in watchlist HTTP endpoint)
 >
-> **Никогда не создавай новые polling-таймеры на фронтенде для live-данных — используй `/ws/watchlist` или `/ws/stream`.**
+> **Never create new polling timers on the frontend for live data — use `/ws/watchlist` or `/ws/stream`.**
 
 - **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
 - **Entry**: `{"price1": pd.Series, "price2": pd.Series, "df1": DataFrame, "df2": DataFrame}` — close prices + full OHLCV DataFrames, aligned on common timestamps
@@ -298,13 +302,13 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - `price_cache.unsubscribe(key)` — decrements refs; stops SymbolFeed when its ref count reaches 0; removes `_store[key]`
 - `price_cache.get(key) → dict | None` — read-only; `None` if not yet assembled
 - `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds entry with matching `(sym1, sym2, tf)` and key limit `>= requested`; always verify `len(cached["price1"]) >= limit` before use — buffer may be incomplete shortly after server start
-- `price_cache.run()` — background task in lifespan; calls `feed.start()` on all registered feeds; reassembles all pair stores every `ASSEMBLE_INTERVAL = 1 s`
+- `price_cache.run()` — background task in lifespan; calls `feed.start()` on all registered feeds; reassembles all pair stores every `ASSEMBLE_INTERVAL = 1s`
 - `price_cache.wait_update(key, timeout=5.0)` — waits for next kline on either symbol of the pair; used by `/ws/stream` for event-driven push
 - `price_cache.wait_any_update(keys, timeout=5.0)` — waits for ANY kline across a list of pairs (deduplicates feeds); used by `/ws/watchlist`
 - `price_cache.stop_all()` — stops all SymbolFeed tasks; called in lifespan shutdown before `client.close()`
-- **`/ws/stream`**: subscribes on connect, pushes on each kline event (`wait_update`, ≤5 s timeout), unsubscribes in `finally`
+- **`/ws/stream`**: subscribes on connect, pushes on each kline event (`wait_update`, ≤5s timeout), unsubscribes in `finally`
 - **`/ws/watchlist`**: per-connection subscriptions; two tasks: `_receive_task` reconciles pairs, `_push_task` pushes on `wait_any_update`; unsubscribes all on disconnect
-- **`monitor_position_triggers`**: manages own `_monitor_keys: dict[tag → cache_key]` (local to the coroutine); subscribes active positions/triggers to PriceCache; reads from cache each 2 s cycle — zero direct Binance calls
+- **`monitor_position_triggers`**: manages own `_monitor_keys: dict[tag → cache_key]` (local to the coroutine); subscribes active positions/triggers to PriceCache; reads from cache each 2s cycle — zero direct Binance calls
 - **`POST /api/watchlist/data`** (HTTP, legacy): maintains module-level `_watchlist_keys`; on cache miss seeds `price_cache._store[key]` directly and spawns `_precompute_coint` background task
 
 ## Logging & Persistence
@@ -343,7 +347,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 - Balance check: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Validation order: balance → min_notional → lot_size → leverage (informational)
-- **monitor_position_triggers** runs every **2 s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle
+- **monitor_position_triggers** runs every **2s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle
 - **Direction-agnostic TP/SL**: uses `abs(current_z)` — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values always positive
 - **Double-close prevention**: `closing_tags` (tag-based) + `closing_pairs` (pair-based) — prevents same pair closed simultaneously by position TP and standalone trigger
 - **Cointegration cache**: `_coint_cache` with 10-min TTL; **background precompute** via `_precompute_coint` — watchlist pairs analyze instantly after ~15s priming
@@ -360,7 +364,7 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 - Fires when `abs(current_z) >= alert_pct * abs(trig_z)`; stays `status="active"` — never auto-cancelled
 - **Hysteresis**: `"idle"` → fires → `"alerted"` → `abs(z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
 - Created via 🔔 on watchlist item or `addAlertFromPanel()` button in Pair Config panel
-- **Notification center**: `checkRecentAlerts()` piggybacked on the 5 s positions interval (not a separate timer)
+- **Notification center**: `checkRecentAlerts()` piggybacked on the 5s positions interval (not a separate timer)
 
 ## Common Issues & Fixes
 
@@ -386,25 +390,25 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Tests (`tests/`)
 
-246 unit-тестов (10 файлов), все проходят ~3.5–4.5 сек. Запуск: `.venv/bin/pytest tests/ -v`
+246 unit tests (10 files), all pass in ~3.5–4.5s. Run: `.venv/bin/pytest tests/ -v`
 
-| Файл                    | Тестов | Покрытие                                                    |
-| ----------------------- | ------ | ----------------------------------------------------------- |
-| `test_strategy.py`      | 41     | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
-| `test_db.py`            | 56     | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history |
-| `test_helpers.py`       | 26     | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 сериализация |
-| `test_order_manager.py` | 4      | Smart v2 passive repricing, semi-aggressive pricing, dust acceptance |
-| `test_price_cache.py`   | 35     | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |
-| `test_symbol_feed.py`   | 15     | buffer update/append, `wait_for_update`, `start` idempotency |
-| `test_watchlist.py`     | 8      | WatchlistItem Pydantic model validation                     |
-| `test_telegram_bot.py`  | 56     | formatters, `send()` safety, all `notify_*` functions       |
-| `test_lifespan.py`      | 5      | asyncio graceful shutdown pattern                           |
+| File                    | Tests | Coverage                                                    |
+| ----------------------- | ----- | ----------------------------------------------------------- |
+| `test_strategy.py`      | 41    | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
+| `test_db.py`            | 56    | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history |
+| `test_helpers.py`       | 26    | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 serialization |
+| `test_order_manager.py` | 4     | Smart v2 passive repricing, semi-aggressive pricing, dust acceptance |
+| `test_price_cache.py`   | 35    | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |
+| `test_symbol_feed.py`   | 15    | buffer update/append, `wait_for_update`, `start` idempotency |
+| `test_watchlist.py`     | 8     | WatchlistItem Pydantic model validation                     |
+| `test_telegram_bot.py`  | 56    | formatters, `send()` safety, all `notify_*` functions       |
+| `test_lifespan.py`      | 5     | asyncio graceful shutdown pattern                           |
 
-**`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
+**`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test.
 
 ## User Preferences
 
-- Русский язык по умолчанию в UI
+- Russian language UI by default
 - Dark theme only
 - No build tools — keep frontend as single HTML file
 
