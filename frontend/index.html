@@ -1427,7 +1427,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initChartsResize();
   // Watchlist
   renderWatchlist();
-  startWatchlistUpdater();
+  connectWatchlistWS();
   // Bottom panel: load positions tab by default
   setBottomTab('positions');
   loadStrategyPositions();
@@ -1692,7 +1692,7 @@ function _addToWatchlist(s1, s2, params) {
   }
   saveWatchlist(items);
   renderWatchlist();
-  updateWatchlistZScores();
+  _sendWatchlistToWs(); // notify server of updated watchlist
 }
 
 function removeWatchlistItem(idx) {
@@ -1700,6 +1700,7 @@ function removeWatchlistItem(idx) {
   items.splice(idx, 1);
   saveWatchlist(items);
   renderWatchlist();
+  _sendWatchlistToWs(); // notify server to unsubscribe removed pair
 }
 
 function loadPairFromWatchlist(idx) {
@@ -1856,36 +1857,16 @@ function renderWatchlist() {
   }).join('');
 }
 
-let _wlInterval = null;
-function startWatchlistUpdater() {
-  if (_wlInterval) clearInterval(_wlInterval);
-  updateWatchlistZScores(); // immediate first call
-  _wlInterval = setInterval(updateWatchlistZScores, 5000);
-}
+// ------------------------------------------------------------------ //
+//  Watchlist WebSocket  (replaces 5s HTTP polling)
+// ------------------------------------------------------------------ //
+let _wlWs = null;
+let _wlWsReconnectTimer = null;
+let _wlWsBackoff = 1000; // ms, doubles on each failure up to 30s
 
-async function updateWatchlistZScores() {
+/** Apply a z-score/spread update batch received from the server. */
+function _applyWatchlistUpdate(data) {
   const items = getWatchlist();
-  if (items.length === 0) return;
-
-  const payload = items.map(w => ({
-    sym1:         w.sym1,
-    sym2:         w.sym2,
-    timeframe:    w.timeframe    || '1h',
-    limit:        parseInt(w.limit)   || 100,
-    zscore_window: parseInt(w.zwindow) || 20,
-  }));
-
-  let data;
-  try {
-    const res = await fetch(`${API}/api/watchlist/data`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return;
-    data = await res.json();
-  } catch { return; }
-
   let changed = false;
   for (const row of data) {
     const rowTf = row.timeframe || '1h';
@@ -1902,35 +1883,74 @@ async function updateWatchlistZScores() {
       changed = true;
     }
   }
-
-  if (changed) {
-    saveWatchlist(items);
-    // In-place z-score update: patch only changed z-score spans instead of rebuilding the entire DOM
-    const TF_ORDER = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
-    const sorted = [...items.map((w, idx) => ({ w, idx }))].sort((a, b) => {
-      const ia = TF_ORDER.indexOf(a.w.timeframe || '1h');
-      const ib = TF_ORDER.indexOf(b.w.timeframe || '1h');
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-    });
-    let needFullRebuild = false;
-    for (let si = 0; si < sorted.length; si++) {
-      const { w, idx } = sorted[si];
-      const zEl = document.getElementById(`wl-z-${idx}`);
-      if (!zEl) { needFullRebuild = true; break; }
-      const az = w.zscore != null ? Math.abs(w.zscore) : null;
-      const entryZ = parseFloat(w.entryZ) || 2;
-      const zDisplay = w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '—';
-      const zArrow = w._zDir > 0 ? ' ↑' : w._zDir < 0 ? ' ↓' : '';
-      zEl.textContent = zDisplay + zArrow;
-      // Update z-score color classes
-      const isRed = az != null && az >= entryZ;
-      const isYellow = az != null && !isRed && az >= entryZ * 0.75;
-      zEl.className = `text-[11px] font-mono font-bold leading-none ${
-        az == null ? 'text-muted' : isRed ? 'text-red font-bold' : isYellow ? 'text-yellow font-semibold' : w.zscore > 0 ? 'text-green' : 'text-red'
-      }`;
-    }
-    if (needFullRebuild) renderWatchlist();
+  if (!changed) return;
+  saveWatchlist(items);
+  // In-place z-score patch — avoid full DOM rebuild
+  const TF_ORDER = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+  const sorted = [...items.map((w, idx) => ({ w, idx }))].sort((a, b) => {
+    const ia = TF_ORDER.indexOf(a.w.timeframe || '1h');
+    const ib = TF_ORDER.indexOf(b.w.timeframe || '1h');
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  let needFullRebuild = false;
+  for (const { w, idx } of sorted) {
+    const zEl = document.getElementById(`wl-z-${idx}`);
+    if (!zEl) { needFullRebuild = true; break; }
+    const az = w.zscore != null ? Math.abs(w.zscore) : null;
+    const entryZ = parseFloat(w.entryZ) || 2;
+    const zDisplay = w.zscore != null ? (w.zscore > 0 ? '+' : '') + w.zscore.toFixed(2) : '—';
+    const zArrow = w._zDir > 0 ? ' ↑' : w._zDir < 0 ? ' ↓' : '';
+    zEl.textContent = zDisplay + zArrow;
+    const isRed = az != null && az >= entryZ;
+    const isYellow = az != null && !isRed && az >= entryZ * 0.75;
+    zEl.className = `text-[11px] font-mono font-bold leading-none ${
+      az == null ? 'text-muted' : isRed ? 'text-red font-bold' : isYellow ? 'text-yellow font-semibold' : w.zscore > 0 ? 'text-green' : 'text-red'
+    }`;
   }
+  if (needFullRebuild) renderWatchlist();
+}
+
+/** Send the current watchlist to the WS server (initial + after any change). */
+function _sendWatchlistToWs() {
+  if (!_wlWs || _wlWs.readyState !== WebSocket.OPEN) return;
+  const items = getWatchlist();
+  if (!items.length) return;
+  _wlWs.send(JSON.stringify(items.map(w => ({
+    sym1:          w.sym1,
+    sym2:          w.sym2,
+    timeframe:     w.timeframe  || '1h',
+    limit:         parseInt(w.limit)   || 100,
+    zscore_window: parseInt(w.zwindow) || 20,
+  }))));
+}
+
+/** Open (or re-open) the watchlist WebSocket. Called once on startup and after reconnects. */
+function connectWatchlistWS() {
+  if (_wlWsReconnectTimer) { clearTimeout(_wlWsReconnectTimer); _wlWsReconnectTimer = null; }
+  if (_wlWs) { _wlWs.onclose = null; _wlWs.close(); _wlWs = null; }
+  if (!getWatchlist().length) return;
+
+  const wsUrl = API.replace('http', 'ws') + '/ws/watchlist';
+  _wlWs = new WebSocket(wsUrl);
+
+  _wlWs.onopen = () => {
+    _wlWsBackoff = 1000;
+    _sendWatchlistToWs();
+  };
+
+  _wlWs.onmessage = (event) => {
+    try { _applyWatchlistUpdate(JSON.parse(event.data)); } catch {}
+  };
+
+  _wlWs.onclose = () => {
+    _wlWs = null;
+    _wlWsReconnectTimer = setTimeout(() => {
+      _wlWsBackoff = Math.min(_wlWsBackoff * 2, 30000);
+      connectWatchlistWS();
+    }, _wlWsBackoff);
+  };
+
+  _wlWs.onerror = () => { if (_wlWs) _wlWs.close(); };
 }
 
 // ------------------------------------------------------------------ //

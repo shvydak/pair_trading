@@ -4,6 +4,9 @@ Tests for PriceCache in main.py — reference-counted OHLCV cache.
 If ref-counting breaks, pairs won't unsubscribe (memory leak) or will
 unsubscribe too early (missing data for WS / TP-SL monitor).
 """
+import asyncio
+from collections import deque
+
 import pandas as pd
 import pytest
 
@@ -245,3 +248,242 @@ def test_two_consumers_independent_unsubscribe():
     # Monitor closes (ref: 1 → 0)
     cache.unsubscribe(k_mon)
     assert cache.get(k_mon) is None
+
+
+# ---------------------------------------------------------------------------
+# SymbolFeed creation and symbol-level deduplication
+# ---------------------------------------------------------------------------
+
+def test_subscribe_creates_symbol_feeds():
+    """subscribe() should create SymbolFeed entries in _feeds for both symbols."""
+    cache = PriceCache()
+    cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    assert ("BTC/USDT:USDT", "1h") in cache._feeds
+    assert ("ETH/USDT:USDT", "1h") in cache._feeds
+
+
+def test_subscribe_feed_ref_counts():
+    """Each subscribe increments _feed_refs for both symbols."""
+    cache = PriceCache()
+    cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    assert cache._feed_refs[("BTC/USDT:USDT", "1h")] == 1
+    assert cache._feed_refs[("ETH/USDT:USDT", "1h")] == 1
+
+
+def test_symbol_deduplication_shared_feed():
+    """
+    BTC/ETH 1h and BTC/LTC 1h both need BTC → only ONE SymbolFeed for BTC.
+    """
+    cache = PriceCache()
+    cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    cache.subscribe("BTC/USDT:USDT", "LTC/USDT:USDT", "1h", 500)
+    # Three distinct symbols, three feeds
+    assert len(cache._feeds) == 3
+    assert cache._feed_refs[("BTC/USDT:USDT", "1h")] == 2  # shared by two pairs
+    assert cache._feed_refs[("ETH/USDT:USDT", "1h")] == 1
+    assert cache._feed_refs[("LTC/USDT:USDT", "1h")] == 1
+
+
+def test_unsubscribe_stops_feed_when_no_more_refs():
+    """When the last pair using a symbol is removed, its feed is stopped."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    feed_btc = cache._feeds[("BTC/USDT:USDT", "1h")]
+    cache.unsubscribe(key)
+    # Feed should be removed from _feeds
+    assert ("BTC/USDT:USDT", "1h") not in cache._feeds
+    # _stopped flag set
+    assert feed_btc._stopped is True
+
+
+def test_unsubscribe_keeps_feed_when_other_pair_still_uses_symbol():
+    """
+    BTC is used by two pairs. When one pair unsubscribes, BTC feed stays alive.
+    """
+    cache = PriceCache()
+    k1 = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    cache.subscribe("BTC/USDT:USDT", "LTC/USDT:USDT", "1h", 500)
+    cache.unsubscribe(k1)
+    # BTC feed should still exist (ref_count was 2 → 1)
+    assert ("BTC/USDT:USDT", "1h") in cache._feeds
+    assert cache._feed_refs[("BTC/USDT:USDT", "1h")] == 1
+
+
+# ---------------------------------------------------------------------------
+# _assemble_from_feeds
+# ---------------------------------------------------------------------------
+
+def _inject_candles(feed, rows: list[list]) -> None:
+    """Helper: inject raw candle rows [ts_ms, o, h, l, c, v] into a SymbolFeed."""
+    feed._candles.clear()
+    feed._candles.extend(rows)
+
+
+def _make_candle_rows(n: int, start_price: float) -> list[list]:
+    """Generate n fake candle rows with sequential timestamps."""
+    return [
+        [i * 3_600_000, start_price + i, start_price + i + 1,
+         start_price + i - 1, start_price + i, 100.0]
+        for i in range(n)
+    ]
+
+
+def test_assemble_from_feeds_populates_store():
+    """After injecting candles into both feeds, _assemble_from_feeds fills _store."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+
+    feed1 = cache._feeds[("BTC/USDT:USDT", "1h")]
+    feed2 = cache._feeds[("ETH/USDT:USDT", "1h")]
+    _inject_candles(feed1, _make_candle_rows(200, 60_000))
+    _inject_candles(feed2, _make_candle_rows(200, 3_000))
+
+    cache._assemble_from_feeds(key)
+    entry = cache.get(key)
+
+    assert entry is not None
+    assert "price1" in entry and "price2" in entry
+    assert "df1" in entry and "df2" in entry
+    assert len(entry["price1"]) == 200
+    assert len(entry["price2"]) == 200
+
+
+def test_assemble_from_feeds_aligns_on_common_timestamps():
+    """Prices are aligned on inner join of timestamps."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+
+    feed1 = cache._feeds[("BTC/USDT:USDT", "1h")]
+    feed2 = cache._feeds[("ETH/USDT:USDT", "1h")]
+    # feed1: timestamps 0,1,2,3 (ms × 3_600_000); feed2: timestamps 1,2,3,4
+    _inject_candles(feed1, _make_candle_rows(4, 60_000))        # ts 0,1,2,3
+    _inject_candles(feed2, [[r[0] + 3_600_000] + r[1:] for r in _make_candle_rows(4, 3_000)])  # ts 1,2,3,4
+
+    cache._assemble_from_feeds(key)
+    entry = cache.get(key)
+
+    # Inner join → only timestamps 1,2,3 are common
+    assert len(entry["price1"]) == 3
+    assert len(entry["price2"]) == 3
+
+
+def test_assemble_from_feeds_skips_if_feed_empty():
+    """If a feed has no candles yet, _store should NOT be overwritten."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+
+    # Inject data into one feed only; the other stays empty
+    feed1 = cache._feeds[("BTC/USDT:USDT", "1h")]
+    _inject_candles(feed1, _make_candle_rows(10, 60_000))
+
+    cache._assemble_from_feeds(key)
+    # _store should still be None because feed2 is empty
+    assert cache.get(key) is None
+
+
+# ---------------------------------------------------------------------------
+# wait_update
+# ---------------------------------------------------------------------------
+
+def test_wait_update_unblocks_when_feed_fires():
+    """wait_update should return after a kline event on one of the pair's feeds."""
+    cache = PriceCache()
+    key = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+
+    feed1 = cache._feeds[("BTC/USDT:USDT", "1h")]
+    feed2 = cache._feeds[("ETH/USDT:USDT", "1h")]
+    _inject_candles(feed1, _make_candle_rows(10, 60_000))
+    _inject_candles(feed2, _make_candle_rows(10, 3_000))
+    cache._assemble_from_feeds(key)
+
+    async def _run():
+        async def _fire_kline():
+            await asyncio.sleep(0.05)
+            feed1._handle_kline({"t": 99_000_000, "o": "1", "h": "2", "l": "0.5", "c": "1.5", "v": "1"})
+
+        asyncio.create_task(_fire_kline())
+        await asyncio.wait_for(cache.wait_update(key, timeout=1.0), timeout=2.0)
+        # After wait_update, store should be refreshed (new candle added)
+        entry = cache.get(key)
+        assert entry is not None
+
+    asyncio.run(_run())
+
+
+def test_wait_update_falls_back_to_timeout_when_no_feeds():
+    """wait_update on a key with no feeds (never subscribed) sleeps for timeout."""
+    cache = PriceCache()
+    phantom_key = ("X/USDT:USDT", "Y/USDT:USDT", "1h", 100)
+
+    async def _run():
+        import time
+        t0 = time.monotonic()
+        await cache.wait_update(phantom_key, timeout=0.1)
+        elapsed = time.monotonic() - t0
+        assert elapsed >= 0.09
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# stop_all
+# ---------------------------------------------------------------------------
+
+def test_wait_any_update_unblocks_on_first_feed():
+    """wait_any_update across multiple pairs unblocks when ANY feed fires."""
+    cache = PriceCache()
+    k1 = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+    k2 = cache.subscribe("SOL/USDT:USDT", "BNB/USDT:USDT", "1h", 100)
+    feed_btc = cache._feeds[("BTC/USDT:USDT", "1h")]
+    _inject_candles(feed_btc, _make_candle_rows(10, 60_000))
+    _inject_candles(cache._feeds[("ETH/USDT:USDT", "1h")], _make_candle_rows(10, 3_000))
+    _inject_candles(cache._feeds[("SOL/USDT:USDT", "1h")], _make_candle_rows(10, 100))
+    _inject_candles(cache._feeds[("BNB/USDT:USDT", "1h")], _make_candle_rows(10, 300))
+    cache._assemble_from_feeds(k1)
+    cache._assemble_from_feeds(k2)
+
+    async def _run():
+        async def _fire():
+            await asyncio.sleep(0.05)
+            # Fire only feed_btc (one of 4 feeds across 2 pairs)
+            feed_btc._handle_kline({"t": 99_000_000, "o": "1", "h": "2", "l": "0.5", "c": "1.5", "v": "1"})
+        asyncio.create_task(_fire())
+        await asyncio.wait_for(cache.wait_any_update([k1, k2], timeout=1.0), timeout=2.0)
+
+    asyncio.run(_run())
+
+
+def test_wait_any_update_refreshes_all_stores():
+    """After wait_any_update, all pair stores are updated, not just the one that fired."""
+    cache = PriceCache()
+    k1 = cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 100)
+    k2 = cache.subscribe("SOL/USDT:USDT", "BNB/USDT:USDT", "1h", 100)
+    for sym in ("BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT"):
+        _inject_candles(cache._feeds[(sym, "1h")], _make_candle_rows(10, 1_000))
+    # Neither pair assembled yet
+    assert cache.get(k1) is None
+    assert cache.get(k2) is None
+
+    async def _run():
+        async def _fire():
+            await asyncio.sleep(0.05)
+            cache._feeds[("BTC/USDT:USDT", "1h")]._notify()
+        asyncio.create_task(_fire())
+        await asyncio.wait_for(cache.wait_any_update([k1, k2], timeout=1.0), timeout=2.0)
+
+    asyncio.run(_run())
+    # Both stores should now be populated
+    assert cache.get(k1) is not None
+    assert cache.get(k2) is not None
+
+
+def test_stop_all_sets_stopped_flag_on_all_feeds():
+    """stop_all() must mark every SymbolFeed as stopped."""
+    cache = PriceCache()
+    cache.subscribe("BTC/USDT:USDT", "ETH/USDT:USDT", "1h", 500)
+    cache.subscribe("SOL/USDT:USDT", "ETH/USDT:USDT", "4h", 200)
+
+    asyncio.run(cache.stop_all())
+
+    for feed in cache._feeds.values():
+        assert feed._stopped is True

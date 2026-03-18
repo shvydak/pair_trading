@@ -18,6 +18,7 @@ from strategy import PairTradingStrategy
 import db
 from logger import get_logger
 from order_manager import ExecConfig, ExecContext, LegState, run_execution
+from symbol_feed import SymbolFeed
 import telegram_bot as tg_bot
 
 load_dotenv()
@@ -100,30 +101,61 @@ async def _run_sync(func, *args):
 
 class PriceCache:
     """
-    Centralised OHLCV cache.  Consumers call subscribe() to register a pair;
-    a single background task (run()) refreshes all subscribed keys every 5 s.
-    Reference-counting: entries are kept alive only while at least one
-    subscriber is active.
+    Centralised OHLCV cache backed by Binance WebSocket kline streams.
 
-    Key = (sym1, sym2, timeframe, limit)
-    Entry = {"price1": pd.Series, "price2": pd.Series, "df1": DataFrame, "df2": DataFrame}
+    Each (symbol, timeframe) is managed by one SymbolFeed instance — symbols
+    are deduplicated across all subscribed pairs (e.g. BTC used in 10 pairs
+    = 1 WS connection).  Consumers call subscribe()/unsubscribe() for
+    pair-level ref-counting.  The run() background task starts all feeds and
+    assembles pair data every ASSEMBLE_INTERVAL seconds.
+
+    Public API (unchanged from the previous REST-polling version):
+        subscribe(sym1, sym2, tf, limit) → key
+        unsubscribe(key)
+        get(key) → dict | None
+        find_cached(sym1, sym2, tf, limit) → dict | None
+
+    New:
+        wait_update(key, timeout) — event-driven push for /ws/stream
+        stop_all()               — graceful shutdown of all WS feeds
     """
 
-    FEED_INTERVAL = 2  # seconds between refreshes
+    ASSEMBLE_INTERVAL = 1.0  # seconds between store refresh cycles
 
-    def __init__(self) -> None:
+    def __init__(self, client=None) -> None:
+        self._client = client
         self._store: dict[tuple, dict] = {}
         self._refs:  dict[tuple, int]  = {}
+        # Symbol-level feed management
+        self._feeds:     dict[tuple, SymbolFeed] = {}  # (sym, tf) → SymbolFeed
+        self._feed_refs: dict[tuple, int]         = {}  # (sym, tf) → ref count
 
     def subscribe(self, sym1: str, sym2: str, tf: str, limit: int) -> tuple:
         key = (sym1, sym2, tf, limit)
         self._refs[key] = self._refs.get(key, 0) + 1
+        # Ensure a SymbolFeed exists for each symbol (not started yet — run() does that)
+        for sym in (sym1, sym2):
+            fk = (sym, tf)
+            if fk not in self._feeds:
+                self._feeds[fk] = SymbolFeed(sym, tf, self._client)
+                self._feed_refs[fk] = 0
+            self._feed_refs[fk] += 1
         return key
 
     def unsubscribe(self, key: tuple) -> None:
         if key not in self._refs:
             return
         self._refs[key] -= 1
+        sym1, sym2, tf, _ = key
+        for sym in (sym1, sym2):
+            fk = (sym, tf)
+            if fk in self._feed_refs:
+                self._feed_refs[fk] -= 1
+                if self._feed_refs[fk] <= 0:
+                    self._feed_refs.pop(fk, None)
+                    feed = self._feeds.pop(fk, None)
+                    if feed:
+                        feed.stop()
         if self._refs[key] <= 0:
             self._refs.pop(key, None)
             self._store.pop(key, None)
@@ -143,35 +175,121 @@ class PriceCache:
                 return entry
         return None
 
-    async def _refresh_one(self, key: tuple) -> None:
-        sym1, sym2, tf, limit = key
-        df1, df2 = await asyncio.gather(
-            client.fetch_ohlcv(sym1, tf, limit),
-            client.fetch_ohlcv(sym2, tf, limit),
-        )
-        p1 = df1["close"]
-        p2 = df2["close"]
+    def _assemble_from_feeds(self, key: tuple) -> None:
+        """Assemble a pair entry from SymbolFeed buffers and write to _store."""
+        sym1, sym2, tf, _ = key
+        feed1 = self._feeds.get((sym1, tf))
+        feed2 = self._feeds.get((sym2, tf))
+        if not feed1 or not feed2:
+            return
+        df1 = feed1.get_dataframe()
+        df2 = feed2.get_dataframe()
+        if df1 is None or df2 is None:
+            return
+        p1, p2 = df1["close"], df2["close"]
         p1, p2 = p1.align(p2, join="inner")
-        df1_aligned = df1.loc[p1.index]
-        df2_aligned = df2.loc[p2.index]
-        self._store[key] = {"price1": p1, "price2": p2, "df1": df1_aligned, "df2": df2_aligned}
+        if p1.empty:
+            return
+        self._store[key] = {
+            "price1": p1,
+            "price2": p2,
+            "df1": df1.loc[p1.index],
+            "df2": df2.loc[p2.index],
+        }
+
+    async def wait_update(self, key: tuple, timeout: float = 5.0) -> None:
+        """
+        Wait for a kline update on either symbol of this pair (up to timeout).
+        After returning, the store entry is refreshed with the latest data.
+        Used by /ws/stream for event-driven push instead of a fixed sleep.
+        """
+        sym1, sym2, tf, _ = key
+        feed1 = self._feeds.get((sym1, tf))
+        feed2 = self._feeds.get((sym2, tf))
+
+        tasks = []
+        if feed1:
+            gen1 = feed1._generation
+            tasks.append(asyncio.create_task(feed1.wait_for_update(gen1)))
+        if feed2:
+            gen2 = feed2._generation
+            tasks.append(asyncio.create_task(feed2.wait_for_update(gen2)))
+
+        if tasks:
+            try:
+                await asyncio.wait(
+                    tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+        else:
+            await asyncio.sleep(timeout)
+
+        self._assemble_from_feeds(key)
+
+    async def wait_any_update(self, keys: list[tuple], timeout: float = 5.0) -> None:
+        """
+        Wait for a kline update on ANY feed across all given pair keys (up to timeout).
+        Deduplicates feeds so BTC subscribed by 10 pairs waits on a single task.
+        After returning, all pair stores are refreshed.
+        Used by /ws/watchlist to push one batch update for all pairs.
+        """
+        tasks = []
+        seen_feeds: set[tuple] = set()
+        for key in keys:
+            sym1, sym2, tf, _ = key
+            for sym in (sym1, sym2):
+                fk = (sym, tf)
+                if fk in seen_feeds:
+                    continue
+                seen_feeds.add(fk)
+                feed = self._feeds.get(fk)
+                if feed:
+                    gen = feed._generation
+                    tasks.append(asyncio.create_task(feed.wait_for_update(gen)))
+
+        if tasks:
+            try:
+                await asyncio.wait(
+                    tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+        else:
+            await asyncio.sleep(timeout)
+
+        for key in keys:
+            self._assemble_from_feeds(key)
 
     async def run(self) -> None:
-        """Background task: refresh all subscribed keys every FEED_INTERVAL seconds."""
+        """Background task: start all feeds and refresh pair store every ASSEMBLE_INTERVAL."""
         while True:
-            keys = list(self._refs.keys())
-            if keys:
-                results = await asyncio.gather(
-                    *[self._refresh_one(k) for k in keys],
-                    return_exceptions=True,
-                )
-                for k, r in zip(keys, results):
-                    if isinstance(r, Exception):
-                        log.warning(f"price_cache refresh error {k}: {r}")
-            await asyncio.sleep(self.FEED_INTERVAL)
+            # Start any feeds that are registered but not yet running
+            for fk, feed in list(self._feeds.items()):
+                if self._feed_refs.get(fk, 0) > 0:
+                    feed.start()  # idempotent
+            # Assemble all subscribed pairs from their SymbolFeed buffers
+            for key in list(self._refs.keys()):
+                self._assemble_from_feeds(key)
+            await asyncio.sleep(self.ASSEMBLE_INTERVAL)
+
+    async def stop_all(self) -> None:
+        """Stop all SymbolFeed tasks — called on server shutdown."""
+        for feed in list(self._feeds.values()):
+            feed.stop()
+        tasks = [
+            f._task for f in self._feeds.values()
+            if f._task and not f._task.done()
+        ]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
-price_cache = PriceCache()
+price_cache = PriceCache(client)
 
 # Watchlist subscriptions: tag → cache_key
 # Tag format: "{sym1}|{sym2}|{tf}|{limit}"
@@ -318,11 +436,12 @@ async def monitor_position_triggers() -> None:
     1. Legacy: tp_zscore/sl_zscore columns on open_positions
     2. New: rows in the `triggers` table with status='active'
 
-    Fetches OHLCV directly (not via price_cache) with a small limit so it
-    can run every 2 s without hitting Binance rate limits.
+    Reads OHLCV from PriceCache (fed by WebSocket kline streams) instead of
+    fetching Binance REST directly.  Manages its own PriceCache subscriptions
+    so data is always live and ready.
 
     Optimisations:
-    - All OHLCV fetches for the cycle are gathered in parallel (one batch).
+    - Zero REST calls per cycle (data from WS feeds in PriceCache).
     - Hedge ratio for standalone triggers is cached with 60 s TTL.
     """
     await asyncio.sleep(15)  # wait for startup
@@ -332,6 +451,8 @@ async def monitor_position_triggers() -> None:
     # Hedge ratio cache for standalone triggers: (sym1, sym2, tf, limit) → (hedge, timestamp)
     _hedge_cache: dict[tuple, tuple[float, float]] = {}
     _HEDGE_TTL = 60.0  # recompute hedge ratio once per minute
+    # PriceCache subscriptions managed by the monitor
+    _monitor_keys: dict[str, tuple] = {}  # tag → cache_key
 
     while True:
         try:
@@ -341,11 +462,8 @@ async def monitor_position_triggers() -> None:
             positions = db.get_open_positions()
             active_triggers = db.get_active_triggers()
 
-            # Build a list of fetch tasks: (key, sym1, sym2, tf, limit)
-            fetch_specs = []  # list of (fetch_key, sym1, sym2, tf, limit)
-            # Map from fetch_key to items that need this data
-            pos_items = []   # (pos, tag, tp, sl, fetch_key)
-            trig_items = []  # (trig, tag, fetch_key)
+            pos_items = []   # (pos, tag, tp, sl, cache_key)
+            trig_items = []  # (trig, tag, cache_key)
 
             for pos in positions:
                 tp = pos.get("tp_zscore")
@@ -355,53 +473,41 @@ async def monitor_position_triggers() -> None:
                 pos_id = pos["id"]
                 tag = f"pos_{pos_id}"
                 current_tags.add(tag)
+                if tag not in _monitor_keys:
+                    pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
+                    pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
+                    limit = min(pos.get("candle_limit") or (pos_zw * 5), 500)
+                    _monitor_keys[tag] = price_cache.subscribe(
+                        pos["symbol1"], pos["symbol2"], pos_tf, limit
+                    )
                 if tag in closing_tags:
                     continue
-                pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
-                pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                limit = min(pos.get("candle_limit") or (pos_zw * 5), 500)
-                fk = (pos["symbol1"], pos["symbol2"], pos_tf, limit)
-                fetch_specs.append(fk)
-                pos_items.append((pos, tag, tp, sl, fk))
+                pos_items.append((pos, tag, tp, sl, _monitor_keys[tag]))
 
             for trig in active_triggers:
                 trig_id = trig["id"]
                 tag = f"trig_{trig_id}"
                 current_tags.add(tag)
+                if tag not in _monitor_keys:
+                    sym1, sym2 = trig["symbol1"], trig["symbol2"]
+                    trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
+                    trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
+                    limit = max(trig_zw * 3, 60)
+                    _monitor_keys[tag] = price_cache.subscribe(sym1, sym2, trig_tf, limit)
                 if tag in closing_tags:
                     continue
-                sym1, sym2 = trig["symbol1"], trig["symbol2"]
-                trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
-                trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                limit = max(trig_zw * 3, 60)
-                fk = (sym1, sym2, trig_tf, limit)
-                fetch_specs.append(fk)
-                trig_items.append((trig, tag, fk))
+                trig_items.append((trig, tag, _monitor_keys[tag]))
 
-            # ── Deduplicate and fetch all OHLCV in parallel ─────────────────
-            unique_specs = list(set(fetch_specs))
-            ohlcv_data = {}  # fk → (p1, p2) aligned Series
-            if unique_specs:
-                async def _fetch_pair(fk):
-                    s1, s2, tf, lim = fk
-                    df1, df2 = await asyncio.gather(
-                        client.fetch_ohlcv(s1, tf, lim),
-                        client.fetch_ohlcv(s2, tf, lim),
-                    )
-                    p1, p2 = df1["close"], df2["close"]
-                    p1, p2 = p1.align(p2, join="inner")
-                    return fk, p1, p2
+            # Unsubscribe stale tags (closed positions / cancelled triggers)
+            for tag in set(_monitor_keys) - current_tags:
+                price_cache.unsubscribe(_monitor_keys.pop(tag))
 
-                results = await asyncio.gather(
-                    *[_fetch_pair(fk) for fk in unique_specs],
-                    return_exceptions=True,
-                )
-                for r in results:
-                    if isinstance(r, Exception):
-                        log.warning(f"monitor: batch fetch error: {r}")
-                        continue
-                    fk, p1, p2 = r
-                    ohlcv_data[fk] = (p1, p2)
+            # ── Build ohlcv_data from PriceCache (no REST calls) ────────────
+            ohlcv_data = {}  # cache_key → (p1, p2) aligned Series
+            for tag, cache_key in _monitor_keys.items():
+                entry = price_cache.get(cache_key)
+                if entry is not None:
+                    ohlcv_data[cache_key] = (entry["price1"], entry["price2"])
 
             # ── 1. Legacy: open_positions with tp_zscore/sl_zscore ──────────
             for pos, tag, tp, sl, fk in pos_items:
@@ -661,6 +767,7 @@ async def lifespan(app: FastAPI):
     for t in _bg_tasks:
         t.cancel()
     await asyncio.gather(*_bg_tasks, return_exceptions=True)
+    await price_cache.stop_all()
     await client.close()
     await tg_bot.stop()
     log.info("Pair Trading backend stopped")
@@ -1879,8 +1986,9 @@ async def execute_trade(req: TradeRequest):
 async def websocket_stream(websocket: WebSocket):
     """
     Accept {symbol1, symbol2, timeframe, zscore_window, limit, hedge_ratio}
-    and broadcast live updates every 5 seconds.
-    Reads from price_cache — no direct Binance calls while the feed is running.
+    and broadcast live updates on every kline event (event-driven, no fixed sleep).
+    Reads from price_cache which is backed by Binance WebSocket kline streams.
+    Falls back to a 5 s timeout if no kline arrives within that window.
     """
     await websocket.accept()
     cache_key = None
@@ -1922,7 +2030,8 @@ async def websocket_stream(websocket: WebSocket):
                     await websocket.send_text(json.dumps(payload))
                 except Exception as inner_e:
                     await websocket.send_text(json.dumps({"error": str(inner_e)}))
-            await asyncio.sleep(2)
+            # Wait for next kline event (up to 5 s) — event-driven push
+            await price_cache.wait_update(cache_key, timeout=5.0)
 
     except WebSocketDisconnect:
         pass
@@ -1931,6 +2040,115 @@ async def websocket_stream(websocket: WebSocket):
     finally:
         if cache_key is not None:
             price_cache.unsubscribe(cache_key)
+
+
+@app.websocket("/ws/watchlist")
+async def websocket_watchlist(websocket: WebSocket):
+    """
+    Event-driven watchlist z-score feed.  Replaces 5 s HTTP polling.
+
+    Protocol:
+      Client → Server:  JSON array of {sym1, sym2, timeframe, limit, zscore_window}
+                        Send once on connect and again whenever the watchlist changes.
+      Server → Client:  JSON array of {sym1, sym2, timeframe, current_zscore, spread}
+                        Pushed immediately after each kline event from any subscribed feed.
+    """
+    await websocket.accept()
+    subscribed_keys: dict[str, tuple] = {}   # tag → cache_key
+    current_items: list[dict] = []
+    send_lock = asyncio.Lock()
+
+    def _item_tag(item: dict) -> str:
+        sym1 = _normalise_symbol(item.get("sym1", ""))
+        sym2 = _normalise_symbol(item.get("sym2", ""))
+        tf   = item.get("timeframe", "1h")
+        lim  = int(item.get("limit", 100))
+        return f"{sym1}|{sym2}|{tf}|{lim}"
+
+    def _reconcile(raw_items: list[dict]) -> None:
+        nonlocal current_items
+        current_items = raw_items
+        new_tags: set[str] = set()
+        for item in raw_items:
+            sym1 = _normalise_symbol(item.get("sym1", ""))
+            sym2 = _normalise_symbol(item.get("sym2", ""))
+            tf   = item.get("timeframe", "1h")
+            lim  = int(item.get("limit", 100))
+            tag  = f"{sym1}|{sym2}|{tf}|{lim}"
+            new_tags.add(tag)
+            if tag not in subscribed_keys:
+                subscribed_keys[tag] = price_cache.subscribe(sym1, sym2, tf, lim)
+        for tag in set(subscribed_keys) - new_tags:
+            price_cache.unsubscribe(subscribed_keys.pop(tag))
+
+    async def _compute_and_send() -> None:
+        if not current_items:
+            return
+
+        data_pairs = []
+        for item in current_items:
+            sym1 = _normalise_symbol(item.get("sym1", ""))
+            sym2 = _normalise_symbol(item.get("sym2", ""))
+            tf   = item.get("timeframe", "1h")
+            lim  = int(item.get("limit", 100))
+            zw   = int(item.get("zscore_window", 20))
+            tag  = f"{sym1}|{sym2}|{tf}|{lim}"
+            key  = subscribed_keys.get(tag)
+            entry = price_cache.get(key) if key else None
+            data_pairs.append((item, sym1, sym2, tf, zw, entry))
+
+        def _batch():
+            results = []
+            for item, sym1, sym2, tf, zw, entry in data_pairs:
+                out = {"sym1": item.get("sym1"), "sym2": item.get("sym2"),
+                       "timeframe": tf, "current_zscore": None, "spread": None}
+                if entry is not None:
+                    try:
+                        p1, p2 = entry["price1"], entry["price2"]
+                        h  = strategy.calculate_hedge_ratio(p1, p2)
+                        sp = strategy.calculate_spread(p1, p2, h)
+                        zs = strategy.calculate_zscore(sp, window=zw)
+                        zd = zs.dropna()
+                        out["current_zscore"] = float(zd.iloc[-1]) if not zd.empty else None
+                        out["spread"]         = float(sp.iloc[-1]) if not sp.empty else None
+                    except Exception:
+                        pass
+                results.append(out)
+            return results
+
+        results = await _run_sync(_batch)
+        async with send_lock:
+            try:
+                await websocket.send_text(json.dumps(_clean(results)))
+            except Exception:
+                pass
+
+    async def _receive_task() -> None:
+        """Receive updated watchlist from client and reconcile subscriptions."""
+        try:
+            async for msg in websocket.iter_text():
+                _reconcile(json.loads(msg))
+                await _compute_and_send()
+        except Exception:
+            pass
+
+    async def _push_task() -> None:
+        """Push z-score updates on every kline event from any subscribed feed."""
+        while True:
+            await price_cache.wait_any_update(list(subscribed_keys.values()), timeout=5.0)
+            await _compute_and_send()
+
+    recv = asyncio.create_task(_receive_task())
+    push = asyncio.create_task(_push_task())
+    try:
+        await asyncio.gather(recv, push)
+    except Exception:
+        pass
+    finally:
+        recv.cancel()
+        push.cancel()
+        for key in subscribed_keys.values():
+            price_cache.unsubscribe(key)
 
 
 # ---------------------------------------------------------------------------

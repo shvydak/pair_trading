@@ -21,6 +21,7 @@ runs backtests, and executes live trades via Binance API.
 pair_trading/
 ├── backend/
 │   ├── main.py              # FastAPI app — REST endpoints + WebSocket
+│   ├── symbol_feed.py       # Binance WS kline stream per (symbol, timeframe); feeds PriceCache
 │   ├── strategy.py          # Pair trading math (cointegration, z-score, backtest)
 │   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
@@ -36,7 +37,8 @@ pair_trading/
 │   ├── test_db.py           # 55 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
 │   ├── test_order_manager.py # 4 tests — Smart v2 repricing / semi-aggressive / dust rules
-│   ├── test_price_cache.py  # 17 tests — PriceCache ref-counting
+│   ├── test_price_cache.py  # 33 tests — PriceCache ref-counting, SymbolFeed assembly, wait_any_update
+│   ├── test_symbol_feed.py  # 15 tests — SymbolFeed buffer, kline handling, event-driven updates
 │   ├── test_watchlist.py    #  8 tests — WatchlistItem model validation
 │   └── test_telegram_bot.py # 56 tests — telegram_bot formatters, config, send(), notify_*
 ├── logs/
@@ -67,7 +69,7 @@ Open `frontend/index.html` directly in browser (no build/server needed).
 
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 213 tests
+.venv/bin/pytest tests/ -v        # all 246 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -108,9 +110,10 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center           |
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
 | GET    | `/api/executions/history`    | Persisted terminal execution snapshots from SQLite (`?limit=100`)                                               |
-| POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair                         |
+| POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair (legacy HTTP fallback)  |
 | POST   | `/api/batch/sparklines`      | Batch z-score/spread data for multiple positions; uses PriceCache when available                                 |
-| WS     | `/ws/stream`                 | Live spread/price/Z-score updates every 2 seconds for the active analysed pair                                  |
+| WS     | `/ws/stream`                 | Live spread/price/Z-score updates, event-driven on each kline (≤5 s timeout) for the active analysed pair       |
+| WS     | `/ws/watchlist`              | Event-driven watchlist z-score/spread feed; replaces 5 s HTTP polling; client sends full list, server pushes    |
 
 ### `GET /api/pre_trade_check` — query params
 
@@ -225,7 +228,9 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `localStorage['pt_watchlist']` — сохраняет **все параметры анализа** при добавлении пары
 - **Ключ дедупликации**: `(sym1, sym2, timeframe)` — одна и та же пара с разным таймфреймом хранится как отдельная запись; добавление BTC/ETH 5m не перезаписывает BTC/ETH 4h
 - **Группировка по таймфреймам** в `renderWatchlist()`: заголовки-разделители, порядок 5m→15m→30m→1h→2h→4h→8h→1d
-- Z-score/spread обновляются каждые **5 сек** через `POST /api/watchlist/data` (PriceCache); ответ содержит `timeframe` для точного матчинга записей
+- Z-score/spread обновляются **event-driven** через `WS /ws/watchlist` (приходят на каждый kline с Binance, max задержка 5 с); ответ содержит `timeframe` для точного матчинга записей
+- `connectWatchlistWS()` открывает WS при старте; `_sendWatchlistToWs()` шлёт обновлённый список при add/remove; реконнект с backoff (1 s → 30 s)
+- `_applyWatchlistUpdate(data)` — общая функция обработки входящих данных (in-place DOM патч)
 - Threshold индикация: `|z| >= entryZ*0.75` → жёлтый; `|z| >= entryZ` → красный + мигание
 - Подсветка активной пары обновляется сразу после `runAnalyze()` (не ждёт 5s тик)
 
@@ -258,30 +263,46 @@ BINANCE_SECRET=...
 Public endpoints (symbols, history, backtest) work without API keys.
 Private endpoints (positions, balance, trade) require valid keys.
 
+## SymbolFeed (`backend/symbol_feed.py`)
+
+Live OHLCV candle buffer per `(symbol, timeframe)` — the single source of price data for all consumers.
+
+- Connects to `wss://fstream.binance.com/stream?streams={sym}@kline_{tf}` (one WS per symbol×timeframe)
+- Loads initial history via REST once on startup; WS updates the current candle in-place or appends when it closes
+- Auto-reconnect with exponential backoff (1 s → 60 s); REST refresh on each reconnect to fill gaps
+- `get_dataframe() → pd.DataFrame | None` — returns deque as DataFrame; returns `None` if empty
+- `wait_for_update(after_gen) → int` — async, event-driven; safe for N concurrent waiters ("replace event" pattern)
+- `start()` / `stop()` — idempotent; `start()` is called from `PriceCache.run()`
+- `_to_ws_symbol("BTC/USDT:USDT") → "btcusdt"` — ccxt format → Binance stream name
+
 ## Price Cache (`backend/main.py` — class `PriceCache`)
 
-Centralised OHLCV data feed shared by **WebSocket** and **watchlist** consumers.
+Centralised pair-level cache, assembled from SymbolFeed buffers. Single source of truth for all live consumers.
 
 > **АРХИТЕКТУРНЫЙ ПРИНЦИП — соблюдать всегда:**
-> WebSocket и watchlist читают live-данные из PriceCache.
-> Монитор TP/SL (`monitor_position_triggers`) делает **прямые** `fetch_ohlcv` каждые 2 с — он намеренно NOT использует PriceCache, чтобы не быть ограниченным его циклом обновления.
-> Прямые вызовы `client.fetch_ohlcv()` допустимы только в трёх случаях:
+> Все live-данные (chart WS, watchlist WS, монитор TP/SL) читают из PriceCache, который питается от Binance WS kline streams через SymbolFeed.
+> Прямые вызовы `client.fetch_ohlcv()` допустимы только в двух случаях:
 >
-> 1.   Исторические данные для анализа/бэктеста (`/api/history`, `/api/backtest`)
-> 2.   Первичное заполнение кэша, если он ещё пуст (seed на первом вызове)
-> 3.   Монитор TP/SL — маленькие запросы (`min(candle_limit, 500)` свечей) каждые 2 с
->      **Никогда не создавай новые polling-таймеры на фронтенде, делающие прямые запросы к `/api/history` для получения live-данных — всегда используй `/api/watchlist/data` или WebSocket.**
+> 1. Исторические данные для анализа/бэктеста (`/api/history`, `/api/backtest`)
+> 2. Первичное заполнение кэша при cache miss (seed в watchlist HTTP endpoint)
+>
+> **Никогда не создавай новые polling-таймеры на фронтенде для live-данных — используй `/ws/watchlist` или `/ws/stream`.**
 
 - **Key**: `(sym1, sym2, timeframe, limit)` — one entry per unique pair config
-- **Entry**: `{"price1": pd.Series, "price2": pd.Series, "df1": DataFrame, "df2": DataFrame}` — close prices + full OHLCV DataFrames, aligned
-- `price_cache.subscribe(sym1, sym2, tf, limit) → key` — registers pair; reference-counted
-- `price_cache.unsubscribe(key)` — decrements ref; entry removed when count reaches 0
-- `price_cache.get(key) → dict | None` — read without network call; `None` if not yet populated
-- `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds any entry with matching `(sym1, sym2, tf)` and `cached_limit >= limit`; used by `/api/history` and `/api/batch/sparklines` to skip Binance calls for watchlist pairs
-- `price_cache.run()` — background `asyncio.Task` started in `lifespan`; refreshes all subscribed keys every **2 s** (`FEED_INTERVAL = 2`) via `fetch_ohlcv × 2`
-- **WebSocket** (`/ws/stream`): subscribes on connect, reads from cache each **2 s** loop, unsubscribes in `finally`
-- **monitor_position_triggers**: does **NOT** use PriceCache; fetches OHLCV directly every 2 s with limit `min(candle_limit, 500)` (reads `candle_limit` from DB position); no `monitored_keys` dict
-- **Watchlist** (`POST /api/watchlist/data`): maintains `_watchlist_keys: dict[tag → cache_key]` at module level; subscribes each pair on first call, unsubscribes pairs removed from watchlist; frontend polls every 5 s — one request for the whole watchlist; on cache miss seeds `price_cache._store[key]` directly (incl. df1/df2) before returning
+- **Entry**: `{"price1": pd.Series, "price2": pd.Series, "df1": DataFrame, "df2": DataFrame}` — close prices + full OHLCV DataFrames, aligned on common timestamps
+- **Symbol-level dedup**: `_feeds: dict[(sym, tf), SymbolFeed]` — BTC in 10 pairs = 1 WS connection; `_feed_refs` counts how many pair-keys use each feed
+- `price_cache.subscribe(sym1, sym2, tf, limit) → key` — creates SymbolFeeds if needed; ref-counted
+- `price_cache.unsubscribe(key)` — decrements refs; stops SymbolFeed when its ref count reaches 0; removes `_store[key]`
+- `price_cache.get(key) → dict | None` — read-only; `None` if not yet assembled
+- `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds entry with matching `(sym1, sym2, tf)` and key limit `>= requested`; used by `/api/history` and `/api/batch/sparklines`
+- `price_cache.run()` — background task in lifespan; calls `feed.start()` on all registered feeds; reassembles all pair stores every `ASSEMBLE_INTERVAL = 1 s`
+- `price_cache.wait_update(key, timeout=5.0)` — waits for next kline on either symbol of the pair; used by `/ws/stream` for event-driven push
+- `price_cache.wait_any_update(keys, timeout=5.0)` — waits for ANY kline across a list of pairs (deduplicates feeds); used by `/ws/watchlist`
+- `price_cache.stop_all()` — stops all SymbolFeed tasks; called in lifespan shutdown before `client.close()`
+- **`/ws/stream`**: subscribes on connect, pushes on each kline event (`wait_update`, ≤5 s timeout), unsubscribes in `finally`
+- **`/ws/watchlist`**: per-connection subscriptions; two tasks: `_receive_task` reconciles pairs, `_push_task` pushes on `wait_any_update`; unsubscribes all on disconnect
+- **`monitor_position_triggers`**: manages own `_monitor_keys: dict[tag → cache_key]` (local to the coroutine); subscribes active positions/triggers to PriceCache; reads from cache each 2 s cycle — zero direct Binance calls
+- **`POST /api/watchlist/data`** (HTTP, legacy): maintains module-level `_watchlist_keys`; on cache miss seeds `price_cache._store[key]` directly and spawns `_precompute_coint` background task
 
 ## Logging & Persistence
 
@@ -333,7 +354,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 - Balance check formula: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Order of validation: balance → min_notional → lot_size → leverage (informational)
-- monitor_position_triggers runs every **2 s** — direct `fetch_ohlcv` with limit `min(candle_limit, 500)`; uses `pos.timeframe`/`pos.zscore_window`/`pos.candle_limit` from DB (not hardcoded constants)
+- monitor_position_triggers runs every **2 s** — reads from **PriceCache** (zero direct Binance calls); manages `_monitor_keys: dict[tag → cache_key]` (local to coroutine); subscribes active positions/triggers, unsubscribes stale ones each cycle; uses `pos.timeframe`/`pos.zscore_window`/`pos.candle_limit` from DB
 - **Direction-agnostic TP/SL**: uses `abs(current_z)` for comparison — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values are always positive (e.g. TP=0.5, SL=4.0); works identically for `long_spread` and `short_spread`
 - **Double-close prevention**: `closing_tags: dict[str, float]` (tag-based, e.g. `pos_5`, `trig_12`) + `closing_pairs: set[tuple]` (pair-based, e.g. `(sym1, sym2)`) — prevents same pair from being closed simultaneously by both position TP and standalone trigger
 - **Parallel OHLCV fetch**: monitor collects all fetch specs from positions and triggers, deduplicates by `(sym1, sym2, tf, limit)`, fetches all in single `asyncio.gather`
@@ -418,7 +439,7 @@ await tg_bot.stop()                            # stop polling + close session
 
 ## Tests (`tests/`)
 
-218 unit-тестов (9 файлов), все проходят ~3.5–4.5 сек. Запуск: `.venv/bin/pytest tests/ -v`
+246 unit-тестов (10 файлов), все проходят ~3.5–4.5 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
 | Файл                    | Тестов | Покрытие                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -426,7 +447,8 @@ await tg_bot.stop()                            # stop polling + close session
 | `test_db.py`            | 56     | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern**, **execution_history** (save, idempotent, is_close, empty, limit, order, statuses) |
 | `test_helpers.py`       | 26     | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация                                                                                                                                                                                                                                                                                                               |
 | `test_order_manager.py` | 4      | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance                                                                                                                                                                                                                                                       |
-| `test_price_cache.py`   | 22     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle, `find_cached` (exact/larger/smaller limit, different tf, empty)                                                                                                                                                                                                                                |
+| `test_price_cache.py`   | 33     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle, `find_cached`; SymbolFeed assembly, symbol deduplication, `wait_update`, `wait_any_update`, `stop_all`                                                                                                                                                                                         |
+| `test_symbol_feed.py`   | 15     | SymbolFeed: `_to_ws_symbol`, buffer update vs append, `_notify` generation, `wait_for_update` (multiple waiters), `_load_initial` with `client=None`, `start` idempotency                                                                                                                                                                                                            |
 | `test_watchlist.py`     | 8      | WatchlistItem Pydantic model: defaults, custom fields, required fields validation                                                                                                                                                                                                                                                                                                     |
 | `test_telegram_bot.py`  | 56     | Formatters, is*configured, send() safety, all notify*\* content (via `_fire` mock); uses `asyncio.run()` — no pytest-asyncio needed                                                                                                                                                                                                                                                   |
 | `test_lifespan.py`      | 5      | asyncio graceful shutdown pattern: infinite tasks cancelled, `CancelledError` absorbed by `return_exceptions=True`, already-done tasks unharmed, mixed task types                                                                                                                                                                                                                     |
