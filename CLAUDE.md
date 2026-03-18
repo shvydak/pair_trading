@@ -157,11 +157,11 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 
 ## Strategy Logic (`strategy.py`)
 
-- **Hedge ratio**: OLS regression on log prices — `log(P1) = β * log(P2) + α`
+- **Hedge ratio**: OLS via `numpy.linalg.lstsq` on log prices — `log(P1) = β * log(P2) + α` (replaced statsmodels OLS for ~10x speedup)
 - **Spread**: `log(P1) - β * log(P2)`
 - **Z-score**: rolling `(spread - mean) / std` with configurable window
-- **Cointegration**: Engle-Granger test via `statsmodels.tsa.stattools.coint`
-- **Half-life**: AR(1) on spread differences — `half_life = -log(2) / log(φ)`
+- **Cointegration**: Engle-Granger test via `statsmodels.tsa.stattools.coint(maxlag=10)` — fixed maxlag avoids slow auto-selection
+- **Half-life**: AR(1) via `numpy.linalg.lstsq` — `half_life = -log(2) / log(φ)` (replaced statsmodels OLS)
 - **Hurst exponent**: R/S analysis — H < 0.5 means mean-reverting
 - **Backtest signals**: enter at `|z| > entry_threshold`, exit at `|z| < exit_threshold`
 - **ATR**: `calculate_atr(df, period=14)` — average true range from OHLCV DataFrame
@@ -338,7 +338,9 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **Double-close prevention**: `closing_tags: dict[str, float]` (tag-based, e.g. `pos_5`, `trig_12`) + `closing_pairs: set[tuple]` (pair-based, e.g. `(sym1, sym2)`) — prevents same pair from being closed simultaneously by both position TP and standalone trigger
 - **Parallel OHLCV fetch**: monitor collects all fetch specs from positions and triggers, deduplicates by `(sym1, sym2, tf, limit)`, fetches all in single `asyncio.gather`
 - **Hedge ratio cache**: `_hedge_cache: dict[tuple, (float, float)]` with 60s TTL for standalone triggers — avoids recalculating every 2s
-- `_run_sync(func, *args)` — runs CPU-bound functions (OLS, cointegration, z-score) in thread-pool via `loop.run_in_executor()`
+- `_run_sync(func, *args)` — runs CPU-bound functions (cointegration, z-score, etc.) in thread-pool via `asyncio.get_running_loop().run_in_executor()`
+- **Cointegration cache**: `_coint_cache: dict[tuple, (dict, float)]` with 10-min TTL — `(sym1, sym2, tf, limit) → (result, timestamp)`; used by `/api/history` to skip expensive recomputation
+- **Background coint precompute**: `_precompute_coint(key, p1, p2)` — async task spawned by `get_watchlist_data` for stale/missing entries; after ~15s priming, watchlist pairs analyze instantly
 - Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
 
 ## Telegram Bot (`telegram_bot.py`)

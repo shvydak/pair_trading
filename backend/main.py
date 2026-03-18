@@ -71,6 +71,22 @@ _exec_saved_to_db: set[str] = set()
 
 SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
 
+# Cointegration result cache: (sym1, sym2, tf, limit) → (result_dict, timestamp)
+_coint_cache: dict[tuple, tuple[dict, float]] = {}
+_COINT_TTL = 600.0  # recompute cointegration at most once per 10 minutes per pair/limit
+_coint_computing: set[tuple] = set()  # keys with a background precompute already running
+
+
+async def _precompute_coint(key: tuple, p1, p2) -> None:
+    """Background task: compute cointegration and store in cache."""
+    try:
+        result = await _run_sync(strategy.cointegration_test, p1, p2)
+        _coint_cache[key] = (result, time.monotonic())
+    except Exception as e:
+        log.debug(f"coint precompute failed for {key}: {e}")
+    finally:
+        _coint_computing.discard(key)
+
 
 async def _run_sync(func, *args):
     """Run a CPU-bound function in a thread-pool so it doesn't block the event loop."""
@@ -721,20 +737,32 @@ async def get_history(
             df2 = df2.loc[price2.index]
 
         # CPU-bound stats — run in thread pool so the event loop stays responsive
+        coint_key = (sym1, sym2, timeframe, limit)
+        cached_coint = _coint_cache.get(coint_key)
+        now_mono = time.monotonic()
+
         def _compute_stats():
             hr = strategy.calculate_hedge_ratio(price1, price2)
             sp = strategy.calculate_spread(price1, price2, hr)
             zs = strategy.calculate_zscore(sp, window=zscore_window)
-            coint = strategy.cointegration_test(price1, price2)
+            # Use cached cointegration if still fresh (expensive test, changes slowly)
+            if cached_coint and (now_mono - cached_coint[1]) < _COINT_TTL:
+                ct = cached_coint[0]
+            else:
+                ct = strategy.cointegration_test(price1, price2)
             hl = strategy.calculate_half_life(sp)
             hu = strategy.calculate_hurst_exponent(sp)
             corr = strategy.calculate_correlation(price1, price2)
             a1 = strategy.calculate_atr(df1)
             a2 = strategy.calculate_atr(df2)
-            return hr, sp, zs, coint, hl, hu, corr, a1, a2
+            return hr, sp, zs, ct, hl, hu, corr, a1, a2
 
         hedge_ratio, spread, zscore, coint_result, half_life, hurst, correlation, atr1, atr2 = \
             await _run_sync(_compute_stats)
+
+        # Store fresh cointegration result in cache
+        if not cached_coint or (now_mono - cached_coint[1]) >= _COINT_TTL:
+            _coint_cache[coint_key] = (coint_result, now_mono)
 
         timestamps = [str(ts) for ts in price1.index]
 
@@ -862,6 +890,23 @@ async def get_watchlist_data(items: list[WatchlistItem]):
             "current_zscore": _safe_float(cz),
             "spread": _safe_float(ls),
         })
+
+    # Precompute cointegration in background for pairs where cache is missing or stale
+    now_mono = time.monotonic()
+    for entry in cached_items:
+        if entry is None:
+            continue
+        item, cached = entry
+        sym1 = _normalise_symbol(item.sym1)
+        sym2 = _normalise_symbol(item.sym2)
+        coint_key = (sym1, sym2, item.timeframe, item.limit)
+        cached_coint = _coint_cache.get(coint_key)
+        already_fresh = cached_coint and (now_mono - cached_coint[1]) < _COINT_TTL
+        if not already_fresh and coint_key not in _coint_computing:
+            _coint_computing.add(coint_key)
+            asyncio.create_task(
+                _precompute_coint(coint_key, cached["price1"].copy(), cached["price2"].copy())
+            )
 
     # Unsubscribe pairs removed from watchlist
     for tag in set(_watchlist_keys) - new_tags:

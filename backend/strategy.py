@@ -1,8 +1,6 @@
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import coint
-from statsmodels.regression.linear_model import OLS
-from statsmodels.tools import add_constant
 from scipy import stats
 
 
@@ -24,10 +22,9 @@ class PairTradingStrategy:
         # Align on common index
         log1, log2 = log1.align(log2, join="inner")
 
-        X = add_constant(log2)
-        model = OLS(log1, X).fit()
-        hedge_ratio = float(model.params.iloc[1])
-        return hedge_ratio
+        X = np.column_stack([np.ones(len(log2)), log2.values])
+        coeffs, _, _, _ = np.linalg.lstsq(X, log1.values, rcond=None)
+        return float(coeffs[1])
 
     @staticmethod
     def calculate_spread(
@@ -61,7 +58,7 @@ class PairTradingStrategy:
         log2 = np.log(price2.dropna())
         log1, log2 = log1.align(log2, join="inner")
 
-        score, pvalue, critical_values = coint(log1, log2)
+        score, pvalue, critical_values = coint(log1, log2, maxlag=10)
         return {
             "cointegrated": bool(pvalue < 0.05),
             "pvalue": float(pvalue),
@@ -87,11 +84,9 @@ class PairTradingStrategy:
         delta = spread_clean.diff().dropna()
         lag, delta = lag.align(delta, join="inner")
 
-        X = add_constant(lag)
-        model = OLS(delta, X).fit()
-        # AR(1): delta_S = alpha + beta*S_{t-1} + eps
-        # phi = 1 + beta  (the AR coefficient)
-        beta = float(model.params.iloc[1])
+        X = np.column_stack([np.ones(len(lag)), lag.values])
+        coeffs, _, _, _ = np.linalg.lstsq(X, delta.values, rcond=None)
+        beta = float(coeffs[1])
         phi = 1.0 + beta
 
         if phi <= 0 or phi >= 1:
