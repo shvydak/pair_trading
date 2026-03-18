@@ -2,6 +2,8 @@
 Live OHLCV candle feed for a single (symbol, timeframe) pair
 via Binance fstream WebSocket kline stream.
 
+Also provides BookTickerFeed — real-time best bid/ask for smart order execution.
+
 Consumed by PriceCache to replace REST polling.
 """
 import asyncio
@@ -229,3 +231,100 @@ class SymbolFeed:
             backoff = min(backoff * 2, 60.0)
             # Refresh history on reconnect to fill any gap
             await self._load_initial()
+
+
+class BookTickerFeed:
+    """
+    Real-time best bid/ask for a single symbol via Binance bookTicker stream.
+
+    Consumed by order_manager to get fresh prices without REST round-trips.
+
+    Flow:
+      1. start() spawns a background asyncio.Task.
+      2. Task connects to {sym}@bookTicker stream.
+      3. Each message updates _bid/_ask in-place.
+      4. Auto-reconnect with exponential backoff (1 s → 60 s).
+
+    Usage:
+      bid, ask = feed.get_best()   # None, None until first message arrives
+    """
+
+    WS_BASE = "wss://fstream.binance.com/stream"
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+        self._bid: Optional[float] = None
+        self._ask: Optional[float] = None
+        self._task: Optional[asyncio.Task] = None
+        self._stopped: bool = False
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Spawn the background feed task (idempotent)."""
+        if self._task is None or self._task.done():
+            self._stopped = False
+            self._task = asyncio.create_task(
+                self._run(), name=f"bookticker-{self.symbol}"
+            )
+
+    def stop(self) -> None:
+        """Request graceful shutdown."""
+        self._stopped = True
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+    def get_best(self) -> tuple[Optional[float], Optional[float]]:
+        """Return (bid, ask) or (None, None) if no data yet."""
+        return self._bid, self._ask
+
+    # ── internals ─────────────────────────────────────────────────────────────
+
+    def _handle_message(self, data: dict) -> None:
+        payload = data.get("data", data)
+        if payload.get("e") == "bookTicker":
+            b = payload.get("b")
+            a = payload.get("a")
+            if b and a:
+                self._bid = float(b)
+                self._ask = float(a)
+
+    async def _run(self) -> None:
+        ws_sym = _to_ws_symbol(self.symbol)
+        url = f"{self.WS_BASE}?streams={ws_sym}@bookTicker"
+        backoff = 1.0
+
+        while not self._stopped:
+            try:
+                timeout = aiohttp.ClientTimeout(total=None, connect=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.ws_connect(
+                        url, heartbeat=20, max_msg_size=0
+                    ) as ws:
+                        backoff = 1.0
+                        log.info(f"BookTickerFeed {self.symbol}: WS connected")
+                        async for msg in ws:
+                            if self._stopped:
+                                return
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                self._handle_message(json.loads(msg.data))
+                            elif msg.type in (
+                                aiohttp.WSMsgType.CLOSED,
+                                aiohttp.WSMsgType.ERROR,
+                            ):
+                                log.warning(
+                                    f"BookTickerFeed {self.symbol}: WS {msg.type.name}"
+                                )
+                                break
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                log.warning(f"BookTickerFeed {self.symbol}: error: {e}")
+
+            if self._stopped:
+                return
+            log.info(
+                f"BookTickerFeed {self.symbol}: reconnecting in {backoff:.0f}s"
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)

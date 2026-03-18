@@ -21,7 +21,8 @@ runs backtests, and executes live trades via Binance API.
 pair_trading/
 ├── backend/
 │   ├── main.py              # FastAPI app — REST endpoints + WebSocket
-│   ├── symbol_feed.py       # Binance WS kline stream per (symbol, timeframe); feeds PriceCache
+│   ├── symbol_feed.py       # Binance WS kline + bookTicker feeds (SymbolFeed, BookTickerFeed); feeds PriceCache
+│   ├── user_data_feed.py    # Binance User Data Stream — real-time order fill notifications (UserDataFeed)
 │   ├── strategy.py          # Pair trading math (cointegration, z-score, backtest)
 │   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
@@ -33,14 +34,15 @@ pair_trading/
 │   └── index.html           # Single-file UI (Tailwind + Chart.js, no build step)
 ├── tests/
 │   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
-│   ├── test_strategy.py     # 40 tests — all strategy math
-│   ├── test_db.py           # 55 tests — SQLite persistence layer
+│   ├── test_strategy.py     # 41 tests — all strategy math
+│   ├── test_db.py           # 56 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
 │   ├── test_order_manager.py # 4 tests — Smart v2 repricing / semi-aggressive / dust rules
-│   ├── test_price_cache.py  # 33 tests — PriceCache ref-counting, SymbolFeed assembly, wait_any_update
+│   ├── test_price_cache.py  # 35 tests — PriceCache ref-counting, SymbolFeed assembly, wait_any_update
 │   ├── test_symbol_feed.py  # 15 tests — SymbolFeed buffer, kline handling, event-driven updates
 │   ├── test_watchlist.py    #  8 tests — WatchlistItem model validation
-│   └── test_telegram_bot.py # 56 tests — telegram_bot formatters, config, send(), notify_*
+│   ├── test_telegram_bot.py # 56 tests — telegram_bot formatters, config, send(), notify_*
+│   └── test_lifespan.py     #  5 tests — asyncio graceful shutdown
 ├── logs/
 │   └── pair_trading.log     # Rotating log (10 MB × 5 files)
 ├── pair_trading.db          # SQLite trade journal (auto-created on first run)
@@ -193,6 +195,7 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - `place_limit_order(symbol, side, amount, price)` → order dict — rounds both amount and price to exchange precision
 - `cancel_order(symbol, order_id)` → dict — cancels by order id
 - `fetch_order(symbol, order_id)` → dict — polls single order status
+- `create_listen_key() → str` — POST /fapi/v1/listenKey; `keepalive_listen_key(key)` — PUT /fapi/v1/listenKey; ccxt method names: `fapiPrivatePostListenKey` / `fapiPrivatePutListenKey`
 
 ## Frontend (`frontend/index.html`)
 
@@ -274,6 +277,20 @@ Live OHLCV candle buffer per `(symbol, timeframe)` — the single source of pric
 - `wait_for_update(after_gen) → int` — async, event-driven; safe for N concurrent waiters ("replace event" pattern)
 - `start()` / `stop()` — idempotent; `start()` is called from `PriceCache.run()`
 - `_to_ws_symbol("BTC/USDT:USDT") → "btcusdt"` — ccxt format → Binance stream name
+- Also contains `BookTickerFeed` — real-time best bid/ask via `{sym}@bookTicker`; `get_best() → (bid, ask)` or `(None, None)` before first message; same reconnect/start/stop/"replace event" pattern as SymbolFeed
+
+## UserDataFeed (`backend/user_data_feed.py`)
+
+Real-time order fill notifications via Binance Futures User Data Stream.
+
+- Stream: `wss://fstream.binance.com/ws/{listen_key}` — pushes `ORDER_TRADE_UPDATE` events
+- `start() → bool` — returns False if no API credentials (graceful no-op); creates listen key via `client.create_listen_key()`
+- `register_order(order_id)` / `unregister_order(order_id)` — called around each limit order placed by order_manager
+- `get_fill_data(order_id) → dict | None` — ccxt-compatible fill snapshot: `{id, status, filled, remaining, amount, average}`
+- `wait_for_order_update(after_gen) → int` — same "replace event" pattern as SymbolFeed; used by `_wait_for_fill_or_timeout`
+- Keepalive loop runs every 30 min (listen key expires at 60 min)
+- Singleton `_user_data_feed = UserDataFeed(client)` in `main.py`; started in lifespan; stopped on shutdown
+- `_book_feeds: dict[str, BookTickerFeed]` in `main.py` — lazily created per symbol when smart execution starts; long-lived (reused across executions); all stopped on lifespan shutdown
 
 ## Price Cache (`backend/main.py` — class `PriceCache`)
 
@@ -341,7 +358,11 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - `ExecConfig`: `passive_s` (default **30s**), `aggressive_s` (20s), `allow_market` (True), `poll_s` (2s), `reprice_s` (**4s**)
 - `LegState`: tracks `order_id`, `status` (`WAITING`/`PARTIAL`/`FILLED`/`DUST`/`CANCELLED`/`FAILED`), `filled`, `remaining`, `avg_price`, `working_price`, `last_reprice_at`, `hold_until_stage_end`; `absorb_order(order_dict)` syncs from ccxt order
 - `ExecContext`: holds both legs, config, events log, `cancel_req` flag, `db_id`, `is_close`, `close_db_id`, `entry_price1/2`, `exit_zscore`; `to_dict()` includes `is_close`; OPEN terminal state branches on `is_close` to call `close_position()` vs `save_open_position()`
+- `ExecContext` WS fields (not serialised): `book_feeds: dict[sym, BookTickerFeed] | None`, `user_data_feed: UserDataFeed | None` — set by `main.py` after construction, before `run_execution()`
 - `run_execution(ctx, client, db_module)` runs as `asyncio.create_task()`: places passive limits → polls/reprices within `passive_s` window → rebuilds as semi-aggressive within `aggressive_s` window → market fallback for residuals. Both legs `FILLED`/`DUST` → `OPEN` (saves/closes DB record); one exposed leg partial → `ROLLBACK` (close filled leg at market) → `DONE`.
+- `_fetch_orderbooks(client, legs, book_feeds=None)` — prefers `BookTickerFeed.get_best()`, REST fallback per leg; used for initial placement and all repricing stages
+- `_refresh_fills(ctx, client)` — reads `ctx.user_data_feed` internally; WS snapshot first (`[WS]` tag in event log), REST fallback for legs without cached data
+- `_wait_for_fill_or_timeout(udf, gen, timeout)` — replaces `asyncio.sleep(poll_s)` in poll loop; wakes immediately on `UserDataFeed` fill event via `wait_for_order_update`, else falls back to `asyncio.sleep`
 - Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
 - Semi-aggressive price: buy at `bid + 25% of spread`, sell at `ask - 25% of spread`
 - `DUST` means the leg already has a partial fill, but the remaining qty is below exchange minimum; the partial fill is accepted and persisted, and no new order is placed for the residual
@@ -447,7 +468,7 @@ await tg_bot.stop()                            # stop polling + close session
 | `test_db.py`            | 56     | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern**, **execution_history** (save, idempotent, is_close, empty, limit, order, statuses) |
 | `test_helpers.py`       | 26     | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация                                                                                                                                                                                                                                                                                                               |
 | `test_order_manager.py` | 4      | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance                                                                                                                                                                                                                                                       |
-| `test_price_cache.py`   | 33     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle, `find_cached`; SymbolFeed assembly, symbol deduplication, `wait_update`, `wait_any_update`, `stop_all`                                                                                                                                                                                         |
+| `test_price_cache.py`   | 35     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle, `find_cached`; SymbolFeed assembly, symbol deduplication, `wait_update`, `wait_any_update`, `stop_all`                                                                                                                                                                                         |
 | `test_symbol_feed.py`   | 15     | SymbolFeed: `_to_ws_symbol`, buffer update vs append, `_notify` generation, `wait_for_update` (multiple waiters), `_load_initial` with `client=None`, `start` idempotency                                                                                                                                                                                                            |
 | `test_watchlist.py`     | 8      | WatchlistItem Pydantic model: defaults, custom fields, required fields validation                                                                                                                                                                                                                                                                                                     |
 | `test_telegram_bot.py`  | 56     | Formatters, is*configured, send() safety, all notify*\* content (via `_fire` mock); uses `asyncio.run()` — no pytest-asyncio needed                                                                                                                                                                                                                                                   |

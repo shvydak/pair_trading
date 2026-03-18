@@ -126,6 +126,10 @@ class ExecContext:
     entry_price2:  Optional[float] = None
     exit_zscore:   Optional[float] = None
 
+    # WebSocket feeds (not serialised — set by main.py after construction)
+    book_feeds:      Optional[dict]  = field(default=None, repr=False, compare=False)
+    user_data_feed:  Optional[object] = field(default=None, repr=False, compare=False)
+
     status:     ExecStatus    = ExecStatus.PLACING
     started_at: float         = field(default_factory=time.time)
     events:     list[str]     = field(default_factory=list)
@@ -171,26 +175,33 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
     """
     Runs as a background asyncio.Task.
     Mutates ctx in-place — callers poll ctx.to_dict().
+
+    Uses ctx.book_feeds (dict[sym, BookTickerFeed]) for real-time bid/ask
+    and ctx.user_data_feed (UserDataFeed) for instant fill notifications.
+    Both are optional — falls back to REST if not set or not ready.
     """
     cfg = ctx.config
     deadline_aggressive = ctx.started_at + cfg.passive_s
     deadline_market     = ctx.started_at + cfg.passive_s + cfg.aggressive_s
+    udf = ctx.user_data_feed  # shorthand
+    _registered_orders: set[str] = set()  # tracks all order IDs registered with udf
 
     try:
         # ── 1. Fetch orderbooks ────────────────────────────────────────────────
-        ob1, ob2 = await asyncio.gather(
-            client.fetch_order_book(ctx.leg1.symbol),
-            client.fetch_order_book(ctx.leg2.symbol),
-        )
+        obs = await _fetch_orderbooks(client, [ctx.leg1, ctx.leg2], ctx.book_feeds)
+        ob1 = obs.get(ctx.leg1.symbol) or await client.fetch_order_book(ctx.leg1.symbol)
+        ob2 = obs.get(ctx.leg2.symbol) or await client.fetch_order_book(ctx.leg2.symbol)
         p1 = _passive_price(ctx.leg1.side, ob1)
         p2 = _passive_price(ctx.leg2.side, ob2)
 
+        src1 = "WS" if ctx.leg1.symbol in (obs or {}) else "REST"
+        src2 = "WS" if ctx.leg2.symbol in (obs or {}) else "REST"
         ctx.evt(
-            f"Orderbook  {ctx.leg1.symbol}: bid={ob1['bid']} ask={ob1['ask']} "
+            f"Orderbook [{src1}] {ctx.leg1.symbol}: bid={ob1['bid']} ask={ob1['ask']} "
             f"spread={ob1['spread_pct']:.3f}%"
         )
         ctx.evt(
-            f"Orderbook  {ctx.leg2.symbol}: bid={ob2['bid']} ask={ob2['ask']} "
+            f"Orderbook [{src2}] {ctx.leg2.symbol}: bid={ob2['bid']} ask={ob2['ask']} "
             f"spread={ob2['spread_pct']:.3f}%"
         )
 
@@ -200,8 +211,8 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
             client.place_limit_order(ctx.leg1.symbol, ctx.leg1.side, ctx.leg1.qty, p1),
             client.place_limit_order(ctx.leg2.symbol, ctx.leg2.side, ctx.leg2.qty, p2),
         )
-        ctx.leg1.order_id = ord1["id"]
-        ctx.leg2.order_id = ord2["id"]
+        ctx.leg1.order_id = str(ord1["id"])
+        ctx.leg2.order_id = str(ord2["id"])
         ctx.leg1.working_price = p1
         ctx.leg2.working_price = p2
         ctx.leg1.last_reprice_at = time.time()
@@ -209,9 +220,16 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
         ctx.status = ExecStatus.PASSIVE
         ctx.evt(f"Orders live: {ctx.leg1.order_id} | {ctx.leg2.order_id}")
 
+        # Register orders with UserDataFeed for instant fill notifications
+        if udf:
+            udf.register_order(ctx.leg1.order_id)
+            udf.register_order(ctx.leg2.order_id)
+            _registered_orders.update([ctx.leg1.order_id, ctx.leg2.order_id])
+
         # ── 3. Poll loop ───────────────────────────────────────────────────────
+        gen = udf.get_generation() if udf else -1
         while True:
-            await asyncio.sleep(cfg.poll_s)
+            gen = await _wait_for_fill_or_timeout(udf, gen, cfg.poll_s)
 
             if ctx.cancel_req:
                 await _cancel_open_orders(ctx, client)
@@ -332,6 +350,11 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
         asyncio.create_task(tg_bot.notify_execution_failed(
             ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id, str(exc),
         ))
+    finally:
+        # Unregister all watched orders from UserDataFeed
+        if udf:
+            for oid in _registered_orders:
+                udf.unregister_order(oid)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -347,14 +370,35 @@ def _taker_price(side: str, ob: dict) -> float:
 
 
 async def _refresh_fills(ctx: ExecContext, client) -> None:
+    udf = ctx.user_data_feed
     legs_to_poll = [l for l in (ctx.leg1, ctx.leg2) if not l.is_done and l.order_id]
     if not legs_to_poll:
         return
+
+    # Use WS fill data first; fall back to REST for legs with no WS snapshot yet
+    legs_needing_rest = []
+    for leg in legs_to_poll:
+        if udf:
+            fill = udf.get_fill_data(leg.order_id)
+            if fill is not None:
+                prev = leg.status
+                leg.absorb_order(fill)
+                if leg.status != prev:
+                    ctx.evt(
+                        f"  {leg.symbol}: {prev} → {leg.status} "
+                        f"(filled={leg.filled:.6f} rem={leg.remaining:.6f}) [WS]"
+                    )
+                continue
+        legs_needing_rest.append(leg)
+
+    if not legs_needing_rest:
+        return
+
     results = await asyncio.gather(
-        *[client.fetch_order(l.symbol, l.order_id) for l in legs_to_poll],
+        *[client.fetch_order(l.symbol, l.order_id) for l in legs_needing_rest],
         return_exceptions=True,
     )
-    for leg, result in zip(legs_to_poll, results):
+    for leg, result in zip(legs_needing_rest, results):
         if isinstance(result, Exception):
             ctx.evt(f"  Poll error {leg.symbol}: {result}")
             continue
@@ -373,7 +417,7 @@ async def _start_stage(ctx: ExecContext, client, mode: str) -> None:
     if not unfilled:
         return
 
-    obs = await _fetch_orderbooks(client, unfilled)
+    obs = await _fetch_orderbooks(client, unfilled, ctx.book_feeds)
     now = time.time()
 
     for leg in unfilled:
@@ -416,7 +460,7 @@ async def _reprice_live_orders(ctx: ExecContext, client, mode: str) -> None:
     if not legs:
         return
 
-    obs = await _fetch_orderbooks(client, legs)
+    obs = await _fetch_orderbooks(client, legs, ctx.book_feeds)
     for leg in legs:
         ob = obs.get(leg.symbol)
         if not ob:
@@ -468,7 +512,8 @@ async def _force_market(ctx: ExecContext, client) -> None:
                 pass
         await _refresh_fills(ctx, client)
         if leg.remaining > 1e-9:
-            ob = await client.fetch_order_book(leg.symbol)
+            obs_fm = await _fetch_orderbooks(client, [leg], ctx.book_feeds)
+            ob = obs_fm.get(leg.symbol) or await client.fetch_order_book(leg.symbol)
             ref_price = _taker_price(leg.side, ob)
             can_place, reason = await _can_place_remaining(client, leg, ref_price)
             if not can_place:
@@ -536,17 +581,48 @@ async def _close_stage_orders(ctx: ExecContext, client) -> None:
             leg.working_price = None
 
 
-async def _fetch_orderbooks(client, legs: list[LegState]) -> dict[str, dict]:
-    results = await asyncio.gather(
-        *[client.fetch_order_book(leg.symbol) for leg in legs],
-        return_exceptions=True,
-    )
+async def _fetch_orderbooks(
+    client, legs: list[LegState], book_feeds: Optional[dict] = None
+) -> dict[str, dict]:
     obs: dict[str, dict] = {}
-    for leg, result in zip(legs, results):
-        if isinstance(result, Exception):
-            continue
-        obs[leg.symbol] = result
+    legs_needing_rest = []
+    for leg in legs:
+        feed = (book_feeds or {}).get(leg.symbol)
+        if feed:
+            bid, ask = feed.get_best()
+            if bid and ask:
+                obs[leg.symbol] = {
+                    "bid": bid,
+                    "ask": ask,
+                    "spread_pct": (ask - bid) / bid * 100,
+                }
+                continue
+        legs_needing_rest.append(leg)
+
+    if legs_needing_rest:
+        results = await asyncio.gather(
+            *[client.fetch_order_book(leg.symbol) for leg in legs_needing_rest],
+            return_exceptions=True,
+        )
+        for leg, result in zip(legs_needing_rest, results):
+            if isinstance(result, Exception):
+                continue
+            obs[leg.symbol] = result
     return obs
+
+
+async def _wait_for_fill_or_timeout(user_data_feed, gen: int, timeout: float) -> int:
+    """Wait for a fill event from UserDataFeed or fall back to a plain sleep."""
+    if user_data_feed is None:
+        await asyncio.sleep(timeout)
+        return gen
+    try:
+        return await asyncio.wait_for(
+            user_data_feed.wait_for_order_update(gen),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        return user_data_feed.get_generation()
 
 
 def _target_price(mode: str, side: str, ob: dict) -> float:
@@ -599,10 +675,12 @@ async def _place_remaining_limit(
     ctx.evt(f"  Reprice {leg.symbol}: {leg.remaining:.6f} @ {price} ({label})")
     try:
         new_ord = await client.place_limit_order(leg.symbol, leg.side, leg.remaining, price)
-        leg.order_id = new_ord["id"]
+        leg.order_id = str(new_ord["id"])
         leg.working_price = price
         leg.last_reprice_at = now
         leg.hold_until_stage_end = False
+        if ctx.user_data_feed:
+            ctx.user_data_feed.register_order(leg.order_id)
     except Exception as e:
         ctx.evt(f"  Reprice FAILED {leg.symbol}: {e}")
         leg.status = LegStatus.FAILED

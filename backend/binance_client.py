@@ -294,3 +294,18 @@ class BinanceClient:
             return await self.exchange.fetch_order(order_id, symbol)
         except Exception as e:
             raise RuntimeError(f"Failed to fetch order {order_id} for {symbol}: {e}")
+
+    async def create_listen_key(self) -> str:
+        """Create a Binance Futures User Data Stream listen key."""
+        try:
+            response = await self.exchange.fapiPrivatePostListenKey()
+            return response["listenKey"]
+        except Exception as e:
+            raise RuntimeError(f"Failed to create listen key: {e}")
+
+    async def keepalive_listen_key(self, listen_key: str) -> None:
+        """Extend listen key validity (call every 30–60 min to prevent expiry)."""
+        try:
+            await self.exchange.fapiPrivatePutListenKey({"listenKey": listen_key})
+        except Exception as e:
+            raise RuntimeError(f"Failed to keepalive listen key: {e}")

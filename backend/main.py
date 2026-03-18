@@ -18,7 +18,8 @@ from strategy import PairTradingStrategy
 import db
 from logger import get_logger
 from order_manager import ExecConfig, ExecContext, LegState, run_execution
-from symbol_feed import SymbolFeed
+from symbol_feed import SymbolFeed, BookTickerFeed
+from user_data_feed import UserDataFeed
 import telegram_bot as tg_bot
 
 load_dotenv()
@@ -61,6 +62,10 @@ def _clean(obj):
 
 client = BinanceClient()
 strategy = PairTradingStrategy()
+
+# WebSocket feeds for smart order execution
+_book_feeds: dict[str, BookTickerFeed] = {}  # ccxt symbol → BookTickerFeed
+_user_data_feed = UserDataFeed(client)        # single shared User Data Stream
 
 # active smart executions: exec_id -> ExecContext
 active_executions: dict = {}
@@ -418,6 +423,13 @@ async def _do_smart_close_trigger(pos: dict, exit_zscore: Optional[float] = None
         entry_price2=pos.get("entry_price2"),
         exit_zscore=exit_zscore,
     )
+    for sym in (sym1, sym2):
+        if sym not in _book_feeds:
+            feed = BookTickerFeed(sym)
+            feed.start()
+            _book_feeds[sym] = feed
+    ctx.book_feeds = _book_feeds
+    ctx.user_data_feed = _user_data_feed
     active_executions[exec_id] = ctx
     _exec_created_at[exec_id] = time.monotonic()
     asyncio.create_task(run_execution(ctx, client, db))
@@ -757,6 +769,7 @@ async def monitor_position_triggers() -> None:
 async def lifespan(app: FastAPI):
     db.init_db()
     await tg_bot.setup()
+    await _user_data_feed.start()  # no-op if no API credentials
     _bg_tasks = [
         asyncio.create_task(price_cache.run()),
         asyncio.create_task(monitor_position_triggers()),
@@ -767,6 +780,9 @@ async def lifespan(app: FastAPI):
     for t in _bg_tasks:
         t.cancel()
     await asyncio.gather(*_bg_tasks, return_exceptions=True)
+    _user_data_feed.stop()
+    for feed in list(_book_feeds.values()):
+        feed.stop()
     await price_cache.stop_all()
     await client.close()
     await tg_bot.stop()
@@ -1763,6 +1779,15 @@ async def start_smart_trade(req: SmartTradeRequest):
                 zscore_window=req.zscore_window,
             )
             log.info(f"Smart execution started: {exec_id} | {sym1}/{sym2} | {req.side}")
+
+        # Attach WebSocket feeds for real-time bid/ask and fill notifications
+        for sym in (sym1, sym2):
+            if sym not in _book_feeds:
+                feed = BookTickerFeed(sym)
+                feed.start()
+                _book_feeds[sym] = feed
+        ctx.book_feeds = _book_feeds
+        ctx.user_data_feed = _user_data_feed
 
         active_executions[exec_id] = ctx
         _exec_created_at[exec_id] = time.monotonic()
