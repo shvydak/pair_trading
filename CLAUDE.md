@@ -80,9 +80,7 @@ cd /Users/y.shvydak/Projects/pair_trading
 Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed by Homebrew and blocks system-wide installs.
 
 ```bash
-# Install new packages:
-.venv/bin/pip install <package>
-# Add to requirements.txt afterwards
+.venv/bin/pip install <package>   # add to requirements.txt afterwards
 ```
 
 ## API Endpoints
@@ -91,7 +89,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | ------ | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | GET    | `/api/symbols`               | List all active USDT-M and USDC-M perpetual futures                                                             |
 | GET    | `/api/history`               | OHLCV + spread/z-score + stats for a pair                                                                       |
-| GET    | `/api/backtest`              | Full backtest with equity curve and trades                                                                      |
+| GET    | `/api/backtest`              | Full backtest; params: `sizing_method` (ols/atr/equal), `atr1`, `atr2`, `entry_threshold`, `exit_threshold`     |
 | GET    | `/api/status`                | Binance connection status + supported futures balances (USDT + USDC)                                            |
 | GET    | `/api/positions`             | Open positions from Binance (requires API keys)                                                                 |
 | GET    | `/api/balance`               | Futures balances (all supported assets, or `?asset=USDT` / `USDC`)                                              |
@@ -167,8 +165,8 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 - **Z-score**: rolling `(spread - mean) / std` with configurable window
 - **Cointegration**: Engle-Granger test via `statsmodels.tsa.stattools.coint(maxlag=10)` — fixed maxlag avoids slow auto-selection
 - **Half-life**: AR(1) via `numpy.linalg.lstsq` — `half_life = -log(2) / log(φ)` (replaced statsmodels OLS)
-- **Hurst exponent**: R/S analysis — H < 0.5 means mean-reverting
-- **Backtest signals**: enter at `|z| > entry_threshold`, exit at `|z| < exit_threshold`
+- **Hurst exponent**: variogram regression (not R/S despite docstring) — H < 0.5 means mean-reverting
+- **Backtest signals**: enter at `|z| > entry_threshold`, exit at `|z| < exit_threshold`; PnL uses selected `sizing_method`
 - **ATR**: `calculate_atr(df, period=14)` — average true range from OHLCV DataFrame
 - **Position sizing** (`calculate_position_sizes`):
      - `size_usd` = **total position size** (both legs combined, value1 + value2 = size_usd)
@@ -178,24 +176,11 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 
 ## Binance Client Notes (`binance_client.py`)
 
-- Uses `ccxt.async_support.binanceusdm` (not `binance`)
-- Symbol format: `BTC/USDT:USDT` or `BTC/USDC:USDC` (ccxt unified format)
-- The UI can send `BTCUSDT` / `BTCUSDC` → backend normalizes via `_normalise_symbol()`
-- API keys are only injected into ccxt config if they are non-empty and non-placeholder
-- `self.has_creds: bool` — exposed for use in `/api/status`
-- `get_available_futures_meta()` → list[dict] — returns market metadata for the UI symbol filter (`ALL` / `USDT-M` / `USDC-M`)
-- `get_balance(asset)` / `get_all_balances()` — return futures balances by margin asset
-- Market type filter: `type in ("swap", "future")` — Binance perpetuals show as `swap`
-- `_ensure_markets()` — loads market data if not yet cached (called before any precision/order op)
-- `round_amount(symbol, amount)` → float — rounds to exchange stepSize via `amount_to_precision`
-- `place_order()` — market orders; automatically calls `amount_to_precision` before submitting
-- `set_leverage(symbol, leverage)` → dict — sets cross-margin leverage; called per-symbol before open
-- `check_min_notional(symbol, amount, price)` → `(ok: bool, actual: float, min: float)` — validates against `limits.cost.min` from market data
-- `fetch_order_book(symbol, limit=5)` → `{bid, ask, spread_pct}` — top-of-book snapshot
-- `place_limit_order(symbol, side, amount, price)` → order dict — rounds both amount and price to exchange precision
-- `cancel_order(symbol, order_id)` → dict — cancels by order id
-- `fetch_order(symbol, order_id)` → dict — polls single order status
-- `create_listen_key() → str` — POST /fapi/v1/listenKey; `keepalive_listen_key(key)` — PUT /fapi/v1/listenKey; ccxt method names: `fapiPrivatePostListenKey` / `fapiPrivatePutListenKey`
+- Symbol format: `BTC/USDT:USDT` or `BTC/USDC:USDC` (ccxt unified format); UI sends `BTCUSDT` → backend normalizes via `_normalise_symbol()`
+- Market type filter: `type in ("swap", "future")` — Binance perpetuals show as `swap`, not `future`
+- `self.has_creds: bool` — True only if API keys are non-empty and non-placeholder
+- `round_amount(symbol, amount)` — rounds to exchange stepSize; called before every order
+- `check_min_notional(symbol, amount, price)` — validates against `limits.cost.min` from market data
 
 ## Frontend (`frontend/index.html`)
 
@@ -261,6 +246,10 @@ When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qt
 ```
 BINANCE_API_KEY=...
 BINANCE_SECRET=...
+TELEGRAM_BOT_TOKEN=       # from @BotFather
+TELEGRAM_CHAT_ID=         # your chat/user ID (get via @userinfobot)
+TELEGRAM_NOTIFY_OPENS=true
+TELEGRAM_ALERT_RESET_Z=0.5
 ```
 
 Public endpoints (symbols, history, backtest) work without API keys.
@@ -283,14 +272,11 @@ Live OHLCV candle buffer per `(symbol, timeframe)` — the single source of pric
 
 Real-time order fill notifications via Binance Futures User Data Stream.
 
-- Stream: `wss://fstream.binance.com/ws/{listen_key}` — pushes `ORDER_TRADE_UPDATE` events
-- `start() → bool` — returns False if no API credentials (graceful no-op); creates listen key via `client.create_listen_key()`
+- `start() → bool` — returns False if no API credentials (graceful no-op)
 - `register_order(order_id)` / `unregister_order(order_id)` — called around each limit order placed by order_manager
-- `get_fill_data(order_id) → dict | None` — ccxt-compatible fill snapshot: `{id, status, filled, remaining, amount, average}`
-- `wait_for_order_update(after_gen) → int` — same "replace event" pattern as SymbolFeed; used by `_wait_for_fill_or_timeout`
+- `wait_for_order_update(after_gen) → int` — "replace event" pattern; wakes `_wait_for_fill_or_timeout` immediately on fill
 - Keepalive loop runs every 30 min (listen key expires at 60 min)
-- Singleton `_user_data_feed = UserDataFeed(client)` in `main.py`; started in lifespan; stopped on shutdown
-- `_book_feeds: dict[str, BookTickerFeed]` in `main.py` — lazily created per symbol when smart execution starts; long-lived (reused across executions); all stopped on lifespan shutdown
+- `_book_feeds: dict[str, BookTickerFeed]` in `main.py` — lazily created per symbol when smart execution starts; all stopped on lifespan shutdown
 
 ## Price Cache (`backend/main.py` — class `PriceCache`)
 
@@ -311,7 +297,7 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - `price_cache.subscribe(sym1, sym2, tf, limit) → key` — creates SymbolFeeds if needed; ref-counted
 - `price_cache.unsubscribe(key)` — decrements refs; stops SymbolFeed when its ref count reaches 0; removes `_store[key]`
 - `price_cache.get(key) → dict | None` — read-only; `None` if not yet assembled
-- `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds entry with matching `(sym1, sym2, tf)` and key limit `>= requested`; used by `/api/history` and `/api/batch/sparklines`
+- `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds entry with matching `(sym1, sym2, tf)` and key limit `>= requested`; always verify `len(cached["price1"]) >= limit` before use — buffer may be incomplete shortly after server start
 - `price_cache.run()` — background task in lifespan; calls `feed.start()` on all registered feeds; reassembles all pair stores every `ASSEMBLE_INTERVAL = 1 s`
 - `price_cache.wait_update(key, timeout=5.0)` — waits for next kline on either symbol of the pair; used by `/ws/stream` for event-driven push
 - `price_cache.wait_any_update(keys, timeout=5.0)` — waits for ANY kline across a list of pairs (deduplicates feeds); used by `/ws/watchlist`
@@ -328,117 +314,57 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - `get_logger(name)` returns a logger with two handlers: `StreamHandler` (console) + `RotatingFileHandler`
 - Log file: `logs/pair_trading.log` (relative to project root); max 10 MB × 5 rotating files, UTF-8
 - Log format: `YYYY-MM-DD HH:MM:SS [LEVEL] name: message`
-- Logged events: backend start/stop, leverage set, OPEN/CLOSE trade (pair, qty, prices, z-score, lever, sizing, db_id), trade errors with `exc_info=True`
 
 ### SQLite Persistence (`backend/db.py`)
 
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
-- Four tables:
-     - `open_positions` — active strategy positions; columns: symbol1/2, side, qty1/2, hedge_ratio, entry_zscore, entry_price1/2, size_usd, sizing_method, leverage, tp_zscore, sl_zscore, tp_smart, timeframe, candle_limit, zscore_window, opened_at
-     - `closed_trades` — full history; same + exit_price1/2, exit_zscore, pnl, closed_at
-     - `triggers` — standalone TP/SL/alert orders, independent of positions; columns: symbol1/2, side, type (tp|sl|alert), zscore, tp_smart, status (active|triggered|cancelled), timeframe, zscore_window, alert_pct, last_fired_at, created_at, triggered_at
-     - `execution_history` — persisted terminal smart execution snapshots; columns: exec_id (UNIQUE), db_id, close_db_id, is_close, status, symbol1/2, data_json, completed_at
+- Four tables: `open_positions`, `closed_trades`, `triggers`, `execution_history`
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
-- Trigger functions: `save_trigger(sym1, sym2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct)` → id, `get_active_triggers()`, `get_triggers_for_pair(sym1, sym2)`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None, `alert_fired(id)` → bool (sets `last_fired_at`, keeps status=active), `get_recent_alerts(minutes=60)` → list[dict]
-- Execution history functions: `save_execution_history(exec_id, db_id, close_db_id, is_close, status, symbol1, symbol2, data_json)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)` → list[dict] ordered by `completed_at DESC`
-- Triggers survive position deletion — user manages them explicitly via `/api/triggers` endpoints
-- `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicate DB records
-- On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance, not pre-rounding calculated value)
+- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None, `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]
+- Execution history: `save_execution_history(...)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)`
+- `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicates
+- On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance)
 - On `action=close`: DB position found by (sym1, sym2), PnL calculated from entry prices, record moved to `closed_trades`
-- Backward-compatible: if no DB record found on close, trades still execute (PnL field is null)
+- Triggers survive position deletion — user manages them explicitly via `/api/triggers` endpoints
 
 ## Order Manager (`order_manager.py`)
 
 State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→ ROLLBACK → DONE`
 
-- **Smart v2 (balanced profile) is now live**:
-     - `PASSIVE` = dynamic passive: places at best bid/ask, checks every `poll_s=2s`, reprices at most once per `reprice_s=4s`
-     - `AGGRESSIVE` = semi-aggressive: still uses limit orders, but moves to `25%` into the spread instead of jumping straight to taker
-     - `FORCING` = market fallback only for still-placeable residual size
+- **Smart v2**: PASSIVE = dynamic (best bid/ask, reprices every `reprice_s=4s`); AGGRESSIVE = semi-aggressive (25% into spread); FORCING = market fallback for residuals
 - `ExecConfig`: `passive_s` (default **30s**), `aggressive_s` (20s), `allow_market` (True), `poll_s` (2s), `reprice_s` (**4s**)
-- `LegState`: tracks `order_id`, `status` (`WAITING`/`PARTIAL`/`FILLED`/`DUST`/`CANCELLED`/`FAILED`), `filled`, `remaining`, `avg_price`, `working_price`, `last_reprice_at`, `hold_until_stage_end`; `absorb_order(order_dict)` syncs from ccxt order
-- `ExecContext`: holds both legs, config, events log, `cancel_req` flag, `db_id`, `is_close`, `close_db_id`, `entry_price1/2`, `exit_zscore`; `to_dict()` includes `is_close`; OPEN terminal state branches on `is_close` to call `close_position()` vs `save_open_position()`
-- `ExecContext` WS fields (not serialised): `book_feeds: dict[sym, BookTickerFeed] | None`, `user_data_feed: UserDataFeed | None` — set by `main.py` after construction, before `run_execution()`
-- `run_execution(ctx, client, db_module)` runs as `asyncio.create_task()`: places passive limits → polls/reprices within `passive_s` window → rebuilds as semi-aggressive within `aggressive_s` window → market fallback for residuals. Both legs `FILLED`/`DUST` → `OPEN` (saves/closes DB record); one exposed leg partial → `ROLLBACK` (close filled leg at market) → `DONE`.
-- `_fetch_orderbooks(client, legs, book_feeds=None)` — prefers `BookTickerFeed.get_best()`, REST fallback per leg; used for initial placement and all repricing stages
-- `_refresh_fills(ctx, client)` — reads `ctx.user_data_feed` internally; WS snapshot first (`[WS]` tag in event log), REST fallback for legs without cached data
-- `_wait_for_fill_or_timeout(udf, gen, timeout)` — replaces `asyncio.sleep(poll_s)` in poll loop; wakes immediately on `UserDataFeed` fill event via `wait_for_order_update`, else falls back to `asyncio.sleep`
-- Passive price: buy@bid, sell@ask (maker side, 0% fee on USDC-M)
-- Semi-aggressive price: buy at `bid + 25% of spread`, sell at `ask - 25% of spread`
-- `DUST` means the leg already has a partial fill, but the remaining qty is below exchange minimum; the partial fill is accepted and persisted, and no new order is placed for the residual
-- `active_executions` dict in `main.py` maps `exec_id → ExecContext`; terminal entries (DONE/CANCELLED/FAILED/**OPEN**) are cleaned up after 2h TTL in the monitor loop; before cleanup, each terminal entry is persisted to `execution_history` via `_exec_saved_to_db` set (ensures single write)
-- `_exec_saved_to_db: set[str]` — tracks which exec_ids have already been written to DB; `discard(eid)` on TTL removal
-- `_exec_created_at: dict[str, float]` — monotonic timestamps for TTL cleanup
+- Both legs `FILLED`/`DUST` → `OPEN` (saves/closes DB record); one exposed leg partial → `ROLLBACK` (close filled leg at market) → `DONE`
+- `DUST` = remaining qty below exchange minimum; partial fill accepted, no new order for residual
+- `_fetch_orderbooks` — prefers `BookTickerFeed.get_best()`, REST fallback; `_refresh_fills` — prefers UserDataFeed WS snapshot, REST fallback
+- `active_executions` in `main.py`: terminal entries cleaned after 2h TTL; persisted to `execution_history` before cleanup via `_exec_saved_to_db` set
 - `exec_id` is first 8 chars of UUID4
 
-## Pre-trade Check (`GET /api/pre_trade_check`)
+## Pre-trade Check & Monitor
 
-- Balance check formula: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
-- Order of validation: balance → min_notional → lot_size → leverage (informational)
-- monitor_position_triggers runs every **2 s** — reads from **PriceCache** (zero direct Binance calls); manages `_monitor_keys: dict[tag → cache_key]` (local to coroutine); subscribes active positions/triggers, unsubscribes stale ones each cycle; uses `pos.timeframe`/`pos.zscore_window`/`pos.candle_limit` from DB
-- **Direction-agnostic TP/SL**: uses `abs(current_z)` for comparison — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values are always positive (e.g. TP=0.5, SL=4.0); works identically for `long_spread` and `short_spread`
-- **Double-close prevention**: `closing_tags: dict[str, float]` (tag-based, e.g. `pos_5`, `trig_12`) + `closing_pairs: set[tuple]` (pair-based, e.g. `(sym1, sym2)`) — prevents same pair from being closed simultaneously by both position TP and standalone trigger
-- **Parallel OHLCV fetch**: monitor collects all fetch specs from positions and triggers, deduplicates by `(sym1, sym2, tf, limit)`, fetches all in single `asyncio.gather`
-- **Hedge ratio cache**: `_hedge_cache: dict[tuple, (float, float)]` with 60s TTL for standalone triggers — avoids recalculating every 2s
-- `_run_sync(func, *args)` — runs CPU-bound functions (cointegration, z-score, etc.) in thread-pool via `asyncio.get_running_loop().run_in_executor()`
-- **Cointegration cache**: `_coint_cache: dict[tuple, (dict, float)]` with 10-min TTL — `(sym1, sym2, tf, limit) → (result, timestamp)`; used by `/api/history` to skip expensive recomputation
-- **Background coint precompute**: `_precompute_coint(key, p1, p2)` — async task spawned by `get_watchlist_data` for stale/missing entries; after ~15s priming, watchlist pairs analyze instantly
-- Strategy Positions table shows `liq_price1`/`liq_price2` in orange — from `/api/db/positions/enriched`
+- Balance check: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
+- Validation order: balance → min_notional → lot_size → leverage (informational)
+- **monitor_position_triggers** runs every **2 s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle
+- **Direction-agnostic TP/SL**: uses `abs(current_z)` — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values always positive
+- **Double-close prevention**: `closing_tags` (tag-based) + `closing_pairs` (pair-based) — prevents same pair closed simultaneously by position TP and standalone trigger
+- **Cointegration cache**: `_coint_cache` with 10-min TTL; **background precompute** via `_precompute_coint` — watchlist pairs analyze instantly after ~15s priming
+- `_run_sync(func, *args)` — CPU-bound functions run in thread-pool via `run_in_executor`
 
 ## Telegram Bot (`telegram_bot.py`)
 
-### Configuration (`.env`)
+Lifecycle: `setup()` → `create_task(start_polling())` → `stop()` (on shutdown)
 
-```
-TELEGRAM_BOT_TOKEN=       # from @BotFather
-TELEGRAM_CHAT_ID=         # your chat/user ID (get via @userinfobot)
-TELEGRAM_NOTIFY_OPENS=true        # send notification when position is opened
-TELEGRAM_ALERT_RESET_Z=0.5        # abs(z) below which alert state resets (ready to fire again)
-```
-
-### Lifecycle (integrated in `main.py` lifespan)
-
-```python
-await tg_bot.setup()                           # init Bot + Dispatcher
-asyncio.create_task(tg_bot.start_polling())    # long-polling background task
-# ... after yield ...
-await tg_bot.stop()                            # stop polling + close session
-```
-
-### Notification functions
-
-| Function                                                                                | When called                                                          | Respects toggle         |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ----------------------- |
-| `notify_position_opened(sym1, sym2, side, entry_z, price1, price2, size_usd, leverage)` | Market open (main.py) + smart open terminal state (order_manager.py) | `TELEGRAM_NOTIFY_OPENS` |
-| `notify_position_closed(sym1, sym2, side, pnl, exit_z, reason)`                         | `_do_market_close`, `/api/trade` close, smart close terminal state   | always                  |
-| `notify_trigger_fired(sym1, sym2, side, trigger_type, current_z, threshold_z)`          | Monitor — before TP/SL close starts                                  | always                  |
-| `notify_alert(sym1, sym2, current_z, threshold_z)`                                      | Monitor — alert trigger at `alert_pct * trig_z` threshold            | always                  |
-| `notify_rollback(sym1, sym2, exec_id)`                                                  | order_manager.py — partial fill rollback                             | always                  |
-| `notify_execution_failed(sym1, sym2, exec_id, reason)`                                  | order_manager.py — unrecoverable error                               | always                  |
-
-- `_fire(text)` — schedules `asyncio.create_task(send(text))`, non-blocking
-- `send(text)` — never raises; exceptions are logged and swallowed so trading is unaffected
+Notification functions: `notify_position_opened`, `notify_position_closed`, `notify_trigger_fired`, `notify_alert`, `notify_rollback`, `notify_execution_failed` — all non-blocking via `_fire()` → `create_task(send())`; `send()` never raises.
 
 ### Alert triggers (`type="alert"` in `triggers` table)
 
-- Created via 🔔 button on watchlist items → `POST /api/triggers`; user chooses `alert_pct` (1–200%, default 100%) via browser prompt
-- Stored with `timeframe`, `zscore_window`, `alert_pct` from the watchlist item at creation time
-- Monitor subscribes to PriceCache using each trigger's own `timeframe`/`zscore_window` (not global `_MONITOR_TIMEFRAME`)
-- Fires when `abs(current_z) >= alert_pct * abs(trig_z)`
-- **Dedup**: `POST /api/triggers` with `type="alert"` cancels any existing active alert with same (sym1, sym2, zscore) before inserting; different zscore = different alert (allowed to coexist)
-- **Hysteresis** (in-memory `alert_states: dict[str, str]` in monitor):
-     - `"idle"` → threshold crossed → send notification → `"alerted"`
-     - `"alerted"` → `abs(current_z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
-- `alert_states` cleaned up alongside `monitored_keys` in monitor cleanup loop
-- Alert trigger stays `status="active"` in DB — never transitions to `"triggered"`; user cancels manually
-- When alert fires: `db.alert_fired(id)` updates `last_fired_at` (status stays active for hysteresis)
-- Separate **🔔 Alerts** tab in bottom panel: `loadAlertsTab()` / `renderAlerts()`; click row → `_loadAlertIntoAnalysis(trig)` restores pair + timeframe + zscore_window + entry-z and calls `runAnalyze()`
-- `loadOrdersTab()` only shows `tp`/`sl` types — alerts are excluded
-- **Notification center**: `checkRecentAlerts()` polls `GET /api/alerts/recent` on startup + piggybacked on the 5 s positions interval (not a separate 60 s timer); shows clickable toast + badge on Alerts tab; recently fired rows highlighted yellow with `⚡ X мин назад` in "Last fired" column
-- **Creating alerts**: (1) 🔔 button on watchlist item — uses watchlist params; (2) `addAlertFromPanel()` button next to `★ В Watchlist` in Pair Config panel — uses current analysis params (sym1/sym2/timeframe/zscore_window/entry-z); both show pct prompt, switch to Alerts tab after creation
+- Fires when `abs(current_z) >= alert_pct * abs(trig_z)`; stays `status="active"` — never auto-cancelled
+- **Hysteresis**: `"idle"` → fires → `"alerted"` → `abs(z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
+- Created via 🔔 on watchlist item or `addAlertFromPanel()` button in Pair Config panel
+- **Notification center**: `checkRecentAlerts()` piggybacked on the 5 s positions interval (not a separate timer)
 
 ## Common Issues & Fixes
 
+- **Known architectural issues (position tracking, overlapping symbols, close direction)**: see [`POSITION_TRACKING_ISSUES.md`](POSITION_TRACKING_ISSUES.md)
 - **Empty symbols list**: ccxt returns Binance perpetuals as `type: "swap"`, not `"future"` — filter includes both
 - **`pip` not found**: use `.venv/bin/pip` — Homebrew Python blocks system installs
 - **CORS errors**: backend has CORS middleware allowing all origins including `file://`
@@ -453,26 +379,26 @@ await tg_bot.stop()                            # stop polling + close session
 - **Trade markers not showing on chart**: `loadTradeJournal()` must be called after `runAnalyze()` to populate `_cachedJournalTrades`; DB timestamps use `+00:00` format — `_utcParse` must handle timezone suffix without appending extra `Z`
 - **Active pair highlight**: compares **5 params**: sym1+sym2+timeframe+zscore_window+entryZ — ticker alone is insufficient
 - **`_pollAllExecutions` auto-opens popups**: `_execSeenIds` Set tracks shown popups; `_execFirstPoll` flag prevents opening old terminal popups on page reload; adaptive frequency: 2s with active executions, 5s idle (`setTimeout`-based)
-- **TP fires immediately for short_spread**: old signed comparison `current_z <= tp` always true when z is negative; fixed with `abs(current_z)` — direction-agnostic
-- **Double close on TP fire**: both position TP and standalone trigger fire for same pair → two close orders; fixed with `closing_pairs` set tracking `(sym1, sym2)`
+- **TP fires immediately for short_spread**: fixed with `abs(current_z)` — direction-agnostic
+- **Double close on TP fire**: fixed with `closing_pairs` set tracking `(sym1, sym2)`
 - **TP/SL input only accepts positive numbers**: correct behavior with direction-agnostic logic — chart shows symmetric lines at ±threshold
-- **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present in HTML at parse time — classes added only via `classList.add()` in JS produce no CSS rules. Use `element.style.color` with explicit hex values instead (see `_statColor`, `C_GREEN`/`C_YELLOW`/`C_RED` constants)
+- **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present in HTML at parse time — use `element.style.color` with explicit hex values (`C_GREEN`/`C_YELLOW`/`C_RED` constants)
 
 ## Tests (`tests/`)
 
 246 unit-тестов (10 файлов), все проходят ~3.5–4.5 сек. Запуск: `.venv/bin/pytest tests/ -v`
 
-| Файл                    | Тестов | Покрытие                                                                                                                                                                                                                                                                                                                                                                              |
-| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_strategy.py`      | 41     | spread, zscore, position sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, correlation, hedge ratio, backtest                                                                                                                                                                                                                                                                   |
-| `test_db.py`            | 56     | save/find/close/delete positions, TP/SL triggers (tp_smart), trade journal, duplicate guard, analysis params (timeframe/candle_limit/zscore_window), alert trigger params (timeframe/zscore_window/alert_pct), find_active_alert, alert_fired, get_recent_alerts, **double-trigger clear pattern**, **execution_history** (save, idempotent, is_close, empty, limit, order, statuses) |
-| `test_helpers.py`       | 26     | `_clean()` / `_safe_float()` — NaN/Inf/np.float64/np.int64 сериализация                                                                                                                                                                                                                                                                                                               |
-| `test_order_manager.py` | 4      | Smart v2 dynamic passive repricing, semi-aggressive stage pricing, non-placeable residual hold-until-stage-end, dust acceptance                                                                                                                                                                                                                                                       |
-| `test_price_cache.py`   | 35     | PriceCache: subscribe/unsubscribe ref-counting, key isolation, two-consumer lifecycle, `find_cached`; SymbolFeed assembly, symbol deduplication, `wait_update`, `wait_any_update`, `stop_all`                                                                                                                                                                                         |
-| `test_symbol_feed.py`   | 15     | SymbolFeed: `_to_ws_symbol`, buffer update vs append, `_notify` generation, `wait_for_update` (multiple waiters), `_load_initial` with `client=None`, `start` idempotency                                                                                                                                                                                                            |
-| `test_watchlist.py`     | 8      | WatchlistItem Pydantic model: defaults, custom fields, required fields validation                                                                                                                                                                                                                                                                                                     |
-| `test_telegram_bot.py`  | 56     | Formatters, is*configured, send() safety, all notify*\* content (via `_fire` mock); uses `asyncio.run()` — no pytest-asyncio needed                                                                                                                                                                                                                                                   |
-| `test_lifespan.py`      | 5      | asyncio graceful shutdown pattern: infinite tasks cancelled, `CancelledError` absorbed by `return_exceptions=True`, already-done tasks unharmed, mixed task types                                                                                                                                                                                                                     |
+| Файл                    | Тестов | Покрытие                                                    |
+| ----------------------- | ------ | ----------------------------------------------------------- |
+| `test_strategy.py`      | 41     | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
+| `test_db.py`            | 56     | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history |
+| `test_helpers.py`       | 26     | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 сериализация |
+| `test_order_manager.py` | 4      | Smart v2 passive repricing, semi-aggressive pricing, dust acceptance |
+| `test_price_cache.py`   | 35     | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |
+| `test_symbol_feed.py`   | 15     | buffer update/append, `wait_for_update`, `start` idempotency |
+| `test_watchlist.py`     | 8      | WatchlistItem Pydantic model validation                     |
+| `test_telegram_bot.py`  | 56     | formatters, `send()` safety, all `notify_*` functions       |
+| `test_lifespan.py`      | 5      | asyncio graceful shutdown pattern                           |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — изолированная БД на каждый тест.
 
@@ -484,8 +410,7 @@ await tg_bot.stop()                            # stop polling + close session
 
 ## Guide Writing Rules
 
-- **Write for beginners first.** The target user may not know what OLS, ATR, cointegration, or hedge ratio mean. Every technical term must be explained in plain language before showing formulas.
-- **Explain the "why" before the "how".** Don't just show a formula — first explain what problem it solves in one sentence (e.g. "You can't buy equal dollars of both assets because they move with different force").
-- **Use concrete examples.** Every concept section must include a numerical example with realistic BTC/ETH prices and clear input/output.
-- **Avoid jargon without explanation.** If a technical term is unavoidable, immediately follow it with a plain-language parenthetical or sentence.
-- Each guide section should be readable by someone who has never traded before.
+- **Write for beginners first.** Every technical term must be explained in plain language before showing formulas.
+- **Explain the "why" before the "how".** First explain what problem it solves, then the formula.
+- **Use concrete examples.** Every concept section must include a numerical example with realistic BTC/ETH prices.
+- **Avoid jargon without explanation.** If unavoidable, immediately follow with a plain-language parenthetical.

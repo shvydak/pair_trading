@@ -179,7 +179,7 @@ class PairTradingStrategy:
                           qty1 = size_usd / (2 * price1)
                           qty2 = size_usd / (2 * price2)
         """
-        if method == "atr" and atr1 and atr2 and atr2 > 0:
+        if method == "atr" and atr1 is not None and atr2 is not None and atr2 > 0:
             ratio = atr1 / atr2
             qty1 = size_usd / (price1 + ratio * price2)
             qty2 = qty1 * ratio
@@ -256,6 +256,9 @@ class PairTradingStrategy:
         exit_threshold: float = 0.5,
         position_size_usd: float = 1000.0,
         zscore_window: int = 20,
+        sizing_method: str = "ols",
+        atr1: float = None,
+        atr2: float = None,
     ) -> dict:
         """
         Full vectorised backtest.
@@ -315,13 +318,21 @@ class PairTradingStrategy:
                 exit_spread = np.log(exit_p1) - hedge_ratio * np.log(exit_p2)
                 spread_change = (exit_spread - entry_spread) * position
 
-                # Dollar PnL using OLS-β sizing (size_usd = total position):
-                # leg1_usd = size_usd / (1 + |β|)
-                # leg2_usd = size_usd * |β| / (1 + |β|)
-                beta = abs(hedge_ratio)
-                divisor = 1 + beta
-                qty1 = (position_size_usd / (divisor * entry_p1)) * position
-                qty2 = (position_size_usd * beta / (divisor * entry_p2)) * (-position)
+                # Dollar PnL using the selected sizing method
+                if sizing_method == "atr" and atr1 is not None and atr2 is not None and atr2 > 0:
+                    ratio = atr1 / atr2
+                    _qty1 = position_size_usd / (entry_p1 + ratio * entry_p2)
+                    _qty2 = _qty1 * ratio
+                elif sizing_method == "equal":
+                    _qty1 = position_size_usd / (2 * entry_p1)
+                    _qty2 = position_size_usd / (2 * entry_p2)
+                else:  # ols
+                    beta = abs(hedge_ratio)
+                    divisor = 1 + beta
+                    _qty1 = position_size_usd / (divisor * entry_p1)
+                    _qty2 = position_size_usd * beta / (divisor * entry_p2)
+                qty1 = _qty1 * position
+                qty2 = _qty2 * (-position)
 
                 pnl1 = qty1 * (exit_p1 - entry_p1)
                 pnl2 = qty2 * (exit_p2 - entry_p2)

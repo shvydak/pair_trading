@@ -840,7 +840,7 @@ async def get_history(
 
         # Try PriceCache first — instant if pair is already tracked (watchlist/WS)
         cached = price_cache.find_cached(sym1, sym2, timeframe, limit)
-        if cached and "df1" in cached and "df2" in cached:
+        if cached and "df1" in cached and "df2" in cached and len(cached["price1"]) >= limit:
             price1 = cached["price1"].iloc[-limit:]
             price2 = cached["price2"].iloc[-limit:]
             df1 = cached["df1"].iloc[-limit:]
@@ -1068,7 +1068,7 @@ async def batch_sparklines(items: list[SparklineRequest]):
     fetch_tasks = {}   # idx → asyncio task
     for idx, (item, sym1, sym2) in enumerate(resolved):
         cached = price_cache.find_cached(sym1, sym2, item.timeframe, item.limit)
-        if cached and "df1" in cached and "df2" in cached:
+        if cached and "df1" in cached and "df2" in cached and len(cached["price1"]) >= item.limit:
             p1 = cached["price1"].iloc[-item.limit:]
             p2 = cached["price2"].iloc[-item.limit:]
             d1 = cached["df1"].iloc[-item.limit:]
@@ -1150,6 +1150,9 @@ async def run_backtest(
     exit_threshold: float = Query(0.5),
     position_size_usd: float = Query(1000.0),
     zscore_window: int = Query(20),
+    sizing_method: str = Query("ols"),
+    atr1: Optional[float] = Query(None),
+    atr2: Optional[float] = Query(None),
 ):
     """Run a backtest and return results."""
     try:
@@ -1168,6 +1171,13 @@ async def run_backtest(
 
         hedge_ratio = strategy.calculate_hedge_ratio(price1, price2)
 
+        # For ATR sizing: compute ATR from fetched data if not provided by client
+        if sizing_method == "atr":
+            if atr1 is None:
+                atr1 = strategy.calculate_atr(df1)
+            if atr2 is None:
+                atr2 = strategy.calculate_atr(df2)
+
         result = strategy.calculate_backtest(
             price1, price2,
             hedge_ratio=hedge_ratio,
@@ -1175,6 +1185,9 @@ async def run_backtest(
             exit_threshold=exit_threshold,
             position_size_usd=position_size_usd,
             zscore_window=zscore_window,
+            sizing_method=sizing_method,
+            atr1=atr1,
+            atr2=atr2,
         )
         return _clean(result)
     except Exception as e:

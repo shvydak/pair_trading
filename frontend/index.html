@@ -2810,7 +2810,9 @@ async function runBacktest() {
   setLoading(btn, true, t('running'));
 
   try {
-    const url = `${API}/api/backtest?symbol1=${sym1}&symbol2=${sym2}&timeframe=${state.timeframe}&limit=${limit}&entry_threshold=${entryZ}&exit_threshold=${exitZ}&position_size_usd=${posSize}&zscore_window=${zwindow}`;
+    const atr1Param = state.atr1 ? `&atr1=${state.atr1}` : '';
+    const atr2Param = state.atr2 ? `&atr2=${state.atr2}` : '';
+    const url = `${API}/api/backtest?symbol1=${sym1}&symbol2=${sym2}&timeframe=${state.timeframe}&limit=${limit}&entry_threshold=${entryZ}&exit_threshold=${exitZ}&position_size_usd=${posSize}&zscore_window=${zwindow}&sizing_method=${sizingMethod}${atr1Param}${atr2Param}`;
     const res = await fetch(url);
     if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
     const data = await res.json();
