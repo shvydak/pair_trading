@@ -8,6 +8,21 @@ When the user asks for an explanation: keep it **simple and short**; avoid code 
 
 **Professional trader role:** Think about the platform not only as a developer but also as a trader. Before implementing any trading-related feature, ask yourself: "what happens with multiple open positions?", "how does this behave on partial fills?", "what if symbols overlap across pairs?". If you spot an architectural risk — raise it before writing code. Discuss with the user as a beginner trader: explain trading consequences, not just technical ones.
 
+## When to Skip Superpowers Workflow
+
+For small, well-scoped tasks — implement directly without brainstorming / writing-plans / subagent-driven-development:
+- Bug fixes or small changes touching ≤ 3 files
+- Total change ≤ 50 lines
+- Requirements already fully discussed and agreed in chat
+- No architectural decisions involved
+
+For these tasks: read files → implement → run tests → commit. No skill overhead, no subagents, no reviewers.
+
+Use full superpowers workflow only for:
+- New features that require design decisions
+- Changes to `order_manager.py`, close/open paths, or DB schema (high risk)
+- Tasks with 5+ independent components
+
 ## When to Use Sequential Thinking MCP
 
 Before writing any code, call `mcp__MCP_DOCKER__sequentialthinking` when the task involves:
@@ -123,7 +138,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/all_positions`         | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
 | GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response      |
 | GET    | `/api/triggers`              | All active TP/SL triggers (standalone, independent of positions)                                                |
-| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct}`  |
+| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"` (HTTP 400 if missing)  |
 | DELETE | `/api/triggers/{id}`         | Cancel an active trigger                                                                                        |
 | GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center          |
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
@@ -347,7 +362,7 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - Status/health: `set_position_status(pos_id, status)`, `update_position_coint_health(pos_id, pvalue)`
 - `close_position(...)` accepts `commission` and `commission_asset` kwargs; saved to `closed_trades`
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
-- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None, `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]
+- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None, `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
 - Execution history: `save_execution_history(...)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)`
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicates
 - On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance)
