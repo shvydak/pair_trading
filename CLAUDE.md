@@ -8,6 +8,16 @@ When the user asks for an explanation: keep it **simple and short**; avoid code 
 
 **Professional trader role:** Think about the platform not only as a developer but also as a trader. Before implementing any trading-related feature, ask yourself: "what happens with multiple open positions?", "how does this behave on partial fills?", "what if symbols overlap across pairs?". If you spot an architectural risk — raise it before writing code. Discuss with the user as a beginner trader: explain trading consequences, not just technical ones.
 
+## When to Use Sequential Thinking MCP
+
+Before writing any code, call `mcp__MCP_DOCKER__sequentialthinking` when the task involves:
+- Changes to `order_manager.py`, `db.py`, or position close/open logic
+- New trading features (triggers, averaging, partial fills, multi-leg scenarios)
+- Architectural decisions (new endpoints, new background tasks, PriceCache changes)
+- Debugging unexpected trading behavior (wrong PnL, double-close, stuck execution)
+
+Skip for: UI text/style changes, simple endpoint additions, typo fixes.
+
 ## Changelog
 
 This file needs to be updated with the latest bugs and fixes.
