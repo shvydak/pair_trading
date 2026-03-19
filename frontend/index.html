@@ -1616,7 +1616,9 @@ async function addAlertFromPanel() {
   if (!s1 || !s2) { showToast(t('toast_enter_symbols'), 'warn'); return; }
   const entryZ = parseFloat(document.getElementById('entry-z-input').value) || 0;
   if (!entryZ) { showToast('Укажите Entry Z-score', 'warn'); return; }
-  const timeframe   = state.timeframe || '1h';
+  const candle_limit = parseInt(document.getElementById('limit-input').value) || 0;
+  if (!candle_limit) { showToast('Укажите количество свечей (История)', 'warn'); return; }
+  const timeframe     = state.timeframe || '1h';
   const zscore_window = parseInt(document.getElementById('zwindow-input').value) || 20;
 
   const pctStr = window.prompt(
@@ -1637,6 +1639,7 @@ async function addAlertFromPanel() {
         side: 'both', type: 'alert',
         zscore: entryZ, tp_smart: false,
         timeframe, zscore_window, alert_pct: alertPct,
+        candle_limit,
       }),
     });
     if (res.ok) {
