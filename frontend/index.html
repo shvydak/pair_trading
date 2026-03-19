@@ -3418,6 +3418,33 @@ function _tpslBadgesHtml(pos) {
   return html;
 }
 
+function _posStatusBadgeHtml(pos) {
+  if (pos.status === 'liquidated') {
+    return `<span style="background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ЛИКВИДАЦИЯ</span>`;
+  }
+  if (pos.status === 'adl_detected') {
+    return `<span style="background:#431407;border:1px solid #f97316;color:#fdba74" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ADL</span>`;
+  }
+  if (pos.status === 'partial_close') {
+    return `<span style="background:#431407;border:1px solid #f59e0b;color:#fde68a" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ЧАСТИЧНОЕ ЗАКРЫТИЕ</span>`;
+  }
+  return '';
+}
+
+function _coIntDotHtml(pos) {
+  const p = pos.coint_pvalue;
+  if (p == null) return '';
+  let color, title;
+  if (p < 0.01) {
+    color = '#4ade80'; title = `Коинтеграция: p=${p.toFixed(4)} (сильная)`;
+  } else if (p < 0.05) {
+    color = '#facc15'; title = `Коинтеграция: p=${p.toFixed(4)} (слабая)`;
+  } else {
+    color = '#f87171'; title = `Коинтеграция: p=${p.toFixed(4)} (нарушена!)`;
+  }
+  return `<span title="${title}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0"></span>`;
+}
+
 function renderStrategyPositions(positions) {
   const tbody = document.getElementById('strategy-positions-body');
   if (!tbody) return;
@@ -3465,7 +3492,19 @@ function renderStrategyPositions(positions) {
       const pnlClass = pnl === null ? 'text-muted' : pnl >= 0 ? 'text-green-400' : 'text-red-400';
       const pnlStr  = pnl === null ? '–' : (pnl >= 0 ? '+$' : '-$') + fmt(Math.abs(pnl), 2);
       const pnlCell = document.getElementById(`pnl-cell-${pos.id}`);
-      if (pnlCell) { pnlCell.className = `${pnlClass} font-mono text-xs font-medium`; pnlCell.textContent = pnlStr; }
+      if (pnlCell) {
+        pnlCell.className = `${pnlClass} font-mono text-xs font-medium`;
+        const fundingTotal = pos.funding_total;
+        const fundingStr = (fundingTotal != null && fundingTotal !== 0)
+          ? `<div class="text-[10px] text-muted leading-tight">Funding: ${fundingTotal >= 0 ? '+' : ''}$${fmt(Math.abs(fundingTotal), 2)}</div>`
+          : '';
+        pnlCell.innerHTML = `${pnlStr}${fundingStr}`;
+      }
+      // Update status badge and coint dot
+      const statusEl = document.getElementById(`status-badge-${pos.id}`);
+      if (statusEl) statusEl.innerHTML = _posStatusBadgeHtml(pos);
+      const coIntEl = document.getElementById(`coint-dot-${pos.id}`);
+      if (coIntEl) coIntEl.innerHTML = _coIntDotHtml(pos);
       // Update TP/SL badges immediately
       const badgesEl = document.getElementById(`tpsl-badges-${pos.id}`);
       if (badgesEl) badgesEl.innerHTML = _tpslBadgesHtml(pos);
@@ -3493,10 +3532,18 @@ function renderStrategyPositions(positions) {
     tr.style.cursor = 'pointer';
     if (posIsActive) tr.classList.add('bg-blue-950/20');
     tr.onclick = (e) => { if (!e.target.closest('button, input, canvas')) _loadPosIntoAnalysis(pos.id); };
+    const fundingTotal = pos.funding_total;
+    const fundingStr = (fundingTotal != null && fundingTotal !== 0)
+      ? `<div class="text-[10px] text-muted leading-tight">Funding: ${fundingTotal >= 0 ? '+' : ''}$${fmt(Math.abs(fundingTotal), 2)}</div>`
+      : '';
     tr.innerHTML = `
       <td>
-        <div class="font-medium text-white text-xs leading-tight">${s1}</div>
+        <div class="flex items-center gap-1 leading-tight">
+          <span class="font-medium text-white text-xs">${s1}</span>
+          <span id="coint-dot-${pos.id}">${_coIntDotHtml(pos)}</span>
+        </div>
         <div class="text-muted text-[10px] leading-tight">${s2}</div>
+        <div id="status-badge-${pos.id}" class="mt-0.5">${_posStatusBadgeHtml(pos)}</div>
       </td>
       <td class="${sideClass} font-semibold text-xs">${sideLabel}</td>
       <td class="font-mono text-xs">
@@ -3516,7 +3563,7 @@ function renderStrategyPositions(positions) {
           </div>
         </div>
       </td>
-      <td id="pnl-cell-${pos.id}" class="${pnlClass} font-mono text-xs font-medium">${pnlStr}</td>
+      <td id="pnl-cell-${pos.id}" class="${pnlClass} font-mono text-xs font-medium">${pnlStr}${fundingStr}</td>
       <td class="text-muted text-xs">${_formatDuration(pos.opened_at)}</td>
       <td class="font-mono text-xs">
         ${pos.liq_price1 != null ? `<div class="text-orange-400 leading-tight">${fmt(pos.liq_price1, 4)}</div>` : ''}

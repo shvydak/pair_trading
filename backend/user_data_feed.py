@@ -6,17 +6,18 @@ polling fetch_order() every 2 s.
 
 Flow:
   1. start() obtains a listen key via REST, spawns WS task + keepalive task.
-  2. WS receives ORDER_TRADE_UPDATE events.
-  3. Events for watched order_ids update _fill_data and notify waiters.
-  4. order_manager calls wait_for_order_update() instead of asyncio.sleep().
-  5. Auto-reconnect with exponential backoff; listen key refreshed on reconnect.
-  6. Keepalive task extends listen key every 30 min (Binance expires it at 60 min).
+  2. WS receives ORDER_TRADE_UPDATE and ACCOUNT_UPDATE events.
+  3. ORDER_TRADE_UPDATE: updates _fill_data and notifies order waiters.
+  4. ACCOUNT_UPDATE: fires callbacks for LIQUIDATION / ADL / FUNDING_FEE events.
+  5. order_manager calls wait_for_order_update() instead of asyncio.sleep().
+  6. Auto-reconnect with exponential backoff; listen key refreshed on reconnect.
+  7. Keepalive task extends listen key every 30 min (Binance expires it at 60 min).
 
 Gracefully disabled when no API credentials are present.
 """
 import asyncio
 import json
-from typing import Optional
+from typing import Callable, Optional
 
 import aiohttp
 
@@ -63,6 +64,10 @@ class UserDataFeed:
         # "Replace event" pattern — same as SymbolFeed
         self._generation: int = 0
         self._update_event: asyncio.Event = asyncio.Event()
+        # ACCOUNT_UPDATE callbacks
+        self._liquidation_callbacks: list[Callable] = []
+        self._adl_callbacks: list[Callable] = []
+        self._funding_callbacks: list[Callable] = []
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -102,6 +107,18 @@ class UserDataFeed:
         oid = str(order_id)
         self._watched.discard(oid)
         self._fill_data.pop(oid, None)
+
+    def on_liquidation(self, callback: Callable) -> None:
+        """Register callback(symbol, position_amount) for liquidation events."""
+        self._liquidation_callbacks.append(callback)
+
+    def on_adl(self, callback: Callable) -> None:
+        """Register callback(symbol, position_amount) for ADL events."""
+        self._adl_callbacks.append(callback)
+
+    def on_funding(self, callback: Callable) -> None:
+        """Register callback(asset, amount) for funding fee events."""
+        self._funding_callbacks.append(callback)
 
     def get_fill_data(self, order_id: str) -> Optional[dict]:
         """
@@ -148,6 +165,12 @@ class UserDataFeed:
         avg_raw = order_data.get("ap", "0") or "0"
         avg_price: Optional[float] = float(avg_raw) if avg_raw != "0" else None
 
+        # "n" is the per-fill commission delta; accumulate across fills for this order
+        commission_delta = float(order_data.get("n", 0) or 0)
+        commission_asset = order_data.get("N", "") or ""
+        prev = self._fill_data.get(order_id, {})
+        cumulative_commission = prev.get("commission", 0.0) + commission_delta
+
         self._fill_data[order_id] = {
             "id": order_id,
             "status": ccxt_status,
@@ -155,12 +178,45 @@ class UserDataFeed:
             "remaining": max(0.0, qty - filled),
             "amount": qty,
             "average": avg_price,
+            "commission": cumulative_commission,
+            "commission_asset": commission_asset or prev.get("commission_asset", ""),
         }
         self._notify()
         log.debug(
-            "UserDataFeed: order %s → %s filled=%.6f/%.6f",
-            order_id, ccxt_status, filled, qty,
+            "UserDataFeed: order %s → %s filled=%.6f/%.6f commission=%.8f %s",
+            order_id, ccxt_status, filled, qty, commission, commission_asset,
         )
+
+    def _handle_account_update(self, data: dict) -> None:
+        """Process ACCOUNT_UPDATE events: LIQUIDATION, ADL, FUNDING_FEE."""
+        account = data.get("a", {})
+        reason = account.get("m", "")
+
+        if reason in ("LIQUIDATION", "ADL"):
+            callbacks = self._liquidation_callbacks if reason == "LIQUIDATION" else self._adl_callbacks
+            for pos_entry in account.get("P", []):
+                symbol = pos_entry.get("s", "")
+                position_amount = float(pos_entry.get("pa", 0) or 0)
+                log.warning("UserDataFeed: %s event for %s amount=%s", reason, symbol, position_amount)
+                for cb in callbacks:
+                    try:
+                        if asyncio.iscoroutinefunction(cb):
+                            asyncio.create_task(cb(symbol, position_amount))
+                    except Exception as e:
+                        log.warning("UserDataFeed: %s callback error: %s", reason, e)
+
+        elif reason == "FUNDING_FEE":
+            for balance_entry in account.get("B", []):
+                asset = balance_entry.get("a", "")
+                balance_change = float(balance_entry.get("bc", 0) or 0)
+                if balance_change != 0:
+                    log.info("UserDataFeed: FUNDING_FEE %s %s", balance_change, asset)
+                    for cb in self._funding_callbacks:
+                        try:
+                            if asyncio.iscoroutinefunction(cb):
+                                asyncio.create_task(cb(asset, balance_change))
+                        except Exception as e:
+                            log.warning("UserDataFeed: FUNDING callback error: %s", e)
 
     async def _run(self) -> None:
         """Main WS loop with exponential backoff reconnect."""
@@ -183,8 +239,11 @@ class UserDataFeed:
                                 return
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 data = json.loads(msg.data)
-                                if data.get("e") == "ORDER_TRADE_UPDATE":
+                                event_type = data.get("e")
+                                if event_type == "ORDER_TRADE_UPDATE":
                                     self._handle_order_update(data.get("o", {}))
+                                elif event_type == "ACCOUNT_UPDATE":
+                                    self._handle_account_update(data)
                             elif msg.type in (
                                 aiohttp.WSMsgType.CLOSED,
                                 aiohttp.WSMsgType.ERROR,

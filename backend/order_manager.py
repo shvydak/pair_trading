@@ -69,6 +69,9 @@ class LegState:
     last_reprice_at: float         = field(default_factory=time.time)
     hold_until_stage_end: bool     = False
 
+    commission:      float = 0.0
+    commission_asset: str = ""
+
     def __post_init__(self):
         self.remaining = self.qty
 
@@ -87,6 +90,16 @@ class LegState:
         self.remaining = remaining
         if avg:
             self.avg_price = float(avg)
+
+        # Track commission.
+        # UserDataFeed sends per-fill deltas → accumulate.
+        # REST fetch_order returns cumulative total → take max to avoid double-count.
+        commission = float(order.get("commission") or 0)
+        if commission:
+            self.commission = max(self.commission, commission)
+            asset = order.get("commission_asset") or ""
+            if asset:
+                self.commission_asset = asset
 
         if status in ("closed", "filled") or remaining <= 1e-9:
             self.status = LegStatus.FILLED
@@ -125,6 +138,10 @@ class ExecContext:
     entry_price1:  Optional[float] = None
     entry_price2:  Optional[float] = None
     exit_zscore:   Optional[float] = None
+
+    # Average/pyramid-mode fields
+    is_average:           bool           = False
+    average_position_id:  Optional[int]  = None
 
     # WebSocket feeds (not serialised — set by main.py after construction)
     book_feeds:      Optional[dict]  = field(default=None, repr=False, compare=False)
@@ -169,6 +186,14 @@ class ExecContext:
         }
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _make_client_order_id(ctx: "ExecContext", leg_label: str) -> str:
+    """Build a traceable clientOrderId: PT_{pos_id}_{leg}_{exec_id} (max 36 chars)."""
+    pos_id = ctx.db_id or ctx.close_db_id or 0
+    return f"PT_{pos_id}_{leg_label}_{ctx.exec_id}"[:36]
+
+
 # ─── Main execution coroutine ─────────────────────────────────────────────────
 
 async def run_execution(ctx: ExecContext, client, db_module) -> None:
@@ -207,9 +232,14 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
 
         # ── 2. Place both legs as passive limit orders ────────────────────────
         ctx.evt(f"Placing passive limits: {ctx.leg1.symbol}@{p1} | {ctx.leg2.symbol}@{p2}")
+        params1 = {"clientOrderId": _make_client_order_id(ctx, "leg1")}
+        params2 = {"clientOrderId": _make_client_order_id(ctx, "leg2")}
+        if ctx.is_close:
+            params1["reduceOnly"] = True
+            params2["reduceOnly"] = True
         ord1, ord2 = await asyncio.gather(
-            client.place_limit_order(ctx.leg1.symbol, ctx.leg1.side, ctx.leg1.qty, p1),
-            client.place_limit_order(ctx.leg2.symbol, ctx.leg2.side, ctx.leg2.qty, p2),
+            client.place_limit_order(ctx.leg1.symbol, ctx.leg1.side, ctx.leg1.qty, p1, params=params1),
+            client.place_limit_order(ctx.leg2.symbol, ctx.leg2.side, ctx.leg2.qty, p2, params=params2),
         )
         ctx.leg1.order_id = str(ord1["id"])
         ctx.leg2.order_id = str(ord2["id"])
@@ -274,6 +304,27 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 f"{ctx.leg2.symbol}@{ctx.leg2.avg_price}"
             )
             if ctx.is_close and ctx.close_db_id:
+                # Dust flush: close any unfilled remainder with reduceOnly market order
+                for leg in (ctx.leg1, ctx.leg2):
+                    dust = leg.qty - leg.filled
+                    if dust > 1e-9:
+                        ctx.evt(f"Dust flush: {leg.symbol} {leg.side} {dust:.8f} reduceOnly")
+                        try:
+                            dust_order = await client.place_order(
+                                leg.symbol, leg.side, dust,
+                                order_type="market",
+                                params={"reduceOnly": True},
+                            )
+                            # Update avg_price to weighted average including the dust fill
+                            dust_price = float(dust_order.get("average") or dust_order.get("price") or 0)
+                            if dust_price and leg.avg_price and leg.filled > 0:
+                                total_qty = leg.filled + dust
+                                leg.avg_price = (leg.avg_price * leg.filled + dust_price * dust) / total_qty
+                            leg.filled = leg.qty  # mark as fully filled
+                            ctx.evt(f"Dust flush OK: {leg.symbol} avg_price={leg.avg_price}")
+                        except Exception as e:
+                            ctx.evt(f"Dust flush FAILED {leg.symbol}: {e}")
+
                 # Calculate PnL: leg1=sym1, leg2=sym2; avg_price = exit price
                 pnl = None
                 if (ctx.entry_price1 and ctx.entry_price2
@@ -282,18 +333,40 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                     pnl1 = ctx.leg1.qty * (ctx.leg1.avg_price - ctx.entry_price1) * sign
                     pnl2 = ctx.leg2.qty * (ctx.entry_price2 - ctx.leg2.avg_price) * sign
                     pnl = round(pnl1 + pnl2, 4)
+                total_commission = ctx.leg1.commission + ctx.leg2.commission
+                commission_asset = ctx.leg1.commission_asset or ctx.leg2.commission_asset
                 db_module.close_position(
                     ctx.close_db_id,
                     ctx.leg1.avg_price,
                     ctx.leg2.avg_price,
                     pnl,
                     ctx.exit_zscore,
+                    commission=total_commission,
+                    commission_asset=commission_asset,
                 )
+                db_module.close_position_legs(ctx.close_db_id)
                 ctx.db_id = ctx.close_db_id
-                ctx.evt(f"Position closed in DB id={ctx.close_db_id} pnl={pnl}")
+                ctx.evt(f"Position closed in DB id={ctx.close_db_id} pnl={pnl} commission={total_commission:.8f} {commission_asset}")
                 asyncio.create_task(tg_bot.notify_position_closed(
                     ctx.leg1.symbol, ctx.leg2.symbol, ctx.spread_side,
                     pnl, ctx.exit_zscore, reason="smart",
+                ))
+            elif ctx.is_average and ctx.average_position_id:
+                # ── Averaging: add to existing position ───────────────────
+                db_module.add_position_entry(
+                    ctx.average_position_id, 1, ctx.leg1.filled, ctx.leg1.avg_price or 0,
+                    _make_client_order_id(ctx, "leg1"),
+                )
+                db_module.add_position_entry(
+                    ctx.average_position_id, 2, ctx.leg2.filled, ctx.leg2.avg_price or 0,
+                    _make_client_order_id(ctx, "leg2"),
+                )
+                ctx.db_id = ctx.average_position_id
+                ctx.evt(f"Averaged into position id={ctx.average_position_id}")
+                asyncio.create_task(tg_bot.notify_position_opened(
+                    ctx.leg1.symbol, ctx.leg2.symbol, ctx.spread_side,
+                    ctx.entry_zscore, ctx.leg1.avg_price, ctx.leg2.avg_price,
+                    ctx.size_usd, ctx.leverage,
                 ))
             else:
                 pos_id = db_module.save_open_position(
@@ -315,33 +388,60 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 )
                 ctx.db_id = pos_id
                 ctx.evt(f"Saved to DB id={pos_id}")
+                # Save individual legs for reconciliation
+                db_module.save_position_leg(
+                    pos_id, 1, ctx.leg1.symbol, ctx.leg1.side,
+                    ctx.leg1.filled, ctx.leg1.avg_price,
+                    _make_client_order_id(ctx, "leg1"),
+                )
+                db_module.save_position_leg(
+                    pos_id, 2, ctx.leg2.symbol, ctx.leg2.side,
+                    ctx.leg2.filled, ctx.leg2.avg_price,
+                    _make_client_order_id(ctx, "leg2"),
+                )
                 asyncio.create_task(tg_bot.notify_position_opened(
                     ctx.leg1.symbol, ctx.leg2.symbol, ctx.spread_side,
                     ctx.entry_zscore, ctx.leg1.avg_price, ctx.leg2.avg_price,
                     ctx.size_usd, ctx.leverage,
                 ))
         else:
-            # Partial fill → rollback
-            filled_leg = None
-            for leg in (ctx.leg1, ctx.leg2):
-                if leg.filled > 0:
-                    filled_leg = leg
-                    break
-
-            if filled_leg:
-                ctx.status = ExecStatus.ROLLBACK
-                ctx.evt(
-                    f"Incomplete fill — leg1={ctx.leg1.status} leg2={ctx.leg2.status}. "
-                    f"Rolling back {filled_leg.symbol}"
+            if ctx.is_close:
+                # Partial close — do NOT rollback, alert for manual intervention
+                ctx.status = ExecStatus.DONE
+                msg = (
+                    f"PARTIAL CLOSE: {ctx.leg1.symbol} {ctx.leg1.status} | "
+                    f"{ctx.leg2.symbol} {ctx.leg2.status}. Manual action required."
                 )
-                asyncio.create_task(tg_bot.notify_rollback(
+                ctx.evt(msg)
+                log.error(msg)
+                if ctx.close_db_id:
+                    db_module.set_position_status(ctx.close_db_id, "partial_close")
+                asyncio.create_task(tg_bot.notify_execution_failed(
                     ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id,
+                    "Partial close — manual intervention required for unfilled leg",
                 ))
-                await _rollback_leg(filled_leg, client, ctx)
             else:
-                ctx.evt("Execution ended — nothing filled, no rollback needed")
+                # Partial open fill → rollback filled leg
+                filled_leg = None
+                for leg in (ctx.leg1, ctx.leg2):
+                    if leg.filled > 0:
+                        filled_leg = leg
+                        break
 
-            ctx.status = ExecStatus.DONE
+                if filled_leg:
+                    ctx.status = ExecStatus.ROLLBACK
+                    ctx.evt(
+                        f"Incomplete fill — leg1={ctx.leg1.status} leg2={ctx.leg2.status}. "
+                        f"Rolling back {filled_leg.symbol}"
+                    )
+                    asyncio.create_task(tg_bot.notify_rollback(
+                        ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id,
+                    ))
+                    await _rollback_leg(filled_leg, client, ctx)
+                else:
+                    ctx.evt("Execution ended — nothing filled, no rollback needed")
+
+                ctx.status = ExecStatus.DONE
 
     except Exception as exc:
         ctx.status = ExecStatus.FAILED
@@ -523,7 +623,11 @@ async def _force_market(ctx: ExecContext, client) -> None:
             try:
                 prev_filled = leg.filled
                 prev_avg = leg.avg_price
-                order = await client.place_order(leg.symbol, leg.side, leg.remaining, order_type="market")
+                leg_label = "leg1" if leg is ctx.leg1 else "leg2"
+                market_params = {"clientOrderId": _make_client_order_id(ctx, leg_label)}
+                if ctx.is_close:
+                    market_params["reduceOnly"] = True
+                order = await client.place_order(leg.symbol, leg.side, leg.remaining, order_type="market", params=market_params)
                 market_filled = float(order.get("filled") or leg.remaining)
                 market_avg = order.get("average")
                 leg.filled = min(leg.qty, prev_filled + market_filled)
@@ -558,7 +662,8 @@ async def _rollback_leg(leg: LegState, client, ctx: ExecContext) -> None:
     reverse = "sell" if leg.side == "buy" else "buy"
     ctx.evt(f"ROLLBACK: closing {leg.symbol} {reverse} {leg.filled:.6f} at market")
     try:
-        await client.place_order(leg.symbol, reverse, leg.filled, order_type="market")
+        await client.place_order(leg.symbol, reverse, leg.filled, order_type="market",
+                                 params={"reduceOnly": True})
         ctx.evt(f"Rollback OK: {leg.symbol}")
     except Exception as e:
         ctx.evt(f"ROLLBACK FAILED {leg.symbol}: {e} — MANUAL ACTION REQUIRED")
@@ -673,8 +778,12 @@ async def _place_remaining_limit(
 ) -> None:
     label = "passive" if mode == "passive" else "semi-aggressive"
     ctx.evt(f"  Reprice {leg.symbol}: {leg.remaining:.6f} @ {price} ({label})")
+    leg_label = "leg1" if leg is ctx.leg1 else "leg2"
+    params = {"clientOrderId": _make_client_order_id(ctx, leg_label)}
+    if ctx.is_close:
+        params["reduceOnly"] = True
     try:
-        new_ord = await client.place_limit_order(leg.symbol, leg.side, leg.remaining, price)
+        new_ord = await client.place_limit_order(leg.symbol, leg.side, leg.remaining, price, params=params)
         leg.order_id = str(new_ord["id"])
         leg.working_price = price
         leg.last_reprice_at = now

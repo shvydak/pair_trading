@@ -9,6 +9,8 @@ These tests use lightweight async fakes for Binance/DB so we can verify:
 """
 import asyncio
 
+import pytest
+
 import order_manager as om
 
 
@@ -44,7 +46,7 @@ class FakeClient:
             return values.pop(0)
         return values[0]
 
-    async def place_limit_order(self, symbol, side, amount, price):
+    async def place_limit_order(self, symbol, side, amount, price, params=None):
         order_id = f"L{self.next_order_id}"
         self.next_order_id += 1
         self.limit_orders.append({
@@ -53,6 +55,7 @@ class FakeClient:
             "side": side,
             "amount": amount,
             "price": price,
+            "params": params or {},
         })
         script = self.limit_status_scripts.pop(0) if self.limit_status_scripts else []
         self.order_statuses[order_id] = list(script)
@@ -78,7 +81,7 @@ class FakeClient:
         actual = float(amount) * float(price)
         return actual >= minimum, actual, minimum
 
-    async def place_order(self, symbol, side, amount, order_type="market"):
+    async def place_order(self, symbol, side, amount, order_type="market", params=None):
         self.market_orders.append({
             "symbol": symbol,
             "side": side,
@@ -102,9 +105,18 @@ class FakeDb:
         self.saved = kwargs
         return 123
 
-    def close_position(self, *args):
+    def close_position(self, *args, **kwargs):
         self.closed = args
         return True
+
+    def save_position_leg(self, *args, **kwargs):
+        pass
+
+    def close_position_legs(self, *args, **kwargs):
+        pass
+
+    def set_position_status(self, *args, **kwargs):
+        pass
 
 
 async def _noop(*args, **kwargs):
@@ -290,3 +302,228 @@ def test_run_execution_accepts_dust_and_saves_actual_filled_qty(monkeypatch):
     assert db.saved["qty1"] == 1.0
     assert db.saved["qty2"] == 1.8
     assert len(client.limit_orders) == 2
+
+
+# ---------------------------------------------------------------------------
+# reduceOnly on close orders
+# ---------------------------------------------------------------------------
+
+def test_close_orders_have_reduce_only(monkeypatch):
+    """All limit orders placed in is_close mode must carry reduceOnly=True."""
+    _patch_runtime(monkeypatch)
+    client = FakeClient(
+        orderbooks={
+            "AAA/USDC:USDC": [{"bid": 100.0, "ask": 101.0, "spread_pct": 1.0}],
+            "BBB/USDC:USDC": [{"bid": 200.0, "ask": 201.0, "spread_pct": 0.5}],
+        },
+        limit_status_scripts=[
+            [{"id": "L1", "status": "closed", "filled": 1.0, "remaining": 0.0, "average": 100.0}],
+            [{"id": "L2", "status": "closed", "filled": 2.0, "remaining": 0.0, "average": 200.0}],
+        ],
+    )
+    db = FakeDb()
+    db.closed_with_kwargs = {}
+
+    original_close = db.close_position
+    def _tracking_close(*a, **kw):
+        db.closed_with_kwargs = kw
+        return original_close(*a, **kw)
+    db.close_position = _tracking_close
+
+    ctx = _ctx(passive_s=10.0, aggressive_s=10.0, poll_s=2.0, reprice_s=4.0)
+    ctx.is_close = True
+    ctx.close_db_id = 42
+    ctx.entry_price1 = 95.0
+    ctx.entry_price2 = 195.0
+    # Flip sides for closing: leg1 sell, leg2 buy
+    ctx.leg1 = om.LegState(symbol="AAA/USDC:USDC", side="sell", qty=1.0)
+    ctx.leg2 = om.LegState(symbol="BBB/USDC:USDC", side="buy", qty=2.0)
+    ctx.leg1.last_reprice_at = 0.0
+    ctx.leg2.last_reprice_at = 0.0
+
+    asyncio.run(om.run_execution(ctx, client, db))
+
+    for order in client.limit_orders:
+        assert order.get("params", {}).get("reduceOnly") is True, \
+            f"Order {order['id']} is missing reduceOnly=True"
+
+
+# ---------------------------------------------------------------------------
+# clientOrderId format
+# ---------------------------------------------------------------------------
+
+def test_make_client_order_id_format():
+    ctx = _ctx()
+    ctx.db_id = 7
+    cid = om._make_client_order_id(ctx, "leg1")
+    assert cid.startswith("PT_7_leg1_")
+    assert len(cid) <= 36
+
+
+def test_make_client_order_id_uses_close_db_id_when_no_db_id():
+    ctx = _ctx()
+    ctx.db_id = None
+    ctx.close_db_id = 99
+    cid = om._make_client_order_id(ctx, "leg2")
+    assert cid.startswith("PT_99_leg2_")
+
+
+def test_make_client_order_id_max_36_chars():
+    ctx = _ctx()
+    ctx.db_id = 123456
+    cid = om._make_client_order_id(ctx, "leg1")
+    assert len(cid) <= 36
+
+
+# ---------------------------------------------------------------------------
+# Commission tracking — max() prevents double-count on REST re-polls
+# ---------------------------------------------------------------------------
+
+def test_commission_max_prevents_double_count_on_repeated_absorb():
+    """REST fetch_order returns cumulative commission — absorb_order must not add it twice."""
+    leg = om.LegState(symbol="AAA/USDC:USDC", side="buy", qty=1.0)
+    # First REST poll: partial fill, cumulative commission = 0.01
+    leg.absorb_order({
+        "id": "L1", "status": "open", "filled": 0.5, "remaining": 0.5,
+        "average": 100.0, "commission": 0.01, "commission_asset": "USDC",
+    })
+    assert leg.commission == pytest.approx(0.01)
+    # Second REST poll: full fill, cumulative commission = 0.03
+    leg.absorb_order({
+        "id": "L1", "status": "closed", "filled": 1.0, "remaining": 0.0,
+        "average": 100.0, "commission": 0.03, "commission_asset": "USDC",
+    })
+    # Must be 0.03 (final cumulative), not 0.04 (0.01 + 0.03)
+    assert leg.commission == pytest.approx(0.03)
+
+
+def test_commission_accumulates_ws_per_fill_events():
+    """UserDataFeed accumulates per-fill deltas into cumulative commission.
+    absorb_order receives cumulative values from UserDataFeed, so max() is correct."""
+    leg = om.LegState(symbol="AAA/USDC:USDC", side="buy", qty=1.0)
+    # WS event 1: UserDataFeed stores cumulative=0.01 (0 + 0.01)
+    leg.absorb_order({
+        "id": "L1", "status": "open", "filled": 0.3, "remaining": 0.7,
+        "average": 100.0, "commission": 0.01, "commission_asset": "USDC",
+    })
+    # WS event 2: UserDataFeed stores cumulative=0.03 (0.01 + 0.02)
+    leg.absorb_order({
+        "id": "L1", "status": "closed", "filled": 1.0, "remaining": 0.0,
+        "average": 100.0, "commission": 0.03, "commission_asset": "USDC",
+    })
+    # max(0.01, 0.03) = 0.03
+    assert leg.commission == pytest.approx(0.03)
+
+
+# ---------------------------------------------------------------------------
+# ROLLBACK for close — sets partial_close status, does not re-open
+# ---------------------------------------------------------------------------
+
+def test_close_partial_fill_sets_partial_close_status(monkeypatch):
+    """When close fails on one leg, status becomes partial_close in DB — no rollback market order."""
+    _patch_runtime(monkeypatch)
+    client = FakeClient(
+        orderbooks={
+            "AAA/USDC:USDC": [{"bid": 100.0, "ask": 101.0, "spread_pct": 1.0}],
+            "BBB/USDC:USDC": [{"bid": 200.0, "ask": 201.0, "spread_pct": 0.5}],
+        },
+        limit_status_scripts=[
+            # leg1 closes OK
+            [{"id": "L1", "status": "closed", "filled": 1.0, "remaining": 0.0, "average": 100.0}],
+            # leg2 initial order (L2) — stays open through passive stage
+            [{"id": "L2", "status": "open", "filled": 0.0, "remaining": 2.0}],
+            # leg2 repriced order (L3) in aggressive stage — also stays open
+            [{"id": "L3", "status": "open", "filled": 0.0, "remaining": 2.0}],
+        ],
+    )
+    db = FakeDb()
+    db.statuses_set = []
+    original_set = db.set_position_status
+    def _track_status(*a, **kw):
+        db.statuses_set.append(a)
+        return original_set(*a, **kw)
+    db.set_position_status = _track_status
+
+    # allow_market=False so leg2 cannot be force-filled — triggers partial_close path
+    ctx = _ctx(passive_s=2.0, aggressive_s=2.0, poll_s=2.0, reprice_s=10.0, allow_market=False)
+    ctx.is_close = True
+    ctx.close_db_id = 42
+    ctx.entry_price1 = 95.0
+    ctx.entry_price2 = 195.0
+    ctx.leg1 = om.LegState(symbol="AAA/USDC:USDC", side="sell", qty=1.0)
+    ctx.leg2 = om.LegState(symbol="BBB/USDC:USDC", side="buy", qty=2.0)
+    ctx.leg1.last_reprice_at = 0.0
+    ctx.leg2.last_reprice_at = 0.0
+
+    asyncio.run(om.run_execution(ctx, client, db))
+
+    assert ctx.status == om.ExecStatus.DONE
+    # partial_close must be set in DB
+    assert any(a[1] == "partial_close" for a in db.statuses_set), \
+        "Expected set_position_status(..., 'partial_close') to be called"
+    # No market orders placed (no re-open/rollback)
+    assert client.market_orders == []
+
+
+# ---------------------------------------------------------------------------
+# DUST flush — avg_price updated after flush
+# ---------------------------------------------------------------------------
+
+def test_dust_flush_updates_avg_price_and_saves_correct_pnl(monkeypatch):
+    """After dust flush, avg_price must be recalculated; DB gets the updated exit price."""
+    _patch_runtime(monkeypatch)
+
+    flush_price = 105.0
+
+    class FakeClientWithDustFlush(FakeClient):
+        async def place_order(self, symbol, side, amount, order_type="market", params=None):
+            result = await super().place_order(symbol, side, amount, order_type, params)
+            # Simulate market order returning a fill price
+            result["average"] = flush_price
+            return result
+
+    client = FakeClientWithDustFlush(
+        orderbooks={
+            "AAA/USDC:USDC": [{"bid": 100.0, "ask": 101.0, "spread_pct": 1.0}],
+            "BBB/USDC:USDC": [
+                {"bid": 200.0, "ask": 201.0, "spread_pct": 0.5},
+                {"bid": 200.0, "ask": 201.0, "spread_pct": 0.5},
+            ],
+        },
+        limit_status_scripts=[
+            [{"id": "L1", "status": "closed", "filled": 1.0, "remaining": 0.0, "average": 100.0}],
+            # leg2: partial fill 1.8, then becomes DUST (min notional exceeded for remainder)
+            [
+                {"id": "L2", "status": "open", "filled": 1.8, "remaining": 0.2, "average": 200.0},
+                {"id": "L2", "status": "open", "filled": 1.8, "remaining": 0.2, "average": 200.0},
+            ],
+        ],
+        min_notional={"BBB/USDC:USDC": 1000.0},
+        market_prices={"BBB/USDC:USDC": flush_price},
+    )
+    db = FakeDb()
+    db.closed_kwargs = {}
+    original_close = db.close_position
+    def _track_close(*a, **kw):
+        db.closed_kwargs = kw
+        return original_close(*a, **kw)
+    db.close_position = _track_close
+
+    ctx = _ctx(passive_s=2.0, aggressive_s=10.0, poll_s=2.0, reprice_s=4.0)
+    ctx.is_close = True
+    ctx.close_db_id = 42
+    ctx.entry_price1 = 95.0
+    ctx.entry_price2 = 195.0
+    ctx.leg1 = om.LegState(symbol="AAA/USDC:USDC", side="sell", qty=1.0)
+    ctx.leg2 = om.LegState(symbol="BBB/USDC:USDC", side="buy", qty=2.0)
+    ctx.leg1.last_reprice_at = 0.0
+    ctx.leg2.last_reprice_at = 0.0
+
+    asyncio.run(om.run_execution(ctx, client, db))
+
+    # leg2 was partially filled (1.8) then dust-flushed (0.2 at flush_price)
+    # Expected weighted avg: (1.8*200 + 0.2*105) / 2.0 = (360 + 21) / 2 = 190.5
+    assert ctx.leg2.avg_price == pytest.approx(190.5)
+    # Market flush order was placed
+    assert len(client.market_orders) == 1
+    assert client.market_orders[0]["symbol"] == "BBB/USDC:USDC"

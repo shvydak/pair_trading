@@ -362,19 +362,15 @@ async def _do_market_close(
     price1 = ticker1["last"]
     price2 = ticker2["last"]
 
-    positions = await client.get_positions()
-    pos_map = {p["symbol"]: p for p in positions}
-    p1 = pos_map.get(sym1)
-    p2 = pos_map.get(sym2)
-
-    qty1 = abs(p1["size"]) if p1 else pos["qty1"]
-    qty2 = abs(p2["size"]) if p2 else pos["qty2"]
-    side1 = "sell" if (p1 and p1["side"] == "long") else "buy"
-    side2 = "buy" if (p2 and p2["side"] == "short") else "sell"
+    # Direction and qty always from DB — never from exchange
+    side1 = "sell" if pos["side"] == "long_spread" else "buy"
+    side2 = "buy"  if pos["side"] == "long_spread" else "sell"
+    qty1 = pos["qty1"]
+    qty2 = pos["qty2"]
 
     await asyncio.gather(
-        client.place_order(sym1, side1, qty1),
-        client.place_order(sym2, side2, qty2),
+        client.place_order(sym1, side1, qty1, params={"reduceOnly": True}),
+        client.place_order(sym2, side2, qty2, params={"reduceOnly": True}),
     )
 
     pnl = None
@@ -386,6 +382,7 @@ async def _do_market_close(
             4,
         )
     db.close_position(pos["id"], price1, price2, pnl, exit_zscore)
+    db.close_position_legs(pos["id"])
     asyncio.create_task(tg_bot.notify_position_closed(
         pos["symbol1"], pos["symbol2"], pos["side"], pnl, exit_zscore, reason=reason,
     ))
@@ -402,12 +399,9 @@ async def _do_smart_close_trigger(pos: dict, exit_zscore: Optional[float] = None
     side1 = "sell" if spread_side == "long_spread" else "buy"
     side2 = "buy"  if spread_side == "long_spread" else "sell"
 
-    positions = await client.get_positions()
-    pos_map = {p["symbol"]: p for p in positions}
-    p1 = pos_map.get(sym1)
-    p2 = pos_map.get(sym2)
-    qty1 = abs(p1["size"]) if p1 else pos["qty1"]
-    qty2 = abs(p2["size"]) if p2 else pos["qty2"]
+    # Qty always from DB — never from exchange
+    qty1 = pos["qty1"]
+    qty2 = pos["qty2"]
 
     exec_id = uuid.uuid4().hex[:8]
     cfg = ExecConfig(passive_s=30.0, aggressive_s=20.0, allow_market=True)
@@ -766,14 +760,186 @@ async def monitor_position_triggers() -> None:
         await asyncio.sleep(2)
 
 
+async def _handle_liquidation(symbol: str, position_amount: float) -> None:
+    """Called when Binance liquidates a position."""
+    log.error("LIQUIDATION: %s remaining=%.6f", symbol, position_amount)
+    # Find affected DB positions and mark as liquidated
+    for pos in db.get_open_positions():
+        if pos["symbol1"] == symbol or pos["symbol2"] == symbol:
+            db.set_position_status(pos["id"], "liquidated")
+            log.error("LIQUIDATION: marked DB position %s as liquidated", pos["id"])
+    asyncio.create_task(tg_bot.notify_alert(
+        symbol, "", 0.0, 0.0,
+    ))
+
+
+async def _handle_adl(symbol: str, position_amount: float) -> None:
+    """Called when Binance performs ADL on a position."""
+    log.warning("ADL: %s new_amount=%.6f", symbol, position_amount)
+    for pos in db.get_open_positions():
+        if pos["symbol1"] == symbol:
+            db.set_position_status(pos["id"], "adl_detected")
+        elif pos["symbol2"] == symbol:
+            db.set_position_status(pos["id"], "adl_detected")
+    asyncio.create_task(tg_bot.notify_alert(
+        symbol, "", 0.0, 0.0,
+    ))
+
+
+async def _handle_funding(asset: str, amount: float) -> None:
+    """Called on each funding fee payment/receipt.
+
+    Binance ACCOUNT_UPDATE/FUNDING_FEE sends the *total* balance change for the
+    asset across all open positions.  We distribute it proportionally by notional
+    so each position gets its fair share, not the full amount.
+    """
+    open_positions = db.get_open_positions()
+    # Collect positions that have a leg denominated in this asset
+    matching: list[tuple[dict, str]] = []  # (pos, symbol_for_leg)
+    for pos in open_positions:
+        for sym in (pos["symbol1"], pos["symbol2"]):
+            if asset in sym.upper():
+                matching.append((pos, sym))
+                break
+
+    if not matching:
+        return
+
+    # Distribute proportionally by notional (qty × entry_price) of the relevant leg
+    notionals = []
+    for pos, sym in matching:
+        if sym == pos["symbol1"]:
+            notionals.append(pos["qty1"] * (pos["entry_price1"] or 1.0))
+        else:
+            notionals.append(pos["qty2"] * (pos["entry_price2"] or 1.0))
+
+    total_notional = sum(notionals) or 1.0
+    for (pos, sym), notional in zip(matching, notionals):
+        share = amount * (notional / total_notional)
+        db.save_funding_history(pos["id"], sym, share, asset)
+
+
+async def reconcile_positions() -> None:
+    """
+    Background task: every 5 minutes compare DB open positions vs exchange.
+    Detects missing legs or qty mismatches and alerts via Telegram.
+    Does NOT auto-correct — detection only.
+    """
+    await asyncio.sleep(60)  # initial delay
+    while True:
+        try:
+            open_positions = db.get_open_positions()
+            if open_positions and client.has_creds:
+                exchange_positions = await client.get_positions()
+                exch_map = {p["symbol"]: p for p in exchange_positions}
+                await client._ensure_markets()
+                for pos in open_positions:
+                    if pos.get("status") in ("partial_close", "liquidated", "adl_detected"):
+                        continue
+                    for sym, db_qty in [(pos["symbol1"], pos["qty1"]), (pos["symbol2"], pos["qty2"])]:
+                        exch_pos = exch_map.get(sym)
+                        if exch_pos is None:
+                            log.warning(
+                                "RECONCILE: %s not found on exchange (pos_id=%s)",
+                                sym, pos["id"],
+                            )
+                            asyncio.create_task(tg_bot.notify_alert(sym, "", 0.0, 0.0))
+                        else:
+                            exch_qty = abs(exch_pos["size"])
+                            try:
+                                market = client.exchange.market(sym)
+                                step = float((market.get("precision") or {}).get("amount") or 0)
+                            except Exception:
+                                step = 0.0
+                            if step > 0 and abs(exch_qty - db_qty) > step * 2:
+                                log.warning(
+                                    "RECONCILE: %s qty mismatch DB=%.6f exchange=%.6f (pos_id=%s)",
+                                    sym, db_qty, exch_qty, pos["id"],
+                                )
+        except Exception as e:
+            log.warning("reconcile_positions error: %s", e)
+        await asyncio.sleep(300)
+
+
+async def health_check_coint() -> None:
+    """
+    Background task: every 4 hours re-run cointegration test for open positions.
+    Alerts if p-value > 0.05 (pair may no longer be cointegrated).
+    """
+    await asyncio.sleep(120)  # initial delay
+    while True:
+        try:
+            open_positions = db.get_open_positions()
+            for pos in open_positions:
+                sym1, sym2 = pos["symbol1"], pos["symbol2"]
+                tf = pos.get("timeframe") or "1h"
+                limit = pos.get("candle_limit") or 500
+                try:
+                    entry = price_cache.find_cached(sym1, sym2, tf, limit)
+                    if entry and len(entry.get("price1", [])) >= 50:
+                        p1 = entry["price1"]
+                        p2 = entry["price2"]
+                    else:
+                        df1, df2 = await asyncio.gather(
+                            client.fetch_ohlcv(sym1, tf, limit),
+                            client.fetch_ohlcv(sym2, tf, limit),
+                        )
+                        p1 = df1["close"]
+                        p2 = df2["close"]
+                    result = await _run_sync(strategy.cointegration_test, p1, p2)
+                    pvalue = result.get("pvalue")
+                    if pvalue is not None:
+                        db.update_position_coint_health(pos["id"], pvalue)
+                        if pvalue > 0.05:
+                            log.warning(
+                                "COINT HEALTH: %s/%s p=%.4f > 0.05 — cointegration may have broken",
+                                sym1, sym2, pvalue,
+                            )
+                            asyncio.create_task(tg_bot.notify_alert(sym1, sym2, 0.0, 0.0))
+                except Exception as e:
+                    log.debug("health_check_coint error for %s/%s: %s", sym1, sym2, e)
+        except Exception as e:
+            log.warning("health_check_coint outer error: %s", e)
+        await asyncio.sleep(4 * 3600)
+
+
+async def _reconcile_on_startup() -> None:
+    """
+    On startup: query Binance for any open orders with our PT_ clientOrderId prefix.
+    Logs them so the operator can manually recover if the server crashed mid-execution.
+    """
+    if not client.has_creds:
+        return
+    try:
+        open_orders = await client.exchange.fetch_open_orders()
+        pt_orders = [o for o in open_orders if (o.get("clientOrderId") or "").startswith("PT_")]
+        if pt_orders:
+            log.warning(
+                "STARTUP RECONCILE: found %d orphaned PT_ orders from previous session: %s",
+                len(pt_orders),
+                [(o["symbol"], o["clientOrderId"], o["side"], o.get("amount")) for o in pt_orders],
+            )
+        else:
+            log.info("STARTUP RECONCILE: no orphaned PT_ orders found")
+    except Exception as e:
+        log.warning("STARTUP RECONCILE error: %s", e)
+
+
 async def lifespan(app: FastAPI):
     db.init_db()
     await tg_bot.setup()
     await _user_data_feed.start()  # no-op if no API credentials
+    await _reconcile_on_startup()
+    # Register ACCOUNT_UPDATE callbacks
+    _user_data_feed.on_liquidation(_handle_liquidation)
+    _user_data_feed.on_adl(_handle_adl)
+    _user_data_feed.on_funding(_handle_funding)
     _bg_tasks = [
         asyncio.create_task(price_cache.run()),
         asyncio.create_task(monitor_position_triggers()),
         asyncio.create_task(tg_bot.start_polling()),
+        asyncio.create_task(reconcile_positions()),
+        asyncio.create_task(health_check_coint()),
     ]
     log.info("Pair Trading backend started")
     yield
@@ -1216,6 +1382,40 @@ async def get_positions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _enrich_positions(db_positions: list[dict], live_map: dict) -> list[dict]:
+    """
+    Enrich DB positions with live mark prices and PnL.
+    Mark prices fetched per-symbol from live_map (by symbol key).
+    PnL always calculated from DB qty — never from exchange position size.
+    liq_price is informational only (belongs to the symbol-level position).
+    """
+    enriched = []
+    for pos in db_positions:
+        sym1, sym2 = pos["symbol1"], pos["symbol2"]
+        live1 = live_map.get(sym1, {})
+        live2 = live_map.get(sym2, {})
+        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
+        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
+        pnl = None
+        if (mark_price1 and pos.get("entry_price1")
+                and mark_price2 and pos.get("entry_price2")):
+            sign = 1 if pos["side"] == "long_spread" else -1
+            leg1_pnl = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
+            leg2_pnl = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
+            pnl = round(leg1_pnl + leg2_pnl, 4)
+        funding_total = db.get_funding_total(pos["id"])
+        enriched.append({
+            **pos,
+            "mark_price1": mark_price1,
+            "mark_price2": mark_price2,
+            "unrealized_pnl": pnl,
+            "funding_total": funding_total,
+            "liq_price1": live1.get("liquidation_price"),
+            "liq_price2": live2.get("liquidation_price"),
+        })
+    return enriched
+
+
 @app.get("/api/all_positions")
 async def get_all_positions():
     """
@@ -1232,31 +1432,8 @@ async def get_all_positions():
         live_positions = []
         live_map = {}
 
-    enriched = []
-    for pos in db_positions:
-        sym1, sym2 = pos["symbol1"], pos["symbol2"]
-        live1 = live_map.get(sym1, {})
-        live2 = live_map.get(sym2, {})
-        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
-        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
-        pnl = None
-        if (mark_price1 and pos.get("entry_price1")
-                and mark_price2 and pos.get("entry_price2")):
-            sign = 1 if pos["side"] == "long_spread" else -1
-            p1 = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
-            p2 = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
-            pnl = round(p1 + p2, 4)
-        enriched.append({
-            **pos,
-            "mark_price1": mark_price1,
-            "mark_price2": mark_price2,
-            "unrealized_pnl": pnl,
-            "liq_price1": live1.get("liquidation_price"),
-            "liq_price2": live2.get("liquidation_price"),
-        })
-
     return _clean({
-        "strategy_positions": enriched,
+        "strategy_positions": _enrich_positions(db_positions, live_map),
         "exchange_positions": live_positions,
     })
 
@@ -1294,35 +1471,11 @@ async def get_dashboard(alert_minutes: int = Query(60)):
         live_map = {}
         balances = []
 
-    # Enrich strategy positions with live data
-    enriched = []
-    for pos in db_positions:
-        sym1, sym2 = pos["symbol1"], pos["symbol2"]
-        live1 = live_map.get(sym1, {})
-        live2 = live_map.get(sym2, {})
-        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
-        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
-        pnl = None
-        if (mark_price1 and pos.get("entry_price1")
-                and mark_price2 and pos.get("entry_price2")):
-            sign = 1 if pos["side"] == "long_spread" else -1
-            p1 = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
-            p2 = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
-            pnl = round(p1 + p2, 4)
-        enriched.append({
-            **pos,
-            "mark_price1": mark_price1,
-            "mark_price2": mark_price2,
-            "unrealized_pnl": pnl,
-            "liq_price1": live1.get("liquidation_price"),
-            "liq_price2": live2.get("liquidation_price"),
-        })
-
     # Recent alerts — pure SQLite, no network call
     recent_alerts = db.get_recent_alerts(alert_minutes)
 
     return _clean({
-        "strategy_positions": enriched,
+        "strategy_positions": _enrich_positions(db_positions, live_map),
         "exchange_positions": live_positions,
         "balances": balances,
         "recent_alerts": recent_alerts,
@@ -1351,33 +1504,7 @@ async def get_db_positions_enriched():
     except Exception:
         live_map = {}
 
-    enriched = []
-    for pos in db_positions:
-        sym1, sym2 = pos["symbol1"], pos["symbol2"]
-        live1 = live_map.get(sym1, {})
-        live2 = live_map.get(sym2, {})
-
-        mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
-        mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
-
-        pnl = None
-        if (mark_price1 and pos.get("entry_price1")
-                and mark_price2 and pos.get("entry_price2")):
-            sign = 1 if pos["side"] == "long_spread" else -1
-            p1 = pos["qty1"] * (mark_price1 - pos["entry_price1"]) * sign
-            p2 = pos["qty2"] * (pos["entry_price2"] - mark_price2) * sign
-            pnl = round(p1 + p2, 4)
-
-        enriched.append({
-            **pos,
-            "mark_price1": mark_price1,
-            "mark_price2": mark_price2,
-            "unrealized_pnl": pnl,
-            "liq_price1": live1.get("liquidation_price"),
-            "liq_price2": live2.get("liquidation_price"),
-        })
-
-    return {"positions": _clean(enriched)}
+    return {"positions": _clean(_enrich_positions(db_positions, live_map))}
 
 
 @app.delete("/api/db/positions/{position_id}")
@@ -1701,18 +1828,9 @@ async def start_smart_trade(req: SmartTradeRequest):
             if not db_pos:
                 raise HTTPException(404, f"No open DB position found for {sym1}/{sym2}")
 
-            # Use actual exchange qty; fall back to DB qty
-            try:
-                live_positions = await client.get_positions()
-                pos_map = {p["symbol"]: p for p in live_positions}
-            except Exception:
-                pos_map = {}
-            p1 = pos_map.get(sym1)
-            p2 = pos_map.get(sym2)
-            close_qty1 = abs(p1["size"]) if p1 else db_pos["qty1"]
-            close_qty2 = abs(p2["size"]) if p2 else db_pos["qty2"]
-
-            # Reverse the spread direction
+            # Qty and direction always from DB — never from exchange
+            close_qty1 = db_pos["qty1"]
+            close_qty2 = db_pos["qty2"]
             if db_pos["side"] == "long_spread":
                 side1, side2 = "sell", "buy"
             else:
@@ -1734,6 +1852,63 @@ async def start_smart_trade(req: SmartTradeRequest):
                 leverage=db_pos.get("leverage") or 1,
             )
             log.info(f"Smart close started: {exec_id} | {sym1}/{sym2} | {db_pos['side']}")
+
+        elif req.action == "average":
+            # ── Add to existing position (averaging/pyramiding) ────────────
+            db_pos = db.find_open_position(sym1, sym2)
+            if not db_pos:
+                raise HTTPException(404, f"No open DB position found for {sym1}/{sym2}")
+
+            ticker1, ticker2 = await asyncio.gather(
+                client.fetch_ticker(sym1),
+                client.fetch_ticker(sym2),
+            )
+            price1 = ticker1["last"]
+            price2 = ticker2["last"]
+
+            sizes = strategy.calculate_position_sizes(
+                price1=price1,
+                price2=price2,
+                size_usd=req.size_usd,
+                hedge_ratio=req.hedge_ratio,
+                atr1=req.atr1,
+                atr2=req.atr2,
+                method=req.sizing_method,
+            )
+            qty1 = sizes["qty1"]
+            qty2 = sizes["qty2"]
+
+            (ok1, notional1, min1), (ok2, notional2, min2) = await asyncio.gather(
+                client.check_min_notional(sym1, qty1, price1),
+                client.check_min_notional(sym2, qty2, price2),
+            )
+            if not ok1:
+                raise HTTPException(400, f"{sym1}: notional ${notional1:.2f} < min ${min1:.2f}")
+            if not ok2:
+                raise HTTPException(400, f"{sym2}: notional ${notional2:.2f} < min ${min2:.2f}")
+
+            # Same direction as existing position
+            side1, side2 = ("buy", "sell") if db_pos["side"] == "long_spread" else ("sell", "buy")
+
+            ctx = ExecContext(
+                exec_id=exec_id,
+                leg1=LegState(symbol=sym1, side=side1, qty=qty1),
+                leg2=LegState(symbol=sym2, side=side2, qty=qty2),
+                config=cfg,
+                spread_side=db_pos["side"],
+                is_close=False,
+                is_average=True,
+                average_position_id=db_pos["id"],
+                hedge_ratio=req.hedge_ratio,
+                entry_zscore=req.entry_zscore,
+                size_usd=req.size_usd,
+                sizing_method=req.sizing_method,
+                leverage=db_pos.get("leverage") or 1,
+                timeframe=db_pos.get("timeframe") or "1h",
+                candle_limit=db_pos.get("candle_limit") or 500,
+                zscore_window=db_pos.get("zscore_window") or 20,
+            )
+            log.info(f"Smart average started: {exec_id} | {sym1}/{sym2} | size_usd={req.size_usd}")
 
         else:
             # ── Open new position ──────────────────────────────────────────
@@ -1964,31 +2139,26 @@ async def execute_trade(req: TradeRequest):
             return _clean({"status": "ok", "db_id": pos_id, "order1": order1, "order2": order2})
 
         else:  # close
-            # --- Find DB position for PnL tracking ---
+            # --- Find DB position for direction/qty/PnL tracking ---
             db_pos = db.find_open_position(sym1, sym2)
 
-            # --- Determine close direction from Binance positions ---
-            positions = await client.get_positions()
-            pos_map = {p["symbol"]: p for p in positions}
-            p1 = pos_map.get(sym1)
-            p2 = pos_map.get(sym2)
-
-            if p1 is None and p2 is None and db_pos is None:
+            if db_pos is None:
                 return {"status": "no open positions to close"}
 
-            side1 = "sell" if (p1 and p1["side"] == "long") else "buy"
-            side2 = "buy" if (p2 and p2["side"] == "short") else "sell"
-            close_qty1 = abs(p1["size"]) if p1 else qty1
-            close_qty2 = abs(p2["size"]) if p2 else qty2
+            # Direction and qty always from DB — never from exchange
+            side1 = "sell" if db_pos["side"] == "long_spread" else "buy"
+            side2 = "buy"  if db_pos["side"] == "long_spread" else "sell"
+            close_qty1 = db_pos["qty1"]
+            close_qty2 = db_pos["qty2"]
 
             order1, order2 = await asyncio.gather(
-                client.place_order(sym1, side1, close_qty1),
-                client.place_order(sym2, side2, close_qty2),
+                client.place_order(sym1, side1, close_qty1, params={"reduceOnly": True}),
+                client.place_order(sym2, side2, close_qty2, params={"reduceOnly": True}),
             )
 
             # --- Calculate PnL and close DB record ---
             pnl = None
-            if db_pos and db_pos.get("entry_price1") and db_pos.get("entry_price2"):
+            if db_pos.get("entry_price1") and db_pos.get("entry_price2"):
                 entry_p1 = db_pos["entry_price1"]
                 entry_p2 = db_pos["entry_price2"]
                 sign = 1 if db_pos["side"] == "long_spread" else -1
@@ -1996,6 +2166,7 @@ async def execute_trade(req: TradeRequest):
                 pnl2 = db_pos["qty2"] * (entry_p2 - price2) * sign
                 pnl = round(pnl1 + pnl2, 4)
                 db.close_position(db_pos["id"], price1, price2, pnl, req.exit_zscore)
+                db.close_position_legs(db_pos["id"])
 
             log.info(
                 f"CLOSE | {sym1}/{sym2} | "

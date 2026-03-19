@@ -87,6 +87,29 @@ def init_db() -> None:
                 data_json    TEXT    NOT NULL,
                 completed_at TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS position_legs (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id      INTEGER REFERENCES open_positions(id),
+                leg_number       INTEGER NOT NULL,
+                symbol           TEXT    NOT NULL,
+                side             TEXT    NOT NULL,
+                qty              REAL    NOT NULL,
+                entry_price      REAL,
+                client_order_id  TEXT,
+                status           TEXT    DEFAULT 'open',
+                opened_at        TEXT    NOT NULL,
+                closed_at        TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS funding_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id INTEGER,
+                symbol      TEXT    NOT NULL,
+                amount      REAL    NOT NULL,
+                asset       TEXT    NOT NULL,
+                paid_at     TEXT    NOT NULL
+            );
         """)
     _migrate()
 
@@ -107,6 +130,11 @@ def _migrate() -> None:
             ("triggers",       "zscore_window", "INTEGER DEFAULT 20"),
             ("triggers",       "alert_pct",     "REAL DEFAULT 1.0"),
             ("triggers",       "last_fired_at", "TEXT"),
+            ("open_positions", "status",           "TEXT DEFAULT 'open'"),
+            ("open_positions", "coint_pvalue",     "REAL"),
+            ("open_positions", "coint_checked_at", "TEXT"),
+            ("closed_trades",  "commission",       "REAL DEFAULT 0"),
+            ("closed_trades",  "commission_asset", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
@@ -167,6 +195,8 @@ def close_position(
     exit_price2: float,
     pnl: float,
     exit_zscore: Optional[float] = None,
+    commission: float = 0.0,
+    commission_asset: str = "",
 ) -> bool:
     with _conn() as conn:
         row = conn.execute(
@@ -181,8 +211,8 @@ def close_position(
               (symbol1, symbol2, side, qty1, qty2, hedge_ratio,
                entry_zscore, exit_zscore, entry_price1, entry_price2,
                exit_price1, exit_price2, pnl, size_usd, sizing_method, leverage,
-               opened_at, closed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               opened_at, closed_at, commission, commission_asset)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["symbol1"], row["symbol2"], row["side"],
@@ -192,6 +222,7 @@ def close_position(
                 exit_price1, exit_price2, pnl,
                 row["size_usd"], row["sizing_method"], row["leverage"],
                 row["opened_at"], datetime.now(timezone.utc).isoformat(),
+                commission, commission_asset or "",
             ),
         )
         conn.execute("DELETE FROM open_positions WHERE id = ?", (position_id,))
@@ -204,6 +235,7 @@ def find_open_position(symbol1: str, symbol2: str) -> Optional[dict]:
             """
             SELECT * FROM open_positions
             WHERE symbol1 = ? AND symbol2 = ?
+              AND status NOT IN ('liquidated', 'adl_detected')
             ORDER BY opened_at DESC LIMIT 1
             """,
             (symbol1, symbol2),
@@ -401,3 +433,173 @@ def get_execution_history(limit: int = 100) -> list[dict]:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Position status management
+# ---------------------------------------------------------------------------
+
+def set_position_status(position_id: int, status: str) -> bool:
+    """Update status of an open position (e.g. 'open', 'partial_close', 'liquidated')."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE open_positions SET status = ? WHERE id = ?",
+            (status, position_id),
+        )
+        return cur.rowcount > 0
+
+
+def update_position_coint_health(position_id: int, pvalue: float) -> bool:
+    """Store latest cointegration p-value for an open position."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE open_positions SET coint_pvalue = ?, coint_checked_at = ? WHERE id = ?",
+            (pvalue, datetime.now(timezone.utc).isoformat(), position_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Position legs (leg-level tracking)
+# ---------------------------------------------------------------------------
+
+def save_position_leg(
+    position_id: int,
+    leg_number: int,
+    symbol: str,
+    side: str,
+    qty: float,
+    entry_price: Optional[float] = None,
+    client_order_id: Optional[str] = None,
+) -> int:
+    """Create a position leg record. Returns leg id."""
+    with _conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO position_legs
+              (position_id, leg_number, symbol, side, qty, entry_price,
+               client_order_id, status, opened_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            """,
+            (
+                position_id, leg_number, symbol, side, qty, entry_price,
+                client_order_id, datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_position_legs(position_id: int) -> list[dict]:
+    """Return all legs for a position, ordered by leg_number."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM position_legs WHERE position_id = ? ORDER BY leg_number, opened_at",
+            (position_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def close_position_legs(position_id: int) -> bool:
+    """Mark all open legs of a position as closed."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE position_legs SET status = 'closed', closed_at = ? WHERE position_id = ? AND status = 'open'",
+            (datetime.now(timezone.utc).isoformat(), position_id),
+        )
+        return cur.rowcount > 0
+
+
+def add_position_entry(
+    position_id: int,
+    leg_number: int,
+    new_qty: float,
+    new_entry_price: float,
+    client_order_id: Optional[str] = None,
+) -> bool:
+    """
+    Add a new entry (averaging) to an existing position.
+    Updates weighted average price and cumulative qty in open_positions.
+    Returns True if position was found and updated.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT qty1, qty2, entry_price1, entry_price2 FROM open_positions WHERE id = ?",
+            (position_id,),
+        ).fetchone()
+        if not row:
+            return False
+
+        if leg_number == 1:
+            old_qty = row["qty1"]
+            old_price = row["entry_price1"] or new_entry_price
+            new_total = old_qty + new_qty
+            new_avg = (old_qty * old_price + new_qty * new_entry_price) / new_total
+            conn.execute(
+                "UPDATE open_positions SET qty1 = ?, entry_price1 = ? WHERE id = ?",
+                (new_total, new_avg, position_id),
+            )
+        else:
+            old_qty = row["qty2"]
+            old_price = row["entry_price2"] or new_entry_price
+            new_total = old_qty + new_qty
+            new_avg = (old_qty * old_price + new_qty * new_entry_price) / new_total
+            conn.execute(
+                "UPDATE open_positions SET qty2 = ?, entry_price2 = ? WHERE id = ?",
+                (new_total, new_avg, position_id),
+            )
+
+        # Record the new entry as a separate leg row
+        symbol_row = conn.execute(
+            "SELECT symbol1, symbol2, side FROM open_positions WHERE id = ?",
+            (position_id,),
+        ).fetchone()
+        if symbol_row:
+            symbol = symbol_row["symbol1"] if leg_number == 1 else symbol_row["symbol2"]
+            spread_side = symbol_row["side"]
+            leg_side = ("buy" if spread_side == "long_spread" else "sell") if leg_number == 1 else \
+                       ("sell" if spread_side == "long_spread" else "buy")
+            conn.execute(
+                """
+                INSERT INTO position_legs
+                  (position_id, leg_number, symbol, side, qty, entry_price,
+                   client_order_id, status, opened_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                """,
+                (
+                    position_id, leg_number, symbol, leg_side, new_qty, new_entry_price,
+                    client_order_id, datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Funding history
+# ---------------------------------------------------------------------------
+
+def save_funding_history(
+    position_id: Optional[int],
+    symbol: str,
+    amount: float,
+    asset: str,
+) -> int:
+    """Record a funding fee payment/receipt for a position leg."""
+    with _conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO funding_history (position_id, symbol, amount, asset, paid_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (position_id, symbol, amount, asset, datetime.now(timezone.utc).isoformat()),
+        )
+        return cur.lastrowid
+
+
+def get_funding_total(position_id: int) -> float:
+    """Return total funding paid/received for a position (negative = paid, positive = received)."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) as total FROM funding_history WHERE position_id = ?",
+            (position_id,),
+        ).fetchone()
+        return float(row["total"]) if row else 0.0

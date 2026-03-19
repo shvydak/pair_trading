@@ -546,6 +546,248 @@ def test_save_execution_history_close(tmp_db):
     assert row["db_id"] is None
 
 
+# ---------------------------------------------------------------------------
+# set_position_status
+# ---------------------------------------------------------------------------
+
+def test_set_position_status_updates_status(tmp_db):
+    pos_id = _save(tmp_db)
+    result = tmp_db.set_position_status(pos_id, "partial_close")
+    assert result is True
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["status"] == "partial_close"
+
+
+def test_set_position_status_returns_false_for_unknown_id(tmp_db):
+    assert tmp_db.set_position_status(9999, "liquidated") is False
+
+
+def test_set_position_status_all_terminal_values(tmp_db):
+    for status in ("liquidated", "adl_detected", "partial_close", "open"):
+        pos_id = _save(tmp_db, f"BTC/USDT:USDT", f"{status}/USDT:USDT")
+        assert tmp_db.set_position_status(pos_id, status) is True
+
+
+# ---------------------------------------------------------------------------
+# update_position_coint_health
+# ---------------------------------------------------------------------------
+
+def test_update_coint_health_stores_pvalue(tmp_db):
+    pos_id = _save(tmp_db)
+    result = tmp_db.update_position_coint_health(pos_id, 0.03)
+    assert result is True
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["coint_pvalue"] == pytest.approx(0.03)
+    assert pos["coint_checked_at"] is not None
+
+
+def test_update_coint_health_returns_false_for_unknown_id(tmp_db):
+    assert tmp_db.update_position_coint_health(9999, 0.01) is False
+
+
+def test_update_coint_health_overwrites_previous_value(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.update_position_coint_health(pos_id, 0.08)
+    tmp_db.update_position_coint_health(pos_id, 0.01)
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["coint_pvalue"] == pytest.approx(0.01)
+
+
+# ---------------------------------------------------------------------------
+# find_open_position — status filter (liquidated / adl_detected)
+# ---------------------------------------------------------------------------
+
+def test_find_open_position_ignores_liquidated(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_status(pos_id, "liquidated")
+    assert tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT") is None
+
+
+def test_find_open_position_ignores_adl_detected(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_status(pos_id, "adl_detected")
+    assert tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT") is None
+
+
+def test_find_open_position_returns_partial_close(tmp_db):
+    """partial_close positions are still findable — user may want to inspect/close them."""
+    pos_id = _save(tmp_db)
+    tmp_db.set_position_status(pos_id, "partial_close")
+    pos = tmp_db.find_open_position("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert pos is not None
+    assert pos["id"] == pos_id
+
+
+# ---------------------------------------------------------------------------
+# close_position — commission params
+# ---------------------------------------------------------------------------
+
+def test_close_position_saves_commission(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.close_position(
+        pos_id, exit_price1=51000.0, exit_price2=3100.0, pnl=50.0,
+        commission=0.05, commission_asset="USDC",
+    )
+    trades = tmp_db.get_closed_trades()
+    assert len(trades) == 1
+    assert trades[0]["commission"] == pytest.approx(0.05)
+    assert trades[0]["commission_asset"] == "USDC"
+
+
+def test_close_position_commission_defaults_to_zero(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.close_position(pos_id, 51000.0, 3100.0, 50.0)
+    trade = tmp_db.get_closed_trades()[0]
+    assert trade["commission"] == pytest.approx(0.0)
+    assert trade["commission_asset"] == ""
+
+
+# ---------------------------------------------------------------------------
+# save_position_leg / get_position_legs / close_position_legs
+# ---------------------------------------------------------------------------
+
+def test_save_position_leg_returns_id(tmp_db):
+    pos_id = _save(tmp_db)
+    leg_id = tmp_db.save_position_leg(pos_id, 1, "BTC/USDT:USDT", "buy", 0.01, 50000.0, "PT_1_leg1_abc")
+    assert isinstance(leg_id, int)
+    assert leg_id >= 1
+
+
+def test_get_position_legs_returns_saved_legs(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.save_position_leg(pos_id, 1, "BTC/USDT:USDT", "buy", 0.01, 50000.0)
+    tmp_db.save_position_leg(pos_id, 2, "ETH/USDT:USDT", "sell", 0.1, 3000.0)
+    legs = tmp_db.get_position_legs(pos_id)
+    assert len(legs) == 2
+    assert legs[0]["leg_number"] == 1
+    assert legs[0]["symbol"] == "BTC/USDT:USDT"
+    assert legs[0]["qty"] == pytest.approx(0.01)
+    assert legs[1]["leg_number"] == 2
+
+
+def test_get_position_legs_empty_for_unknown_position(tmp_db):
+    assert tmp_db.get_position_legs(9999) == []
+
+
+def test_close_position_legs_marks_all_open_legs_closed(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.save_position_leg(pos_id, 1, "BTC/USDT:USDT", "buy", 0.01)
+    tmp_db.save_position_leg(pos_id, 2, "ETH/USDT:USDT", "sell", 0.1)
+    result = tmp_db.close_position_legs(pos_id)
+    assert result is True
+    legs = tmp_db.get_position_legs(pos_id)
+    assert all(leg["status"] == "closed" for leg in legs)
+    assert all(leg["closed_at"] is not None for leg in legs)
+
+
+def test_close_position_legs_returns_false_when_no_open_legs(tmp_db):
+    pos_id = _save(tmp_db)
+    assert tmp_db.close_position_legs(pos_id) is False
+
+
+def test_save_position_leg_stores_client_order_id(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.save_position_leg(pos_id, 1, "BTC/USDT:USDT", "buy", 0.01,
+                             client_order_id="PT_1_leg1_a3f2b1c4")
+    leg = tmp_db.get_position_legs(pos_id)[0]
+    assert leg["client_order_id"] == "PT_1_leg1_a3f2b1c4"
+
+
+# ---------------------------------------------------------------------------
+# add_position_entry — averaging / pyramiding
+# ---------------------------------------------------------------------------
+
+def test_add_position_entry_updates_qty(tmp_db):
+    pos_id = _save(tmp_db, qty1=0.01, entry_price1=50000.0)
+    tmp_db.add_position_entry(pos_id, 1, new_qty=0.01, new_entry_price=48000.0)
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["qty1"] == pytest.approx(0.02)
+
+
+def test_add_position_entry_calculates_weighted_avg_price(tmp_db):
+    """avg = (0.01*50000 + 0.01*48000) / 0.02 = 49000"""
+    pos_id = _save(tmp_db, qty1=0.01, entry_price1=50000.0)
+    tmp_db.add_position_entry(pos_id, 1, new_qty=0.01, new_entry_price=48000.0)
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["entry_price1"] == pytest.approx(49000.0)
+
+
+def test_add_position_entry_leg2(tmp_db):
+    """Averaging on leg2 updates qty2 and entry_price2."""
+    pos_id = _save(tmp_db, qty2=0.1, entry_price2=3000.0)
+    tmp_db.add_position_entry(pos_id, 2, new_qty=0.1, new_entry_price=2800.0)
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["qty2"] == pytest.approx(0.2)
+    assert pos["entry_price2"] == pytest.approx(2900.0)
+
+
+def test_add_position_entry_inserts_new_leg_row(tmp_db):
+    """Each add_position_entry records the new entry as a position_legs row."""
+    pos_id = _save(tmp_db)
+    tmp_db.add_position_entry(pos_id, 1, new_qty=0.005, new_entry_price=48000.0,
+                              client_order_id="PT_1_leg1_avg1")
+    legs = tmp_db.get_position_legs(pos_id)
+    assert len(legs) == 1
+    assert legs[0]["qty"] == pytest.approx(0.005)
+    assert legs[0]["client_order_id"] == "PT_1_leg1_avg1"
+
+
+def test_add_position_entry_returns_false_for_unknown_position(tmp_db):
+    assert tmp_db.add_position_entry(9999, 1, 0.01, 50000.0) is False
+
+
+def test_add_position_entry_unequal_quantities(tmp_db):
+    """Weighted avg with unequal fill sizes: (0.02*50000 + 0.01*44000) / 0.03 = 48000"""
+    pos_id = _save(tmp_db, qty1=0.02, entry_price1=50000.0)
+    tmp_db.add_position_entry(pos_id, 1, new_qty=0.01, new_entry_price=44000.0)
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["qty1"] == pytest.approx(0.03)
+    assert pos["entry_price1"] == pytest.approx(48000.0)
+
+
+# ---------------------------------------------------------------------------
+# save_funding_history / get_funding_total
+# ---------------------------------------------------------------------------
+
+def test_save_funding_history_returns_id(tmp_db):
+    pos_id = _save(tmp_db)
+    fid = tmp_db.save_funding_history(pos_id, "BTC/USDT:USDT", -0.5, "USDT")
+    assert isinstance(fid, int)
+    assert fid >= 1
+
+
+def test_get_funding_total_sums_entries(tmp_db):
+    pos_id = _save(tmp_db)
+    tmp_db.save_funding_history(pos_id, "BTC/USDT:USDT", -0.5, "USDT")
+    tmp_db.save_funding_history(pos_id, "ETH/USDT:USDT", -0.3, "USDT")
+    tmp_db.save_funding_history(pos_id, "BTC/USDT:USDT",  0.1, "USDT")
+    total = tmp_db.get_funding_total(pos_id)
+    assert total == pytest.approx(-0.7)
+
+
+def test_get_funding_total_zero_when_no_entries(tmp_db):
+    pos_id = _save(tmp_db)
+    assert tmp_db.get_funding_total(pos_id) == pytest.approx(0.0)
+
+
+def test_get_funding_total_zero_for_unknown_position(tmp_db):
+    assert tmp_db.get_funding_total(9999) == pytest.approx(0.0)
+
+
+def test_get_funding_total_isolates_per_position(tmp_db):
+    """Funding from one position does not bleed into another."""
+    pos1 = _save(tmp_db, "BTC/USDT:USDT", "ETH/USDT:USDT")
+    pos2 = _save(tmp_db, "BTC/USDT:USDT", "LTC/USDT:USDT")
+    tmp_db.save_funding_history(pos1, "BTC/USDT:USDT", -1.0, "USDT")
+    assert tmp_db.get_funding_total(pos2) == pytest.approx(0.0)
+
+
+def test_save_funding_history_positive_amount(tmp_db):
+    """Positive amount = received funding (long position in contango)."""
+    pos_id = _save(tmp_db)
+    tmp_db.save_funding_history(pos_id, "BTC/USDT:USDT", 0.8, "USDT")
+    assert tmp_db.get_funding_total(pos_id) == pytest.approx(0.8)
+
 def test_get_execution_history_empty(tmp_db):
     """Returns empty list when table is empty."""
     assert tmp_db.get_execution_history() == []

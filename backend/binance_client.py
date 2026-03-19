@@ -1,5 +1,6 @@
 import os
 import asyncio
+from typing import Optional
 import ccxt.async_support as ccxt
 import pandas as pd
 from dotenv import load_dotenv
@@ -181,6 +182,7 @@ class BinanceClient:
         side: str,
         amount: float,
         order_type: str = "market",
+        params: Optional[dict] = None,
     ) -> dict:
         """Place a market order. Rounds amount to exchange lot-size before submitting."""
         try:
@@ -191,6 +193,7 @@ class BinanceClient:
                 type=order_type,
                 side=side,
                 amount=rounded,
+                params=params or {},
             )
             return order
         except Exception as e:
@@ -263,7 +266,8 @@ class BinanceClient:
             raise RuntimeError(f"Failed to fetch order book for {symbol}: {e}")
 
     async def place_limit_order(
-        self, symbol: str, side: str, amount: float, price: float
+        self, symbol: str, side: str, amount: float, price: float,
+        params: Optional[dict] = None,
     ) -> dict:
         """Place a limit order. Rounds amount and price to exchange precision."""
         try:
@@ -276,6 +280,7 @@ class BinanceClient:
                 side=side,
                 amount=rounded,
                 price=price_str,
+                params=params or {},
             )
             return order
         except Exception as e:
