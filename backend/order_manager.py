@@ -8,6 +8,7 @@ State machine:
 """
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -188,10 +189,14 @@ class ExecContext:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _make_client_order_id(ctx: "ExecContext", leg_label: str) -> str:
-    """Build a traceable clientOrderId: PT_{pos_id}_{leg}_{exec_id} (max 36 chars)."""
+def _make_placement_id(ctx: "ExecContext", leg_label: str) -> str:
+    """Build a unique clientOrderId per order placement: PT_{pos_id}_{leg}_{uuid8} (max 36 chars).
+    Using a fresh UUID suffix prevents Binance from returning stale cached fill data
+    when a clientOrderId is reused after cancellation.
+    """
     pos_id = ctx.db_id or ctx.close_db_id or 0
-    return f"PT_{pos_id}_{leg_label}_{ctx.exec_id}"[:36]
+    suffix = uuid.uuid4().hex[:8]
+    return f"PT_{pos_id}_{leg_label}_{suffix}"[:36]
 
 
 # ─── Main execution coroutine ─────────────────────────────────────────────────
@@ -232,8 +237,8 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
 
         # ── 2. Place both legs as passive limit orders ────────────────────────
         ctx.evt(f"Placing passive limits: {ctx.leg1.symbol}@{p1} | {ctx.leg2.symbol}@{p2}")
-        params1 = {"clientOrderId": _make_client_order_id(ctx, "leg1")}
-        params2 = {"clientOrderId": _make_client_order_id(ctx, "leg2")}
+        params1 = {"clientOrderId": _make_placement_id(ctx, "leg1")}
+        params2 = {"clientOrderId": _make_placement_id(ctx, "leg2")}
         if ctx.is_close:
             params1["reduceOnly"] = True
             params2["reduceOnly"] = True
@@ -288,7 +293,7 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                     ctx.status = ExecStatus.FORCING
                     ctx.evt("Semi-aggressive timeout — forcing remaining fills")
                     if cfg.allow_market:
-                        await _force_market(ctx, client)
+                        await _force_market(ctx, client, udf=udf, registered_orders=_registered_orders)
                         await asyncio.sleep(3)
                         await _refresh_fills(ctx, client)
                     else:
@@ -355,11 +360,11 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 # ── Averaging: add to existing position ───────────────────
                 db_module.add_position_entry(
                     ctx.average_position_id, 1, ctx.leg1.filled, ctx.leg1.avg_price or 0,
-                    _make_client_order_id(ctx, "leg1"),
+                    ctx.leg1.order_id,
                 )
                 db_module.add_position_entry(
                     ctx.average_position_id, 2, ctx.leg2.filled, ctx.leg2.avg_price or 0,
-                    _make_client_order_id(ctx, "leg2"),
+                    ctx.leg2.order_id,
                 )
                 ctx.db_id = ctx.average_position_id
                 ctx.evt(f"Averaged into position id={ctx.average_position_id}")
@@ -392,12 +397,12 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 db_module.save_position_leg(
                     pos_id, 1, ctx.leg1.symbol, ctx.leg1.side,
                     ctx.leg1.filled, ctx.leg1.avg_price,
-                    _make_client_order_id(ctx, "leg1"),
+                    ctx.leg1.order_id,
                 )
                 db_module.save_position_leg(
                     pos_id, 2, ctx.leg2.symbol, ctx.leg2.side,
                     ctx.leg2.filled, ctx.leg2.avg_price,
-                    _make_client_order_id(ctx, "leg2"),
+                    ctx.leg2.order_id,
                 )
                 asyncio.create_task(tg_bot.notify_position_opened(
                     ctx.leg1.symbol, ctx.leg2.symbol, ctx.spread_side,
@@ -600,7 +605,7 @@ async def _reprice_live_orders(ctx: ExecContext, client, mode: str) -> None:
         await _place_remaining_limit(ctx, client, leg, new_price, mode, now=now)
 
 
-async def _force_market(ctx: ExecContext, client) -> None:
+async def _force_market(ctx: ExecContext, client, udf=None, registered_orders: Optional[set] = None) -> None:
     """Cancel remaining limit orders and fill via market."""
     for leg in (ctx.leg1, ctx.leg2):
         if leg.is_done:
@@ -624,7 +629,7 @@ async def _force_market(ctx: ExecContext, client) -> None:
                 prev_filled = leg.filled
                 prev_avg = leg.avg_price
                 leg_label = "leg1" if leg is ctx.leg1 else "leg2"
-                market_params = {"clientOrderId": _make_client_order_id(ctx, leg_label)}
+                market_params = {"clientOrderId": _make_placement_id(ctx, leg_label)}
                 if ctx.is_close:
                     market_params["reduceOnly"] = True
                 order = await client.place_order(leg.symbol, leg.side, leg.remaining, order_type="market", params=market_params)
@@ -633,6 +638,12 @@ async def _force_market(ctx: ExecContext, client) -> None:
                 leg.filled = min(leg.qty, prev_filled + market_filled)
                 leg.remaining = 0.0
                 leg.status    = LegStatus.FILLED
+                # Update order_id to market order and register with UserDataFeed for fill tracking
+                leg.order_id = str(order["id"])
+                if udf:
+                    udf.register_order(leg.order_id)
+                    if registered_orders is not None:
+                        registered_orders.add(leg.order_id)
                 if market_avg:
                     market_avg = float(market_avg)
                     if prev_avg is not None and prev_filled > 0:
@@ -779,7 +790,7 @@ async def _place_remaining_limit(
     label = "passive" if mode == "passive" else "semi-aggressive"
     ctx.evt(f"  Reprice {leg.symbol}: {leg.remaining:.6f} @ {price} ({label})")
     leg_label = "leg1" if leg is ctx.leg1 else "leg2"
-    params = {"clientOrderId": _make_client_order_id(ctx, leg_label)}
+    params = {"clientOrderId": _make_placement_id(ctx, leg_label)}
     if ctx.is_close:
         params["reduceOnly"] = True
     try:

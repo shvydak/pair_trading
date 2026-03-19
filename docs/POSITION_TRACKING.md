@@ -67,7 +67,11 @@ PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN
 - `is_average=True, average_position_id=N` — adding to existing position (averaging)
 
 ### `clientOrderId` on every order
-Format: `PT_{position_id}_{leg_label}_{exec_id}` (max 36 chars, e.g. `PT_5_leg1_a3f2b1c4`).
+Format: `PT_{position_id}_{leg_label}_{uuid8}` (max 36 chars, e.g. `PT_5_leg1_a3f2b1c4`).
+A **fresh UUID suffix is generated per placement** — not per execution — so each limit order,
+reprice, and market fallback gets a unique ID. This prevents Binance from returning stale
+cached fill data when a clientOrderId is reused after cancellation (which caused incorrect
+`executedQty`/`avgPrice` responses and spurious DUST flushes).
 Purpose: crash recovery — on server restart, `_reconcile_on_startup` queries Binance for
 open orders with `PT_` prefix to detect orphaned orders.
 

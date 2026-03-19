@@ -380,7 +380,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - **Close** partial: one leg closed, other not → `partial_close` status in DB + Telegram alert; **no re-open** → `DONE`
 - `ExecContext.is_close=True, close_db_id=N` — close mode; all orders get `reduceOnly=True`
 - `ExecContext.is_average=True, average_position_id=N` — averaging mode; calls `add_position_entry` on success
-- `clientOrderId = PT_{pos_id}_{leg}_{exec_id}` (max 36 chars) on every order — for crash recovery via `_reconcile_on_startup`
+- `clientOrderId = PT_{pos_id}_{leg}_{uuid8}` (max 36 chars) on every order — **unique per placement** (fresh UUID each call, not per-execution constant); prevents Binance stale cache returns; for crash recovery via `_reconcile_on_startup`
 - DUST flush after close: `reduceOnly` market order for remainder; recalculates `leg.avg_price` as weighted average before saving PnL
 - Commission: `LegState.commission` uses `max(self.commission, incoming)` — UserDataFeed stores cumulative per order; safe for both WS and REST sources
 - `DUST` = remaining qty below exchange minimum; partial fill accepted, no new order for residual

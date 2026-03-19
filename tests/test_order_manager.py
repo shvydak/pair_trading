@@ -349,30 +349,38 @@ def test_close_orders_have_reduce_only(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# clientOrderId format
+# clientOrderId — unique per placement
 # ---------------------------------------------------------------------------
 
-def test_make_client_order_id_format():
+def test_make_placement_id_format():
     ctx = _ctx()
     ctx.db_id = 7
-    cid = om._make_client_order_id(ctx, "leg1")
-    assert cid.startswith("PT_7_leg1_")
-    assert len(cid) <= 36
+    pid = om._make_placement_id(ctx, "leg1")
+    assert pid.startswith("PT_7_leg1_")
+    assert len(pid) <= 36
 
 
-def test_make_client_order_id_uses_close_db_id_when_no_db_id():
+def test_make_placement_id_uses_close_db_id_when_no_db_id():
     ctx = _ctx()
     ctx.db_id = None
     ctx.close_db_id = 99
-    cid = om._make_client_order_id(ctx, "leg2")
-    assert cid.startswith("PT_99_leg2_")
+    pid = om._make_placement_id(ctx, "leg2")
+    assert pid.startswith("PT_99_leg2_")
 
 
-def test_make_client_order_id_max_36_chars():
+def test_make_placement_id_max_36_chars():
     ctx = _ctx()
     ctx.db_id = 123456
-    cid = om._make_client_order_id(ctx, "leg1")
-    assert len(cid) <= 36
+    pid = om._make_placement_id(ctx, "leg1")
+    assert len(pid) <= 36
+
+
+def test_make_placement_id_unique_per_call():
+    """Each call must return a different ID — no reuse across placements."""
+    ctx = _ctx()
+    ctx.db_id = 5
+    ids = {om._make_placement_id(ctx, "leg1") for _ in range(10)}
+    assert len(ids) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -527,3 +535,59 @@ def test_dust_flush_updates_avg_price_and_saves_correct_pnl(monkeypatch):
     # Market flush order was placed
     assert len(client.market_orders) == 1
     assert client.market_orders[0]["symbol"] == "BBB/USDC:USDC"
+
+
+# ---------------------------------------------------------------------------
+# _force_market — market order ID tracked in leg and UserDataFeed
+# ---------------------------------------------------------------------------
+
+def test_force_market_updates_leg_order_id(monkeypatch):
+    """After _force_market places a market order, leg.order_id is updated to the
+    new market order's ID and UserDataFeed is notified to track fill events."""
+    _patch_runtime(monkeypatch)
+
+    registered = []
+
+    class FakeUDF:
+        def register_order(self, order_id):
+            registered.append(order_id)
+
+    client = FakeClient(
+        orderbooks={
+            "BBB/USDC:USDC": [{"bid": 200.0, "ask": 201.0, "spread_pct": 0.5}],
+        },
+        limit_status_scripts=[
+            # L1 — the active limit order on the exchange (will be cancelled in _force_market)
+            [{"id": "L1", "status": "open", "filled": 0.0, "remaining": 1.0, "average": None}],
+        ],
+        market_prices={"BBB/USDC:USDC": 201.0},
+    )
+
+    # Set up a context where leg2 has an active limit order and leg1 is already done
+    ctx = _ctx(passive_s=30.0, aggressive_s=20.0, poll_s=2.0, reprice_s=4.0)
+    ctx.is_close = True
+    ctx.close_db_id = 10
+    ctx.leg1 = om.LegState(symbol="AAA/USDC:USDC", side="sell", qty=1.0)
+    ctx.leg2 = om.LegState(symbol="BBB/USDC:USDC", side="buy", qty=1.0)
+    ctx.leg1.status = om.LegStatus.FILLED
+    ctx.leg2.order_id = "L1"
+    ctx.leg2.last_reprice_at = 0.0
+    # Pre-populate order status so _refresh_fills sees the limit order as still open/unfilled
+    client.order_statuses["L1"] = [{"id": "L1", "status": "open", "filled": 0.0, "remaining": 1.0, "average": None}]
+
+    udf = FakeUDF()
+    registered_orders: set = set()
+
+    asyncio.run(om._force_market(ctx, client, udf=udf, registered_orders=registered_orders))
+
+    # Market order for leg2 was placed
+    market_orders_leg2 = [o for o in client.market_orders if o.get("symbol") == "BBB/USDC:USDC"]
+    assert len(market_orders_leg2) >= 1
+
+    # leg.order_id must be updated to the new market order ID
+    assert ctx.leg2.order_id is not None
+    assert ctx.leg2.order_id.startswith("M")
+
+    # UDF must have been notified with the market order ID
+    assert ctx.leg2.order_id in registered
+    assert ctx.leg2.order_id in registered_orders
