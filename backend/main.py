@@ -498,7 +498,7 @@ async def monitor_position_triggers() -> None:
                     sym1, sym2 = trig["symbol1"], trig["symbol2"]
                     trig_tf = trig.get("timeframe") or _MONITOR_TIMEFRAME
                     trig_zw = trig.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                    limit = max(trig_zw * 3, 60)
+                    limit = trig.get("candle_limit") or max(trig_zw * 3, 60)
                     _monitor_keys[tag] = price_cache.subscribe(sym1, sym2, trig_tf, limit)
                 if tag in closing_tags:
                     continue
@@ -1558,6 +1558,7 @@ class TriggerCreateRequest(BaseModel):
     timeframe: str = "1h"
     zscore_window: int = 20
     alert_pct: float = 1.0   # fraction of zscore at which alert fires (1.0 = 100%)
+    candle_limit: Optional[int] = None
 
 
 @app.get("/api/triggers")
@@ -1580,6 +1581,8 @@ async def create_trigger(req: TriggerCreateRequest):
 
     # For alert type: cancel existing alert with same (sym1, sym2, zscore) before creating
     if req.type == "alert":
+        if req.candle_limit is None or req.candle_limit <= 0:
+            raise HTTPException(status_code=400, detail="Укажите количество свечей (candle_limit)")
         existing = db.find_active_alert(sym1, sym2, req.zscore)
         if existing:
             db.cancel_trigger(existing["id"])
@@ -1596,11 +1599,12 @@ async def create_trigger(req: TriggerCreateRequest):
         timeframe=req.timeframe,
         zscore_window=req.zscore_window,
         alert_pct=req.alert_pct,
+        candle_limit=req.candle_limit,
     )
     log.info(
         f"Trigger created: id={trigger_id} | {sym1}/{sym2} | "
         f"{req.side} | {req.type} z={req.zscore} pct={req.alert_pct} "
-        f"tf={req.timeframe} w={req.zscore_window}"
+        f"tf={req.timeframe} w={req.zscore_window} limit={req.candle_limit}"
     )
     return {"id": trigger_id, "ok": True}
 
