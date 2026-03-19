@@ -482,7 +482,7 @@ async def monitor_position_triggers() -> None:
                 if tag not in _monitor_keys:
                     pos_tf = pos.get("timeframe") or _MONITOR_TIMEFRAME
                     pos_zw = pos.get("zscore_window") or _MONITOR_ZSCORE_WINDOW
-                    limit = min(pos.get("candle_limit") or (pos_zw * 5), 500)
+                    limit = pos.get("candle_limit") or (pos_zw * 5)
                     _monitor_keys[tag] = price_cache.subscribe(
                         pos["symbol1"], pos["symbol2"], pos_tf, limit
                     )

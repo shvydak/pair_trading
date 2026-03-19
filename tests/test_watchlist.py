@@ -42,7 +42,7 @@ def test_watchlist_item_defaults(WatchlistItem):
     assert item.sym1 == "BTC/USDT:USDT"
     assert item.sym2 == "ETH/USDT:USDT"
     assert item.timeframe == "1h"
-    assert item.limit == 100
+    assert item.limit == 500
     assert item.zscore_window == 20
 
 
