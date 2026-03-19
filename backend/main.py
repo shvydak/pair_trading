@@ -1084,7 +1084,7 @@ class WatchlistItem(BaseModel):
     sym1: str
     sym2: str
     timeframe: str = "1h"
-    limit: int = 100
+    limit: int = 500
     zscore_window: int = 20
 
 
