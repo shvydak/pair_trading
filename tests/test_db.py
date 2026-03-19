@@ -360,6 +360,36 @@ def test_save_alert_trigger_custom_params(tmp_db):
     assert trig["alert_pct"] == pytest.approx(0.9)
 
 
+def test_save_trigger_stores_candle_limit(tmp_db):
+    """candle_limit is persisted to triggers table."""
+    tid = tmp_db.save_trigger(
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0,
+        candle_limit=1000,
+    )
+    trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
+    assert trig["candle_limit"] == 1000
+
+
+def test_save_trigger_candle_limit_default_none(tmp_db):
+    """candle_limit defaults to None when not provided."""
+    tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
+    trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
+    assert trig["candle_limit"] is None
+
+
+def test_save_trigger_candle_limit_overrides_formula(tmp_db):
+    """candle_limit stored in trigger is returned as-is (monitor uses it instead of zw*3 formula)."""
+    tid = tmp_db.save_trigger(
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0,
+        zscore_window=20, candle_limit=800,
+    )
+    trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
+    # Monitor logic: trig.get("candle_limit") or max(trig_zw * 3, 60)
+    # With candle_limit=800, zscore_window=20: should use 800, not max(60, 60)=60
+    effective_limit = trig.get("candle_limit") or max(trig["zscore_window"] * 3, 60)
+    assert effective_limit == 800
+
+
 def test_save_alert_trigger_alert_pct_75(tmp_db):
     """alert_pct=0.75 is stored correctly."""
     tid = tmp_db.save_trigger(

@@ -135,6 +135,7 @@ def _migrate() -> None:
             ("open_positions", "coint_checked_at", "TEXT"),
             ("closed_trades",  "commission",       "REAL DEFAULT 0"),
             ("closed_trades",  "commission_asset", "TEXT"),
+            ("triggers",       "candle_limit",     "INTEGER"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
@@ -296,6 +297,7 @@ def save_trigger(
     timeframe: str = "1h",
     zscore_window: int = 20,
     alert_pct: float = 1.0,
+    candle_limit: Optional[int] = None,
 ) -> int:
     """Save a new TP/SL/alert trigger. Returns the trigger id."""
     with _conn() as conn:
@@ -303,12 +305,12 @@ def save_trigger(
             """
             INSERT INTO triggers
               (symbol1, symbol2, side, type, zscore, tp_smart, sl_smart, status,
-               timeframe, zscore_window, alert_pct, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+               timeframe, zscore_window, alert_pct, candle_limit, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
             """,
             (
                 symbol1, symbol2, side, type, zscore, int(tp_smart), int(sl_smart),
-                timeframe, zscore_window, alert_pct,
+                timeframe, zscore_window, alert_pct, candle_limit,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
