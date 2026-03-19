@@ -2275,7 +2275,7 @@ async def websocket_watchlist(websocket: WebSocket):
         sym1 = _normalise_symbol(item.get("sym1", ""))
         sym2 = _normalise_symbol(item.get("sym2", ""))
         tf   = item.get("timeframe", "1h")
-        lim  = int(item.get("limit", 100))
+        lim  = int(item.get("limit", 500))
         return f"{sym1}|{sym2}|{tf}|{lim}"
 
     def _reconcile(raw_items: list[dict]) -> None:
@@ -2286,7 +2286,7 @@ async def websocket_watchlist(websocket: WebSocket):
             sym1 = _normalise_symbol(item.get("sym1", ""))
             sym2 = _normalise_symbol(item.get("sym2", ""))
             tf   = item.get("timeframe", "1h")
-            lim  = int(item.get("limit", 100))
+            lim  = int(item.get("limit", 500))
             tag  = f"{sym1}|{sym2}|{tf}|{lim}"
             new_tags.add(tag)
             if tag not in subscribed_keys:
@@ -2303,7 +2303,7 @@ async def websocket_watchlist(websocket: WebSocket):
             sym1 = _normalise_symbol(item.get("sym1", ""))
             sym2 = _normalise_symbol(item.get("sym2", ""))
             tf   = item.get("timeframe", "1h")
-            lim  = int(item.get("limit", 100))
+            lim  = int(item.get("limit", 500))
             zw   = int(item.get("zscore_window", 20))
             tag  = f"{sym1}|{sym2}|{tf}|{lim}"
             key  = subscribed_keys.get(tag)

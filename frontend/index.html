@@ -3629,7 +3629,7 @@ async function _batchLoadSparklines(positions) {
     const body = toFetch.map(pos => ({
       sym1: pos.symbol1, sym2: pos.symbol2,
       timeframe: pos.timeframe || '1h',
-      limit: pos.candle_limit || 100,
+      limit: pos.candle_limit || 500,
       zscore_window: pos.zscore_window || 20,
     }));
     const res = await fetch(`${API}/api/batch/sparklines`, {
