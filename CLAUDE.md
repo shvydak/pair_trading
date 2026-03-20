@@ -8,24 +8,10 @@ When the user asks for an explanation: keep it **simple and short**; avoid code 
 
 **Professional trader role:** Think about the platform not only as a developer but also as a trader. Before implementing any trading-related feature, ask yourself: "what happens with multiple open positions?", "how does this behave on partial fills?", "what if symbols overlap across pairs?". If you spot an architectural risk — raise it before writing code. Discuss with the user as a beginner trader: explain trading consequences, not just technical ones.
 
-## When to Skip Superpowers Workflow
-
-For small, well-scoped tasks — implement directly without brainstorming / writing-plans / subagent-driven-development:
-- Bug fixes or small changes touching ≤ 3 files
-- Total change ≤ 50 lines
-- Requirements already fully discussed and agreed in chat
-- No architectural decisions involved
-
-For these tasks: read files → implement → run tests → commit. No skill overhead, no subagents, no reviewers.
-
-Use full superpowers workflow only for:
-- New features that require design decisions
-- Changes to `order_manager.py`, close/open paths, or DB schema (high risk)
-- Tasks with 5+ independent components
-
 ## When to Use Sequential Thinking MCP
 
 Before writing any code, call `mcp__MCP_DOCKER__sequentialthinking` when the task involves:
+
 - Changes to `order_manager.py`, `db.py`, or position close/open logic
 - New trading features (triggers, averaging, partial fills, multi-leg scenarios)
 - Architectural decisions (new endpoints, new background tasks, PriceCache changes)
@@ -37,12 +23,12 @@ Skip for: UI text/style changes, simple endpoint additions, typo fixes.
 
 Before modifying files that use external libraries, fetch current API docs via Context7 MCP:
 
-| File | Library | Context7 ID |
-|------|---------|-------------|
-| `binance_client.py`, `order_manager.py` | ccxt (Binance Futures) | `/ccxt/ccxt` |
-| `symbol_feed.py`, `user_data_feed.py` | ccxt WebSocket | `/ccxt/ccxt` |
-| `telegram_bot.py` | aiogram v3 | `/aiogram/aiogram` |
-| `main.py` (WebSocket endpoints) | FastAPI | `/websites/fastapi_tiangolo` |
+| File                                    | Library                | Context7 ID                  |
+| --------------------------------------- | ---------------------- | ---------------------------- |
+| `binance_client.py`, `order_manager.py` | ccxt (Binance Futures) | `/ccxt/ccxt`                 |
+| `symbol_feed.py`, `user_data_feed.py`   | ccxt WebSocket         | `/ccxt/ccxt`                 |
+| `telegram_bot.py`                       | aiogram v3             | `/aiogram/aiogram`           |
+| `main.py` (WebSocket endpoints)         | FastAPI                | `/websites/fastapi_tiangolo` |
 
 Skip for: typo fixes, UI text changes, or when you already have current docs loaded in context.
 
@@ -68,35 +54,20 @@ runs backtests, and executes live trades via Binance API.
 ```
 pair_trading/
 ├── backend/
-│   ├── main.py              # FastAPI app — REST endpoints + WebSocket
-│   ├── symbol_feed.py       # Binance WS kline + bookTicker feeds (SymbolFeed, BookTickerFeed); feeds PriceCache
-│   ├── user_data_feed.py    # Binance User Data Stream — real-time order fill notifications (UserDataFeed)
+│   ├── main.py              # FastAPI app — REST endpoints + WebSocket + PriceCache + monitor
+│   ├── symbol_feed.py       # Binance WS kline + bookTicker feeds (SymbolFeed, BookTickerFeed)
+│   ├── user_data_feed.py    # Binance User Data Stream — fills, liquidations, funding
 │   ├── strategy.py          # Pair trading math (cointegration, z-score, backtest)
 │   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
-│   ├── db.py                # SQLite persistence — open_positions + closed_trades + triggers
-│   ├── telegram_bot.py      # Telegram notifications + bot (aiogram v3); lifecycle: setup/start_polling/stop
-│   ├── logger.py            # RotatingFileHandler setup → logs/pair_trading.log
-│   └── requirements.txt
+│   ├── db.py                # SQLite persistence — 7 tables
+│   ├── telegram_bot.py      # Telegram notifications + bot (aiogram v3)
+│   └── logger.py            # RotatingFileHandler → logs/pair_trading.log (10 MB × 5)
 ├── frontend/
 │   └── index.html           # Single-file UI (Tailwind + Chart.js, no build step)
-├── tests/
-│   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
-│   ├── test_strategy.py     # 41 tests — all strategy math
-│   ├── test_db.py           # 103 tests — SQLite persistence layer
-│   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
-│   ├── test_order_manager.py # 18 tests — Smart v2 repricing / semi-aggressive / dust rules
-│   ├── test_price_cache.py  # 35 tests — PriceCache ref-counting, SymbolFeed assembly, wait_any_update
-│   ├── test_symbol_feed.py  # 15 tests — SymbolFeed buffer, kline handling, event-driven updates
-│   ├── test_watchlist.py    #  8 tests — WatchlistItem model validation
-│   ├── test_telegram_bot.py # 70 tests — telegram_bot formatters, config, send(), notify_*
-│   └── test_lifespan.py     #  5 tests — asyncio graceful shutdown
-├── logs/
-│   └── pair_trading.log     # Rotating log (10 MB × 5 files)
-├── pair_trading.db          # SQLite trade journal (auto-created on first run)
+├── tests/                   # 311 tests (see Tests section)
+├── pair_trading.db          # SQLite trade journal (auto-created)
 ├── .env                     # API keys (not committed)
-├── .env.example
-├── start.sh                 # Launch script
 └── .venv/                   # Python virtual environment
 ```
 
@@ -133,97 +104,47 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 
 ## API Endpoints
 
-| Method | Path                         | Description                                                                                                     |
-| ------ | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/symbols`               | List all active USDT-M and USDC-M perpetual futures                                                             |
-| GET    | `/api/history`               | OHLCV + spread/z-score + stats for a pair                                                                       |
-| GET    | `/api/backtest`              | Full backtest; params: `sizing_method` (ols/atr/equal), `atr1`, `atr2`, `entry_threshold`, `exit_threshold`     |
-| GET    | `/api/status`                | Binance connection status + supported futures balances (USDT + USDC)                                            |
-| GET    | `/api/positions`             | Open positions from Binance (requires API keys)                                                                 |
-| GET    | `/api/balance`               | Futures balances (all supported assets, or `?asset=USDT` / `USDC`)                                             |
-| GET    | `/api/pre_trade_check`       | Validate balance, min notional, lot sizes, leverage before trade                                                |
-| POST   | `/api/trade`                 | Place market order pair trade (instant, no retry)                                                               |
-| POST   | `/api/trade/smart`           | Start smart limit-order execution in background; returns `exec_id`                                              |
-| GET    | `/api/execution/{exec_id}`   | Poll smart execution state (call every 2s)                                                                      |
-| DELETE | `/api/execution/{exec_id}`   | Request cancellation of a running smart execution                                                               |
-| GET    | `/api/db/positions`          | Open positions saved by the strategy (with entry z-score, hedge ratio, etc.)                                    |
-| GET    | `/api/db/history`            | Closed trade history from SQLite (`?limit=100`)                                                                 |
-| GET    | `/api/db/positions/enriched` | Open positions from DB enriched with live Binance mark prices + unrealized PnL                                  |
-| DELETE | `/api/db/positions/{id}`     | Delete a DB position record (does NOT close exchange positions)                                                 |
-| GET    | `/api/all_positions`         | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
-| GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response      |
-| GET    | `/api/triggers`              | All active TP/SL triggers (standalone, independent of positions)                                                |
-| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"` (HTTP 400 if missing). For `alert`, an existing active row with the **same** sym pair, `zscore`, `timeframe`, `zscore_window`, and `candle_limit` is deleted first (replace); differing lookback or z-window ⇒ separate concurrent alerts  |
-| DELETE | `/api/triggers/{id}`         | Hard-delete a trigger (gone permanently)                                                                        |
-| GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center          |
-| GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
-| GET    | `/api/executions/history`    | Persisted terminal execution snapshots from SQLite (`?limit=100`)                                               |
-| GET    | `/api/watchlist`             | All saved watchlist items from SQLite                                                                           |
-| POST   | `/api/watchlist`             | Add or update watchlist item (upsert by sym1+sym2+timeframe)                                                    |
-| DELETE | `/api/watchlist/{id}`        | Remove watchlist item by DB id                                                                                  |
-| POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair (legacy HTTP fallback) |
-| POST   | `/api/batch/sparklines`      | Batch z-score/spread data for multiple positions; uses PriceCache when available                                |
-| WS     | `/ws/stream`                 | Live spread/price/Z-score updates, event-driven on each kline (≤5 s timeout) for the active analysed pair      |
-| WS     | `/ws/watchlist`              | Event-driven watchlist z-score/spread feed; replaces 5 s HTTP polling; client sends full list, server pushes   |
+> Full field schemas: see Pydantic models in `main.py` (`TradeRequest`, `SmartTradeRequest`, `WatchlistItemDB`).
 
-### `GET /api/pre_trade_check` — query params
-
-`symbol1`, `symbol2`, `size_usd`, `hedge_ratio`, `sizing_method`, `atr1`, `atr2`, `leverage`
-Returns `{ok: bool, checks: [{name, ok, detail}], sizes: {qty1, qty2, rounded_qty1, rounded_qty2, notional1, notional2}, prices: {price1, price2}}`
-
-### `POST /api/trade` — TradeRequest fields
-
-| Field                | Type  | Default | Description                                                  |
-| -------------------- | ----- | ------- | ------------------------------------------------------------ |
-| `symbol1`, `symbol2` | str   | —       | ccxt or BTCUSDT format                                       |
-| `action`             | str   | —       | `"open"` \| `"close"`                                        |
-| `side`               | str   | —       | `"long_spread"` \| `"short_spread"`                          |
-| `size_usd`           | float | —       | Dollar size of each leg                                      |
-| `hedge_ratio`        | float | —       | OLS β from `/api/history`                                    |
-| `sizing_method`      | str   | `"ols"` | `"ols"` \| `"atr"` \| `"equal"`                              |
-| `atr1`, `atr2`       | float | null    | Required for ATR sizing                                      |
-| `leverage`           | int   | `1`     | Futures leverage to set before opening                       |
-| `entry_zscore`       | float | null    | Z-score at entry (saved to DB)                               |
-| `exit_zscore`        | float | null    | Z-score at exit (saved to DB)                                |
-| `timeframe`          | str   | `"1h"`  | Timeframe used for analysis (saved to DB, used in sparkline) |
-| `candle_limit`       | int   | `500`   | Candle count for analysis window (saved to DB)               |
-| `zscore_window`      | int   | `20`    | Rolling z-score window (saved to DB)                         |
-
-### `POST /api/trade/smart` — SmartTradeRequest fields
-
-Same as TradeRequest plus:
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `action` | str | `"open"` | `"open"` \| `"close"` |
-| `passive_s` | float | `30.0` | Total dynamic passive window; starts at best bid/ask and reprices inside the window |
-| `aggressive_s` | float | `20.0` | Total semi-aggressive window before market fallback |
-| `allow_market` | bool | `true` | Use market order as final fallback |
-
-When `action="close"`: finds DB position by (sym1, sym2), uses actual Binance qty (fallback to DB qty), reverses spread direction, runs smart execution that calls `db.close_position()` on success.
-
-## Key Parameters for `/api/history`
-
-- `symbol1`, `symbol2` — ccxt format, e.g. `BTC/USDT:USDT` or `BTC/USDC:USDC`
-- `timeframe` — `5m`, `1h`, `4h`, `1d`
-- `limit` — number of candles (default 500, max 1500)
-- `zscore_window` — rolling window for z-score (default 20)
-- **PriceCache optimization**: if pair is subscribed in PriceCache (watchlist/WS) with `cached_limit >= limit`, data is read from cache instead of fetching from Binance — makes analysis of watchlist pairs near-instant
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/api/symbols` | List all active USDT-M and USDC-M perpetual futures |
+| GET | `/api/history` | OHLCV + spread/z-score + stats; PriceCache used if pair subscribed (`cached_limit >= limit`) |
+| GET | `/api/backtest` | Full backtest; params: `sizing_method` (ols/atr/equal), `entry_threshold`, `exit_threshold` |
+| GET | `/api/status` | Binance connection status + futures balances |
+| GET | `/api/balance` | Futures balances (`?asset=USDT` / `USDC`) |
+| GET | `/api/pre_trade_check` | Validate balance, min notional, lot sizes, leverage; params: `symbol1/2`, `size_usd`, `hedge_ratio`, `sizing_method`, `leverage` |
+| POST | `/api/trade` | Market order pair trade (instant, no retry) |
+| POST | `/api/trade/smart` | Smart limit-order execution; returns `exec_id`; smart params: `passive_s`(30s), `aggressive_s`(20s), `allow_market`(true) |
+| GET | `/api/execution/{exec_id}` | Poll smart execution state (call every 2s) |
+| DELETE | `/api/execution/{exec_id}` | Cancel a running smart execution |
+| GET | `/api/db/positions` | Open positions from DB (entry z-score, hedge ratio, etc.) |
+| GET | `/api/db/history` | Closed trade history (`?limit=100`) |
+| GET | `/api/db/positions/enriched` | DB positions enriched with live mark prices + PnL |
+| DELETE | `/api/db/positions/{id}` | Delete DB position record (does NOT close exchange positions) |
+| GET | `/api/dashboard` | **Combined polling**: enriched positions + exchange positions + balances + recent alerts |
+| GET | `/api/triggers` | All active TP/SL triggers |
+| POST | `/api/triggers` | Create trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"`; same-params alert replaces existing |
+| DELETE | `/api/triggers/{id}` | Hard-delete a trigger (gone permanently) |
+| GET | `/api/alerts/recent` | Alert triggers fired within last N minutes (`?minutes=60`) |
+| GET | `/api/executions` | All active execution contexts |
+| GET | `/api/executions/history` | Persisted terminal execution snapshots (`?limit=100`) |
+| GET | `/api/watchlist` | All saved watchlist items |
+| POST | `/api/watchlist` | Add or update watchlist item (upsert by sym1+sym2+timeframe) |
+| DELETE | `/api/watchlist/{id}` | Remove watchlist item |
+| PATCH | `/api/watchlist/{id}/stats` | Persist computed stats (half_life, hurst, corr, pval); called after each Analyze |
+| POST | `/api/watchlist/data` | Subscribe pairs to PriceCache; return current z-score + spread (legacy HTTP fallback) |
+| POST | `/api/batch/sparklines` | Batch z-score/spread for multiple positions; uses PriceCache when available |
+| WS | `/ws/stream` | Live spread/price/Z-score updates, event-driven on each kline (≤5s timeout) |
+| WS | `/ws/watchlist` | Event-driven watchlist z-score/spread feed; client sends full list, server pushes |
 
 ## Strategy Logic (`strategy.py`)
 
-- **Hedge ratio**: OLS via `numpy.linalg.lstsq` on log prices — `log(P1) = β * log(P2) + α` (replaced statsmodels OLS for ~10x speedup)
-- **Spread**: `log(P1) - β * log(P2)`
-- **Z-score**: rolling `(spread - mean) / std` with configurable window
-- **Cointegration**: Engle-Granger test via `statsmodels.tsa.stattools.coint(maxlag=10)` — fixed maxlag avoids slow auto-selection
-- **Half-life**: AR(1) via `numpy.linalg.lstsq` — `half_life = -log(2) / log(φ)` (replaced statsmodels OLS)
+- **Hedge ratio**: OLS via `numpy.linalg.lstsq` on log prices — `log(P1) = β * log(P2) + α`
+- **Spread**: `log(P1) - β * log(P2)`; **Z-score**: rolling `(spread - mean) / std`
+- **Cointegration**: Engle-Granger `coint(maxlag=10)` — fixed maxlag avoids slow auto-selection
 - **Hurst exponent**: variogram regression (not R/S despite docstring) — H < 0.5 means mean-reverting
-- **Backtest signals**: enter at `|z| > entry_threshold`, exit at `|z| < exit_threshold`; PnL uses selected `sizing_method`
-- **ATR**: `calculate_atr(df, period=14)` — average true range from OHLCV DataFrame
-- **Position sizing** (`calculate_position_sizes`):
-     - `size_usd` = **total position size** (both legs combined, value1 + value2 = size_usd)
-     - `ols`: split proportionally by 1 : |β| → `qty1 = size / ((1+|β|)*P1)`, `qty2 = size*|β| / ((1+|β|)*P2)`
-     - `atr`: `qty1 = size / (P1 + ratio*P2)`, `qty2 = qty1 * (ATR1/ATR2)` — equal dollar volatility per leg
-     - `equal`: `qty1 = size / (2*P1)`, `qty2 = size / (2*P2)`
+- **Position sizing** (`calculate_position_sizes`): `size_usd` = total (both legs); `ols`: 1:|β| split; `atr`: equal dollar volatility; `equal`: 50/50
 
 ## Binance Client Notes (`binance_client.py`)
 
@@ -274,7 +195,7 @@ Three-panel trading terminal:
 - `_applyWatchlistUpdate(data)` — common handler for incoming data (in-place DOM patch)
 - Threshold indication: `|z| >= entryZ*0.75` → yellow; `|z| >= entryZ` → red + blinking
 - Active pair highlight updates immediately after `runAnalyze()` (no wait for 5s tick)
-- **localStorage (remaining):** `pt_lang` (ru/en), `pt_mode` (trade/backtest), `pt_price_chart_h` (chart height px), `pt_last` (last analysis state) — UI-only preferences, not trading data
+- **localStorage (remaining):** `pt_lang` (ru/en), `pt_mode` (trade/backtest), `pt_price_chart_h` (chart height px), `pt_last` (last analysis state: sym1/sym2/tf/limit/zwindow/entryZ/exitZ/sizing/leverage) — **not shared across browsers/devices**; watchlist acts as the persistent cross-device state for saved pairs
 
 ### Alerts tab (frontend)
 
@@ -349,8 +270,8 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 > All live data (chart WS, watchlist WS, TP/SL monitor) reads from PriceCache, which is fed by Binance WS kline streams via SymbolFeed.
 > Direct `client.fetch_ohlcv()` calls are only allowed in two cases:
 >
-> 1. Historical data for analysis/backtest (`/api/history`, `/api/backtest`)
-> 2. Initial cache fill on cache miss (seed in watchlist HTTP endpoint)
+> 1.   Historical data for analysis/backtest (`/api/history`, `/api/backtest`)
+> 2.   Initial cache fill on cache miss (seed in watchlist HTTP endpoint)
 >
 > **Never create new polling timers on the frontend for live data — use `/ws/watchlist` or `/ws/stream`.**
 
@@ -374,15 +295,13 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 
 ### Logging (`backend/logger.py`)
 
-- `get_logger(name)` returns a logger with two handlers: `StreamHandler` (console) + `RotatingFileHandler`
-- Log file: `logs/pair_trading.log` (relative to project root); max 10 MB × 5 rotating files, UTF-8
-- Log format: `YYYY-MM-DD HH:MM:SS [LEVEL] name: message`
+`get_logger(name)` → `StreamHandler` + `RotatingFileHandler`; file: `logs/pair_trading.log`; max 10 MB × 5 files; format: `YYYY-MM-DD HH:MM:SS [LEVEL] name: message`
 
 ### SQLite Persistence (`backend/db.py`)
 
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
 - **Seven tables**: `open_positions`, `closed_trades`, `triggers`, `execution_history`, `position_legs`, `funding_history`, `watchlist`
-- Watchlist functions: `get_watchlist()`, `save_watchlist_item(...)` → id (upsert by sym1+sym2+timeframe), `delete_watchlist_item(id)` → bool
+- Watchlist functions: `get_watchlist()`, `save_watchlist_item(...)` → id (upsert by sym1+sym2+timeframe), `delete_watchlist_item(id)` → bool, `update_watchlist_stats(item_id, half_life, hurst, corr, pval)` — called after each analysis to persist computed stats
 - `open_positions` has `status` column: `open` | `partial_close` | `liquidated` | `adl_detected`; also `coint_pvalue`, `coint_checked_at`
 - `find_open_position(sym1, sym2)` — excludes `liquidated`/`adl_detected`; returns `partial_close` (user may still want to close it)
 - Position leg functions: `save_position_leg(...)`, `get_position_legs(pos_id)`, `close_position_legs(pos_id)`, `add_position_entry(pos_id, leg_number, new_qty, new_price)` — updates weighted avg price in `open_positions`
@@ -449,50 +368,26 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Common Issues & Fixes
 
-- **Position tracking architecture**: all issues from `POSITION_TRACKING_ISSUES.md` have been resolved. See [`docs/POSITION_TRACKING.md`](docs/POSITION_TRACKING.md) for current architecture
-- **`partial_close` position in UI**: orange badge shown on position row; remaining leg must be closed manually on exchange — platform cannot auto-close it
+- **`partial_close` position in UI**: orange badge; remaining leg must be closed manually on exchange
 - **Cointegration health dot is empty**: normal for first 4h after server start — `health_check_coint` has 120s initial delay then 4h interval
-- **Empty symbols list**: ccxt returns Binance perpetuals as `type: "swap"`, not `"future"` — filter includes both
-- **`pip` not found**: use `.venv/bin/pip` — Homebrew Python blocks system installs
-- **CORS errors**: backend has CORS middleware allowing all origins including `file://`
-- **NaN/Inf in JSON**: `_clean()` helper in `main.py` recursively strips non-serializable floats
-- **Port 5000 on macOS**: reserved by AirPlay Receiver — use port 8080 instead
-- **HTTP 400 "notional below minimum"**: `size_usd` too small; minimum depends on contract/margin market
-- **Mixed pair won't trade**: one leg USDT-M + other USDC-M → analysis works, live trading blocked
-- **Leverage set error (warning, not fatal)**: position already exists on Binance → WARNING, trade proceeds with current leverage
-- **Smart execution stuck in PASSIVE**: intentionally dynamic up to `30s`; check events for `Reprice ... (passive)`
-- **Rollback FAILED**: market order for filled leg also failed → manual action required; logged as ERROR "MANUAL ACTION REQUIRED"
-- **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — use 🗑 to remove stale record or `✕ M` (backend detects no open positions and cleans DB)
-- **Trade markers not showing on chart**: `loadTradeJournal()` must be called after `runAnalyze()` to populate `_cachedJournalTrades`; DB timestamps use `+00:00` format — `_utcParse` must handle timezone suffix without appending extra `Z`
+- **HTTP 400 "notional below minimum"**: `size_usd` too small for the contract
+- **Strategy Positions shows position but Exchange Positions is empty**: DB/exchange desync — use 🗑 to remove stale record or `✕ M`
+- **Trade markers not showing on chart**: `loadTradeJournal()` must be called after `runAnalyze()`; `_utcParse` handles both `2026-03-16 18:00:00` and `2026-03-16T18:17:28+00:00` formats
 - **Active pair highlight**: compares **5 params**: sym1+sym2+timeframe+zscore_window+entryZ — ticker alone is insufficient
-- **`_pollAllExecutions` auto-opens popups**: `_execSeenIds` Set tracks shown popups; `_execFirstPoll` flag prevents opening old terminal popups on page reload; adaptive frequency: 2s with active executions, 5s idle (`setTimeout`-based)
-- **TP fires immediately for short_spread**: fixed with `abs(current_z)` — direction-agnostic
-- **Double close on TP fire**: fixed with `closing_pairs` set tracking `(sym1, sym2)`
-- **TP/SL input only accepts positive numbers**: correct behavior with direction-agnostic logic — chart shows symmetric lines at ±threshold
-- **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present in HTML at parse time — use `element.style.color` with explicit hex values (`C_GREEN`/`C_YELLOW`/`C_RED` constants)
-- **SQLite upsert `lastrowid` unreliable**: after `INSERT ... ON CONFLICT DO UPDATE`, `cur.lastrowid` may return ID of a different previously inserted row, not the upserted one — always use a follow-up `SELECT` to get the actual ID
-- **SQLite datetime format**: always use `strftime("%Y-%m-%d %H:%M:%S")` (not `.isoformat()`) when writing timestamps that SQLite `datetime()` will compare — ISO format with `T` separator and `+00:00` breaks range queries like `last_fired_at >= datetime('now', '-60 minutes')`
-- **Alert z vs chart z may differ**: monitor computes z using the trigger's stored `candle_limit`/`zscore_window`/`timeframe`; chart uses current UI input values — different data windows → different hedge ratio → different z; load pair from watchlist to align parameters
-- **WebSocket requires absolute URL**: `new WebSocket('/ws/path')` throws — use `_wsUrl(path)` helper which builds `ws://` or `wss://` from `window.location`
-- **`ecosystem.config.js` path resolution**: PM2 resolves `script` relative to `cwd`; use `path.join(__dirname, '.venv/bin/uvicorn')` to avoid breakage when cwd ≠ project root
+- **`_pollAllExecutions` auto-opens popups**: `_execSeenIds` + `_execFirstPoll` prevent stale popups on reload; adaptive 2s/5s frequency
+- **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present at parse time — use `element.style.color` with `C_GREEN`/`C_YELLOW`/`C_RED` constants
+- **SQLite upsert `lastrowid` unreliable**: after `INSERT ... ON CONFLICT DO UPDATE`, always use a follow-up `SELECT` to get the actual ID
+- **SQLite datetime format**: always use `strftime("%Y-%m-%d %H:%M:%S")` — ISO format with `T` and `+00:00` breaks `datetime()` range queries
+- **Alert z vs chart z may differ**: monitor uses trigger's `candle_limit`/`zscore_window`/`timeframe`; chart uses current UI values — load pair from watchlist to align
+- **WebSocket requires absolute URL**: `new WebSocket('/ws/path')` throws — use `_wsUrl(path)` helper
+- **`ecosystem.config.js` path resolution**: use `path.join(__dirname, '.venv/bin/uvicorn')` — PM2 resolves `script` relative to `cwd`
 
 ## Tests (`tests/`)
 
-311 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
+311 unit tests, all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
 
-| File                    | Tests | Coverage                                                    |
-| ----------------------- | ----- | ----------------------------------------------------------- |
-| `test_strategy.py`      | 41    | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
-| `test_db.py`            | 103   | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status, watchlist |
-| `test_helpers.py`       | 26    | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 serialization |
-| `test_order_manager.py` | 18    | Smart v2 repricing, semi-aggressive, dust, reduceOnly on close, clientOrderId, commission, partial_close rollback, DUST flush avg_price |
-| `test_price_cache.py`   | 35    | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |
-| `test_symbol_feed.py`   | 15    | buffer update/append, `wait_for_update`, `start` idempotency |
-| `test_watchlist.py`     | 8     | WatchlistItem Pydantic model validation                     |
-| `test_telegram_bot.py`  | 70    | formatters, `send()` safety, all `notify_*` functions       |
-| `test_lifespan.py`      | 5     | asyncio graceful shutdown pattern                           |
-
-**`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test.
+- `test_strategy.py`(41), `test_db.py`(103), `test_helpers.py`(26), `test_order_manager.py`(18), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(70), `test_lifespan.py`(5)
+- `conftest.py`: `tmp_db` fixture — `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test
 
 ## Deployment
 

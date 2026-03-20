@@ -1148,6 +1148,19 @@ async def add_watchlist_item(item: WatchlistItemDB):
     return {"id": item_id}
 
 
+class WatchlistStats(BaseModel):
+    half_life: Optional[float] = None
+    hurst: Optional[float] = None
+    corr: Optional[float] = None
+    pval: Optional[float] = None
+
+
+@app.patch("/api/watchlist/{item_id}/stats")
+async def update_watchlist_stats(item_id: int, stats: WatchlistStats):
+    db.update_watchlist_stats(item_id, stats.half_life, stats.hurst, stats.corr, stats.pval)
+    return {"ok": True}
+
+
 @app.delete("/api/watchlist/{item_id}")
 async def remove_watchlist_item(item_id: int):
     deleted = db.delete_watchlist_item(item_id)

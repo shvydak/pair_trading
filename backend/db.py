@@ -152,6 +152,10 @@ def _migrate() -> None:
             ("closed_trades",  "commission",       "REAL DEFAULT 0"),
             ("closed_trades",  "commission_asset", "TEXT"),
             ("triggers",       "candle_limit",     "INTEGER"),
+            ("watchlist",      "half_life",        "REAL"),
+            ("watchlist",      "hurst",            "REAL"),
+            ("watchlist",      "corr",             "REAL"),
+            ("watchlist",      "pval",             "REAL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
@@ -698,4 +702,14 @@ def delete_watchlist_item(item_id: int) -> bool:
     """Delete a watchlist item by id. Returns True if found."""
     with _conn() as conn:
         cur = conn.execute("DELETE FROM watchlist WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+def update_watchlist_stats(item_id: int, half_life: Optional[float], hurst: Optional[float], corr: Optional[float], pval: Optional[float]) -> bool:
+    """Update computed stats for a watchlist item. Returns True if found."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE watchlist SET half_life=?, hurst=?, corr=?, pval=? WHERE id=?",
+            (half_life, hurst, corr, pval, item_id),
+        )
         return cur.rowcount > 0
