@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-03-20 — Watchlist: индикация алерта + dedup алертов по TF / окну Z
+
+### Что изменено
+
+- **`backend/db.py`**: `find_active_alert` учитывает `timeframe` и `zscore_window`; замена дубликата при `POST /api/triggers` (тип `alert`) не снимает алерт с другим таймфреймом или окном Z при той же паре и пороге Z.
+- **`backend/main.py`**: вызов `find_active_alert` передаёт `req.timeframe` и `req.zscore_window`.
+- **`tests/test_db.py`**: тесты на несовпадение по TF и по `zscore_window`.
+- **`frontend/index.html`**: кэш триггеров при старте (`refreshTriggersCache` + `Promise.all` с `initWatchlist`); колокольчик на карточке watchlist всегда виден, если есть подходящий активный алерт; подписи `wl_alert_btn` / `wl_alert_active` (i18n); после добавления/отмены алерта — обновление списка и watchlist; из watchlist в `POST` алерта передаётся `candle_limit` (раньше API отклонял запрос без него).
+
+---
+
 ## 2026-03-18 — Binance WebSocket kline streams + /ws/watchlist (событийная архитектура)
 
 ### Что изменено

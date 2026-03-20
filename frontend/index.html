@@ -430,6 +430,8 @@
       open_in_trade: 'Open in Trade mode',
       wl_no_items: 'No pairs in watchlist',
       wl_add_current: '★ Add to Watchlist',
+      wl_alert_btn: 'Add Telegram alert',
+      wl_alert_active: 'Telegram alert is active (click to add / manage in Alerts tab)',
       add_tp_btn: 'Add TP',
       add_sl_btn: 'Add SL',
       trigger_zscore_ph: 'Z-score',
@@ -683,6 +685,8 @@
       open_in_trade: 'Открыть в режиме торговли',
       wl_no_items: 'Нет пар в списке',
       wl_add_current: '★ В Watchlist',
+      wl_alert_btn: 'Добавить Telegram-алерт',
+      wl_alert_active: 'Алерт активен (клик — добавить ещё; снять — вкладка Алерты)',
       add_tp_btn: 'TP',
       add_sl_btn: 'SL',
       trigger_zscore_ph: 'Z-score',
@@ -1420,8 +1424,8 @@ window.addEventListener('DOMContentLoaded', () => {
   initBottomPanelResize();
   // Charts vertical resize
   initChartsResize();
-  // Watchlist — load from DB, then render and connect WS
-  initWatchlist().then(() => {
+  // Watchlist — load rows + alert triggers, then render (bell visibility needs _cachedAlerts)
+  Promise.all([initWatchlist(), refreshTriggersCache()]).then(() => {
     renderWatchlist();
     connectWatchlistWS();
   });
@@ -1680,7 +1684,8 @@ async function addAlertFromPanel() {
     });
     if (res.ok) {
       showToast(`🔔 Алерт добавлен (${pct}% от порога)`, 'ok', 5000, () => setBottomTab('alerts'));
-      loadAlertsTab();
+      await loadAlertsTab();
+      renderWatchlist();
     } else {
       const data = await res.json();
       showToast('Ошибка: ' + (data.detail || res.status), 'error');
@@ -1775,6 +1780,31 @@ function loadPairIntoAnalysis(sym1, sym2, item) {
   runAnalyze();
 }
 
+function _wlTrigNormSym(s) {
+  return String(s || '').split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
+}
+
+/** True if an active alert trigger matches this watchlist row (sym, tf, z-window, entry Z, optional candle_limit). */
+function _watchlistItemHasAlert(w, alerts) {
+  if (!alerts || !alerts.length) return false;
+  const n1 = _wlTrigNormSym(w.sym1);
+  const n2 = _wlTrigNormSym(w.sym2);
+  const tf = w.timeframe || '1h';
+  const zw = parseInt(w.zwindow, 10) || 20;
+  const ez = parseFloat(w.entryZ) || 2;
+  const wLim = w.limit != null ? parseInt(w.limit, 10) : null;
+  return alerts.some(tr => {
+    if (tr.type !== 'alert') return false;
+    if (_wlTrigNormSym(tr.symbol1) !== n1 || _wlTrigNormSym(tr.symbol2) !== n2) return false;
+    if ((tr.timeframe || '1h') !== tf) return false;
+    if ((tr.zscore_window || 20) !== zw) return false;
+    if (Math.abs(Math.abs(tr.zscore) - ez) >= 0.01) return false;
+    const trLim = tr.candle_limit != null ? tr.candle_limit : null;
+    if (trLim != null && wLim != null && !Number.isNaN(wLim) && trLim !== wLim) return false;
+    return true;
+  });
+}
+
 function renderWatchlist() {
   const list = document.getElementById('watchlist-list');
   if (!list) return;
@@ -1863,6 +1893,12 @@ function renderWatchlist() {
     const pvDisplay = pv != null ? 'p=' + pv.toFixed(4) : '—';
     const pvColor = pv == null ? '#768390' : (pv < 0.05 ? C_GREEN : pv < 0.10 ? C_YELLOW : C_RED);
 
+    const hasAlert = _watchlistItemHasAlert(w, _cachedAlerts);
+    const bellClasses = hasAlert
+      ? 'text-yellow opacity-100 hover:brightness-110 transition text-[10px]'
+      : 'text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px]';
+    const bellTitle = hasAlert ? t('wl_alert_active') : t('wl_alert_btn');
+
     return header + `
     <div class="px-2 py-1.5 bg-card ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-panel'} cursor-pointer transition group" style="border-bottom:4px solid #0f1117" onclick="loadPairFromWatchlist(${i})">
       <div class="flex items-start justify-between gap-1">
@@ -1876,7 +1912,7 @@ function renderWatchlist() {
         <div class="flex flex-col items-end shrink-0">
           <span id="wl-z-${i}" class="text-[11px] font-mono font-bold leading-none ${zColor}">${zDisplay}${zArrow}</span>
           <div class="flex items-center gap-0.5 mt-0.5">
-            <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px]" title="Telegram алерт">🔔</button>
+            <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="${bellClasses}" title="${bellTitle}">🔔</button>
             <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px]" title="${t('remove_from_watchlist')}">✕</button>
           </div>
         </div>
@@ -2002,14 +2038,23 @@ function connectWatchlistWS() {
 //  Alerts tab
 // ------------------------------------------------------------------ //
 let _cachedAlerts = null;
-async function loadAlertsTab() {
+async function refreshTriggersCache() {
   try {
     const res = await fetch(`${API}/api/triggers`);
-    if (!res.ok) return;
+    if (!res.ok) return false;
     const data = await res.json();
     _cachedAlerts = (data.triggers || []).filter(t => t.type === 'alert');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadAlertsTab() {
+  try {
+    const ok = await refreshTriggersCache();
+    if (!ok) return;
     renderAlerts(_cachedAlerts);
-    // Clear badge when user opens the tab
     _setAlertsBadge(0);
   } catch {}
 }
@@ -2122,7 +2167,8 @@ async function cancelAlert(triggerId) {
     const res = await fetch(`${API}/api/triggers/${triggerId}`, { method: 'DELETE' });
     if (res.ok) {
       showToast(t('toast_trigger_cancelled'), 'ok');
-      loadAlertsTab();
+      await loadAlertsTab();
+      renderWatchlist();
     } else {
       const data = await res.json();
       showToast(t('toast_trigger_error') + (data.detail || res.status), 'error');
@@ -2181,10 +2227,13 @@ async function addAlertTrigger(idx) {
         timeframe: w.timeframe || '1h',
         zscore_window: parseInt(w.zwindow) || 20,
         alert_pct: alertPct,
+        candle_limit: parseInt(w.limit, 10) || 500,
       }),
     });
     if (res.ok) {
       showToast(`🔔 Telegram алерт добавлен (при ${pct}% от порога)`, 'ok');
+      await loadAlertsTab();
+      renderWatchlist();
       setBottomTab('alerts');
     } else {
       const data = await res.json();

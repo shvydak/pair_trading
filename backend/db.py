@@ -333,17 +333,24 @@ def save_trigger(
         return cur.lastrowid
 
 
-def find_active_alert(symbol1: str, symbol2: str, zscore: float) -> Optional[dict]:
-    """Return existing active alert trigger for (sym1, sym2, zscore), or None."""
+def find_active_alert(
+    symbol1: str,
+    symbol2: str,
+    zscore: float,
+    timeframe: str = "1h",
+    zscore_window: int = 20,
+) -> Optional[dict]:
+    """Return existing active alert matching sym pair, z threshold, timeframe and z-window, or None."""
     with _conn() as conn:
         row = conn.execute(
             """
             SELECT * FROM triggers
             WHERE symbol1 = ? AND symbol2 = ? AND type = 'alert'
               AND zscore = ? AND status = 'active'
+              AND timeframe = ? AND zscore_window = ?
             LIMIT 1
             """,
-            (symbol1, symbol2, zscore),
+            (symbol1, symbol2, zscore, timeframe, zscore_window),
         ).fetchone()
         return dict(row) if row else None
 

@@ -401,7 +401,7 @@ def test_save_alert_trigger_alert_pct_75(tmp_db):
 
 
 def test_find_active_alert_returns_match(tmp_db):
-    """find_active_alert finds an existing active alert by (sym1, sym2, zscore)."""
+    """find_active_alert finds an active alert by sym pair, zscore, timeframe, zscore_window (defaults 1h/20)."""
     tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
     assert result is not None
@@ -422,6 +422,52 @@ def test_find_active_alert_different_zscore_no_match(tmp_db):
     assert result is None
 
 
+def test_find_active_alert_different_timeframe_no_match(tmp_db):
+    """find_active_alert does not match the same pair+z if timeframe differs."""
+    tmp_db.save_trigger(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "both",
+        "alert",
+        2.0,
+        timeframe="1h",
+    )
+    result = tmp_db.find_active_alert(
+        "BTC/USDT:USDT", "ETH/USDT:USDT", 2.0, timeframe="4h"
+    )
+    assert result is None
+    result_1h = tmp_db.find_active_alert(
+        "BTC/USDT:USDT", "ETH/USDT:USDT", 2.0, timeframe="1h"
+    )
+    assert result_1h is not None
+
+
+def test_find_active_alert_different_zscore_window_no_match(tmp_db):
+    """find_active_alert does not match if zscore_window differs."""
+    tmp_db.save_trigger(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "both",
+        "alert",
+        2.0,
+        zscore_window=20,
+    )
+    result = tmp_db.find_active_alert(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        2.0,
+        zscore_window=30,
+    )
+    assert result is None
+    result_w20 = tmp_db.find_active_alert(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        2.0,
+        zscore_window=20,
+    )
+    assert result_w20 is not None
+
+
 def test_find_active_alert_ignores_cancelled(tmp_db):
     """find_active_alert does not return cancelled alerts."""
     tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
@@ -431,7 +477,7 @@ def test_find_active_alert_ignores_cancelled(tmp_db):
 
 
 def test_find_active_alert_multiple_same_zscore(tmp_db):
-    """find_active_alert returns one match when multiple exist for same zscore."""
+    """find_active_alert returns one match when multiple rows exist for same full key."""
     tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)

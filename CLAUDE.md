@@ -119,7 +119,7 @@ Open `http://localhost:8080` in browser — FastAPI serves `frontend/index.html`
 
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 306 tests
+.venv/bin/pytest tests/ -v        # all 308 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -382,7 +382,7 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - Status/health: `set_position_status(pos_id, status)`, `update_position_coint_health(pos_id, pvalue)`
 - `close_position(...)` accepts `commission` and `commission_asset` kwargs; saved to `closed_trades`
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
-- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore)` → dict|None, `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
+- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore, timeframe, zscore_window)` → dict|None (dedup on alert create uses full key), `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
 - Execution history: `save_execution_history(...)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)`
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicates
 - On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance)
@@ -466,12 +466,12 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Tests (`tests/`)
 
-306 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
+308 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
 
 | File                    | Tests | Coverage                                                    |
 | ----------------------- | ----- | ----------------------------------------------------------- |
 | `test_strategy.py`      | 41    | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
-| `test_db.py`            | 88    | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status, watchlist |
+| `test_db.py`            | 101   | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status, watchlist |
 | `test_helpers.py`       | 26    | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 serialization |
 | `test_order_manager.py` | 18    | Smart v2 repricing, semi-aggressive, dust, reduceOnly on close, clientOrderId, commission, partial_close rollback, DUST flush avg_price |
 | `test_price_cache.py`   | 35    | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |
