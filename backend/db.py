@@ -814,52 +814,52 @@ def set_bot_status(config_id: int, status: str) -> bool:
     with _conn() as conn:
         reset_avg = status in ("waiting", "paused_after_sl", "disabled")
         if reset_avg:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE bot_configs SET status=?, current_avg_level=0, updated_at=? WHERE id=?",
                 (status, now, config_id),
             )
         else:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE bot_configs SET status=?, updated_at=? WHERE id=?",
                 (status, now, config_id),
             )
-        return conn.execute("SELECT changes()").fetchone()[0] > 0
+        return cur.rowcount > 0
 
 
 def set_bot_close_reason(config_id: int, reason: str) -> bool:
     """Write last_close_reason before a position is closed by monitor_position_triggers."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE bot_configs SET last_close_reason=?, updated_at=? WHERE id=?",
             (reason, now, config_id),
         )
-        return conn.execute("SELECT changes()").fetchone()[0] > 0
+        return cur.rowcount > 0
 
 
 def set_bot_avg_in_progress(config_id: int, in_progress: bool) -> bool:
     """Set/clear the averaging-in-progress flag."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE bot_configs SET avg_in_progress=?, updated_at=? WHERE id=?",
             (int(in_progress), now, config_id),
         )
-        return conn.execute("SELECT changes()").fetchone()[0] > 0
+        return cur.rowcount > 0
 
 
 def increment_bot_avg_level(config_id: int) -> bool:
     """Increment current_avg_level by 1 after a successful averaging fill."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE bot_configs SET current_avg_level=current_avg_level+1, updated_at=? WHERE id=?",
             (now, config_id),
         )
-        return conn.execute("SELECT changes()").fetchone()[0] > 0
+        return cur.rowcount > 0
 
 
 def delete_bot_config(config_id: int) -> bool:
     with _conn() as conn:
-        conn.execute("DELETE FROM bot_configs WHERE id = ?", (config_id,))
-        return conn.execute("SELECT changes()").fetchone()[0] > 0
+        cur = conn.execute("DELETE FROM bot_configs WHERE id = ?", (config_id,))
+        return cur.rowcount > 0

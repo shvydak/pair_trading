@@ -1239,3 +1239,19 @@ def test_get_active_bot_configs(tmp_db):
     active = tmp_db.get_active_bot_configs()
     assert len(active) == 1
     assert active[0]["symbol2"] == "ETH/USDT:USDT"
+
+
+def test_delete_bot_config_not_found(tmp_db):
+    assert tmp_db.delete_bot_config(9999) is False
+
+
+def test_increment_bot_avg_level(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    assert tmp_db.increment_bot_avg_level(cfg_id) is True
+    cfg = tmp_db.get_bot_config_by_pair("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert cfg["current_avg_level"] == 1
+    assert tmp_db.increment_bot_avg_level(9999) is False
