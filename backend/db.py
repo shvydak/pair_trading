@@ -411,18 +411,18 @@ def alert_fired(trigger_id: int) -> bool:
     with _conn() as conn:
         cur = conn.execute(
             "UPDATE triggers SET last_fired_at = ? WHERE id = ? AND status = 'active'",
-            (datetime.now(timezone.utc).isoformat(), trigger_id),
+            (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), trigger_id),
         )
         return cur.rowcount > 0
 
 
 def get_recent_alerts(minutes: int = 60) -> list[dict]:
-    """Return active alert triggers that fired within the last N minutes."""
+    """Return alert triggers that fired within the last N minutes (any status)."""
     with _conn() as conn:
         rows = conn.execute(
             """
             SELECT * FROM triggers
-            WHERE type = 'alert' AND status = 'active'
+            WHERE type = 'alert'
               AND last_fired_at >= datetime('now', ?)
             ORDER BY last_fired_at DESC
             """,

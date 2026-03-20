@@ -574,12 +574,15 @@ def test_find_active_alert_multiple_same_zscore(tmp_db):
 # ---------------------------------------------------------------------------
 
 def test_alert_fired_updates_last_fired_at(tmp_db):
-    """alert_fired() sets last_fired_at on an active alert."""
+    """alert_fired() sets last_fired_at on an active alert in SQLite-compatible format."""
     tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     result = tmp_db.alert_fired(tid)
     assert result is True
     trig = next(t for t in tmp_db.get_active_triggers() if t["id"] == tid)
     assert trig["last_fired_at"] is not None
+    # Must be SQLite-compatible format "YYYY-MM-DD HH:MM:SS" so datetime() comparisons work
+    assert "T" not in trig["last_fired_at"]
+    assert "+" not in trig["last_fired_at"]
 
 
 def test_alert_fired_keeps_status_active(tmp_db):
@@ -617,12 +620,14 @@ def test_get_recent_alerts_excludes_unfired(tmp_db):
     assert tmp_db.get_recent_alerts(minutes=60) == []
 
 
-def test_get_recent_alerts_excludes_cancelled(tmp_db):
-    """Cancelled alerts are not returned even if they fired recently."""
+def test_get_recent_alerts_includes_recently_fired_cancelled(tmp_db):
+    """Cancelled alerts that fired recently are still returned (fire-then-cancel scenario)."""
     tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     tmp_db.alert_fired(tid)
     tmp_db.cancel_trigger(tid)
-    assert tmp_db.get_recent_alerts(minutes=60) == []
+    results = tmp_db.get_recent_alerts(minutes=60)
+    assert len(results) == 1
+    assert results[0]["id"] == tid
 
 
 def test_get_recent_alerts_excludes_tp_sl_type(tmp_db):

@@ -2050,12 +2050,12 @@ async function refreshTriggersCache() {
   }
 }
 
-async function loadAlertsTab() {
+async function loadAlertsTab(clearBadge = true) {
   try {
     const ok = await refreshTriggersCache();
     if (!ok) return;
     renderAlerts(_cachedAlerts);
-    _setAlertsBadge(0);
+    if (clearBadge) _setAlertsBadge(0);
   } catch {}
 }
 
@@ -3021,10 +3021,23 @@ async function loadAllPositions() {
     state.balances = dashData.balances || null;
     renderBalanceCards(state.balances);
 
-    // Process recent alerts (same logic as checkRecentAlerts)
+    // Process recent alerts
     const alerts = dashData.recent_alerts || [];
     _setAlertsBadge(alerts.length);
     if (alerts.length > 0) {
+      // Immediately patch last_fired_at into _cachedAlerts so table updates without extra fetch
+      if (_cachedAlerts) {
+        const firedMap = new Map(alerts.map(a => [a.id, a.last_fired_at]));
+        let patched = false;
+        _cachedAlerts = _cachedAlerts.map(c => {
+          if (firedMap.has(c.id) && c.last_fired_at !== firedMap.get(c.id)) {
+            patched = true;
+            return { ...c, last_fired_at: firedMap.get(c.id) };
+          }
+          return c;
+        });
+        if (patched) renderAlerts(_cachedAlerts);
+      }
       const newest = alerts[0];
       const toastKey = `${newest.id}:${newest.last_fired_at}`;
       if (toastKey !== _lastAlertToastId) {
@@ -3032,7 +3045,7 @@ async function loadAllPositions() {
         const pair = _dispSym(newest.symbol1) + ' / ' + _dispSym(newest.symbol2);
         const ago = _timeAgo(newest.last_fired_at);
         showToast(`🔔 Алерт: ${pair} — ${ago}`, 'ok', 8000, () => setBottomTab('alerts'));
-        loadAlertsTab();
+        loadAlertsTab(false); // refresh full data but keep badge
       }
     }
 
