@@ -1158,9 +1158,25 @@ def test_set_bot_status(tmp_db):
         watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
         tp_zscore=0.5, sl_zscore=4.0,
     )
-    tmp_db.set_bot_status(cfg_id, "waiting")
+    # Simulate being in a position with avg level > 0
+    tmp_db.set_bot_status(cfg_id, "in_position")
+    tmp_db.increment_bot_avg_level(cfg_id)
+    tmp_db.increment_bot_avg_level(cfg_id)
+
+    # Transition to waiting — must reset current_avg_level to 0
+    result = tmp_db.set_bot_status(cfg_id, "waiting")
+    assert result is True
     configs = tmp_db.get_bot_configs()
     assert configs[0]["status"] == "waiting"
+    assert configs[0]["current_avg_level"] == 0
+
+    # Transition to paused_after_sl — must also reset current_avg_level
+    tmp_db.set_bot_status(cfg_id, "in_position")
+    tmp_db.increment_bot_avg_level(cfg_id)
+    tmp_db.set_bot_status(cfg_id, "paused_after_sl")
+    configs = tmp_db.get_bot_configs()
+    assert configs[0]["status"] == "paused_after_sl"
+    assert configs[0]["current_avg_level"] == 0
 
 
 def test_set_bot_close_reason(tmp_db):
