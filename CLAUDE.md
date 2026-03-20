@@ -33,6 +33,21 @@ Before writing any code, call `mcp__MCP_DOCKER__sequentialthinking` when the tas
 
 Skip for: UI text/style changes, simple endpoint additions, typo fixes.
 
+## When to Check Context7 Documentation
+
+Before modifying files that use external libraries, fetch current API docs via Context7 MCP:
+
+| File | Library | Context7 ID |
+|------|---------|-------------|
+| `binance_client.py`, `order_manager.py` | ccxt (Binance Futures) | `/ccxt/ccxt` |
+| `symbol_feed.py`, `user_data_feed.py` | ccxt WebSocket | `/ccxt/ccxt` |
+| `telegram_bot.py` | aiogram v3 | `/aiogram/aiogram` |
+| `main.py` (WebSocket endpoints) | FastAPI | `/websites/fastapi_tiangolo` |
+
+Skip for: typo fixes, UI text changes, or when you already have current docs loaded in context.
+
+A hookify rule (`check-context7-docs`) will remind you automatically when editing these files.
+
 ## Changelog
 
 This file needs to be updated with the latest bugs and fixes.
