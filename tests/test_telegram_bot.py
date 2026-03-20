@@ -422,3 +422,49 @@ class TestNotifyReconcileMismatch:
 
     def test_different_symbol(self, monkeypatch):
         assert "SOL/USDC" in self._msg(monkeypatch, sym="SOL/USDC:USDC")
+
+
+# ---------------------------------------------------------------------------
+# notify_bot_paused
+# ---------------------------------------------------------------------------
+
+class TestNotifyBotPaused:
+    def _msg(
+        self,
+        monkeypatch,
+        sym1="BTC/USDT:USDT",
+        sym2="ETH/USDT:USDT",
+        reason="sl",
+    ) -> str:
+        fired = _capture_fire(monkeypatch)
+        asyncio.run(tg_bot.notify_bot_paused(sym1, sym2, reason))
+        return fired[0]
+
+    def test_pause_emoji(self, monkeypatch):
+        assert "⏸" in self._msg(monkeypatch)
+
+    def test_pair_in_message(self, monkeypatch):
+        msg = self._msg(monkeypatch)
+        assert "BTC/USDT" in msg
+        assert "ETH/USDT" in msg
+
+    def test_sl_reason(self, monkeypatch):
+        msg = self._msg(monkeypatch, reason="sl")
+        assert "Stop Loss" in msg
+
+    def test_liquidation_reason(self, monkeypatch):
+        msg = self._msg(monkeypatch, reason="liquidation")
+        assert "Ликвидация" in msg
+
+    def test_manual_reason(self, monkeypatch):
+        msg = self._msg(monkeypatch, reason="manual")
+        assert "Ручное" in msg
+
+    def test_resume_instruction(self, monkeypatch):
+        msg = self._msg(monkeypatch)
+        assert "автоторговл" in msg.lower() or "автотрейд" in msg.lower()
+
+    def test_fires_one_message(self, monkeypatch):
+        fired = _capture_fire(monkeypatch)
+        asyncio.run(tg_bot.notify_bot_paused("A", "B", "sl"))
+        assert len(fired) == 1

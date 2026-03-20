@@ -285,6 +285,19 @@ async def notify_execution_failed(sym1: str, sym2: str, exec_id: str, reason: st
     )
 
 
+async def notify_bot_paused(sym1: str, sym2: str, reason: str) -> None:
+    """Notify when the bot pauses after SL/liquidation."""
+    pair = _fmt_pair(sym1, sym2)
+    reason_map = {"sl": "Stop Loss", "liquidation": "Ликвидация", "manual": "Ручное закрытие"}
+    reason_label = reason_map.get(reason, reason.upper())
+    _fire(
+        f"⏸ <b>Бот на паузе</b>\n"
+        f"Пара: <b>{pair}</b>\n"
+        f"Причина: {reason_label}\n"
+        f"Включите автоторговлю вручную для возобновления"
+    )
+
+
 # ─── Command handlers (foundation for future bot control) ─────────────────────
 
 @_router.message(Command("start"))
