@@ -12,6 +12,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "..", "pair_trading.db")
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -125,6 +126,26 @@ def init_db() -> None:
                 leverage     TEXT    NOT NULL DEFAULT '1',
                 created_at   TEXT    NOT NULL,
                 UNIQUE(symbol1, symbol2, timeframe)
+            );
+
+            CREATE TABLE IF NOT EXISTS bot_configs (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                watchlist_id         INTEGER REFERENCES watchlist(id) ON DELETE CASCADE,
+                symbol1              TEXT NOT NULL,
+                symbol2              TEXT NOT NULL,
+                status               TEXT NOT NULL DEFAULT 'disabled',
+                last_close_reason    TEXT,
+                tp_zscore            REAL NOT NULL,
+                sl_zscore            REAL NOT NULL,
+                tp_smart             INTEGER NOT NULL DEFAULT 1,
+                sl_smart             INTEGER NOT NULL DEFAULT 1,
+                confirmation_minutes INTEGER NOT NULL DEFAULT 0,
+                avg_levels_json      TEXT,
+                current_avg_level    INTEGER NOT NULL DEFAULT 0,
+                avg_in_progress      INTEGER NOT NULL DEFAULT 0,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL,
+                UNIQUE(watchlist_id)
             );
         """)
     _migrate()
@@ -713,3 +734,129 @@ def update_watchlist_stats(item_id: int, half_life: Optional[float], hurst: Opti
             (half_life, hurst, corr, pval, item_id),
         )
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# bot_configs
+# ---------------------------------------------------------------------------
+
+def save_bot_config(
+    watchlist_id: int,
+    symbol1: str,
+    symbol2: str,
+    tp_zscore: float,
+    sl_zscore: float,
+    tp_smart: bool = True,
+    sl_smart: bool = True,
+    confirmation_minutes: int = 0,
+    avg_levels_json: Optional[str] = None,
+) -> int:
+    """Create or update bot config for a watchlist item. Returns id."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO bot_configs
+              (watchlist_id, symbol1, symbol2, tp_zscore, sl_zscore,
+               tp_smart, sl_smart, confirmation_minutes, avg_levels_json,
+               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(watchlist_id) DO UPDATE SET
+              tp_zscore            = excluded.tp_zscore,
+              sl_zscore            = excluded.sl_zscore,
+              tp_smart             = excluded.tp_smart,
+              sl_smart             = excluded.sl_smart,
+              confirmation_minutes = excluded.confirmation_minutes,
+              avg_levels_json      = excluded.avg_levels_json,
+              updated_at           = excluded.updated_at
+            """,
+            (
+                watchlist_id, symbol1, symbol2, tp_zscore, sl_zscore,
+                int(tp_smart), int(sl_smart), confirmation_minutes, avg_levels_json,
+                now, now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM bot_configs WHERE watchlist_id = ?", (watchlist_id,)
+        ).fetchone()
+        return row["id"]
+
+
+def get_bot_configs() -> list[dict]:
+    """Return all bot_configs rows."""
+    with _conn() as conn:
+        rows = conn.execute("SELECT * FROM bot_configs ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_active_bot_configs() -> list[dict]:
+    """Return bot_configs with status IN ('waiting', 'in_position')."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bot_configs WHERE status IN ('waiting', 'in_position') ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_bot_config_by_pair(symbol1: str, symbol2: str) -> Optional[dict]:
+    """Return bot_config for a given pair, or None."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM bot_configs WHERE symbol1 = ? AND symbol2 = ?",
+            (symbol1, symbol2),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_bot_status(config_id: int, status: str) -> bool:
+    """Update bot status. Resets current_avg_level when transitioning out of in_position."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        reset_avg = status in ("waiting", "paused_after_sl", "disabled")
+        if reset_avg:
+            conn.execute(
+                "UPDATE bot_configs SET status=?, current_avg_level=0, updated_at=? WHERE id=?",
+                (status, now, config_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE bot_configs SET status=?, updated_at=? WHERE id=?",
+                (status, now, config_id),
+            )
+        return conn.execute("SELECT changes()").fetchone()[0] > 0
+
+
+def set_bot_close_reason(config_id: int, reason: str) -> None:
+    """Write last_close_reason before a position is closed by monitor_position_triggers."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE bot_configs SET last_close_reason=?, updated_at=? WHERE id=?",
+            (reason, now, config_id),
+        )
+
+
+def set_bot_avg_in_progress(config_id: int, in_progress: bool) -> None:
+    """Set/clear the averaging-in-progress flag."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE bot_configs SET avg_in_progress=?, updated_at=? WHERE id=?",
+            (int(in_progress), now, config_id),
+        )
+
+
+def increment_bot_avg_level(config_id: int) -> None:
+    """Increment current_avg_level by 1 after a successful averaging fill."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE bot_configs SET current_avg_level=current_avg_level+1, updated_at=? WHERE id=?",
+            (now, config_id),
+        )
+
+
+def delete_bot_config(config_id: int) -> bool:
+    with _conn() as conn:
+        conn.execute("DELETE FROM bot_configs WHERE id = ?", (config_id,))
+        return conn.execute("SELECT changes()").fetchone()[0] > 0

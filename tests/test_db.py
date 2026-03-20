@@ -1094,3 +1094,132 @@ def test_get_watchlist_ordered_by_creation(tmp_db):
     items = tmp_db.get_watchlist()
     assert items[0]["symbol1"] == "AAA/USDT:USDT"
     assert items[1]["symbol1"] == "CCC/USDT:USDT"
+
+
+# ---------------------------------------------------------------------------
+# bot_configs
+# ---------------------------------------------------------------------------
+
+def _save_wl(db, sym1="BTC/USDT:USDT", sym2="ETH/USDT:USDT"):
+    """Save a minimal watchlist item and return its id."""
+    return db.save_watchlist_item(
+        symbol1=sym1, symbol2=sym2, timeframe="1h", zwindow=20,
+        candle_limit=500, entry_z=2.0, exit_z=0.5,
+        pos_size="1000", sizing="ols", leverage="1",
+    )
+
+
+def test_save_bot_config_returns_id(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id,
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5,
+        sl_zscore=4.0,
+    )
+    assert isinstance(cfg_id, int) and cfg_id >= 1
+
+
+def test_get_bot_configs_returns_list(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id,
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5,
+        sl_zscore=4.0,
+    )
+    configs = tmp_db.get_bot_configs()
+    assert len(configs) == 1
+    assert configs[0]["symbol1"] == "BTC/USDT:USDT"
+    assert configs[0]["status"] == "disabled"
+
+
+def test_save_bot_config_upsert(tmp_db):
+    """Second save for same watchlist_id updates the row."""
+    wl_id = _save_wl(tmp_db)
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=1.0, sl_zscore=3.0,
+    )
+    configs = tmp_db.get_bot_configs()
+    assert len(configs) == 1
+    assert configs[0]["tp_zscore"] == 1.0
+
+
+def test_set_bot_status(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    tmp_db.set_bot_status(cfg_id, "waiting")
+    configs = tmp_db.get_bot_configs()
+    assert configs[0]["status"] == "waiting"
+
+
+def test_set_bot_close_reason(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    tmp_db.set_bot_close_reason(cfg_id, "sl")
+    cfg = tmp_db.get_bot_config_by_pair("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert cfg["last_close_reason"] == "sl"
+
+
+def test_set_bot_avg_in_progress(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    tmp_db.set_bot_avg_in_progress(cfg_id, True)
+    cfg = tmp_db.get_bot_config_by_pair("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert cfg["avg_in_progress"] == 1
+
+
+def test_delete_bot_config(tmp_db):
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    assert tmp_db.delete_bot_config(cfg_id) is True
+    assert tmp_db.get_bot_configs() == []
+
+
+def test_bot_config_cascade_delete(tmp_db):
+    """Deleting watchlist item also removes bot_config (ON DELETE CASCADE)."""
+    wl_id = _save_wl(tmp_db)
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    tmp_db.delete_watchlist_item(wl_id)
+    assert tmp_db.get_bot_configs() == []
+
+
+def test_get_active_bot_configs(tmp_db):
+    """get_active_bot_configs returns only waiting/in_position rows."""
+    wl1 = _save_wl(tmp_db, "BTC/USDT:USDT", "ETH/USDT:USDT")
+    wl2 = _save_wl(tmp_db, "BTC/USDT:USDT", "SOL/USDT:USDT")
+    cfg1 = tmp_db.save_bot_config(
+        watchlist_id=wl1, symbol1="BTC/USDT:USDT", symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    cfg2 = tmp_db.save_bot_config(
+        watchlist_id=wl2, symbol1="BTC/USDT:USDT", symbol2="SOL/USDT:USDT",
+        tp_zscore=0.5, sl_zscore=4.0,
+    )
+    tmp_db.set_bot_status(cfg1, "waiting")
+    tmp_db.set_bot_status(cfg2, "disabled")
+    active = tmp_db.get_active_bot_configs()
+    assert len(active) == 1
+    assert active[0]["symbol2"] == "ETH/USDT:USDT"
