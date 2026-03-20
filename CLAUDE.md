@@ -83,13 +83,13 @@ pair_trading/
 ├── tests/
 │   ├── conftest.py          # sys.path setup + tmp_db fixture (isolated temp SQLite per test)
 │   ├── test_strategy.py     # 41 tests — all strategy math
-│   ├── test_db.py           # 56 tests — SQLite persistence layer
+│   ├── test_db.py           # 103 tests — SQLite persistence layer
 │   ├── test_helpers.py      # 26 tests — _clean() / _safe_float() JSON helpers
-│   ├── test_order_manager.py # 4 tests — Smart v2 repricing / semi-aggressive / dust rules
+│   ├── test_order_manager.py # 18 tests — Smart v2 repricing / semi-aggressive / dust rules
 │   ├── test_price_cache.py  # 35 tests — PriceCache ref-counting, SymbolFeed assembly, wait_any_update
 │   ├── test_symbol_feed.py  # 15 tests — SymbolFeed buffer, kline handling, event-driven updates
 │   ├── test_watchlist.py    #  8 tests — WatchlistItem model validation
-│   ├── test_telegram_bot.py # 56 tests — telegram_bot formatters, config, send(), notify_*
+│   ├── test_telegram_bot.py # 70 tests — telegram_bot formatters, config, send(), notify_*
 │   └── test_lifespan.py     #  5 tests — asyncio graceful shutdown
 ├── logs/
 │   └── pair_trading.log     # Rotating log (10 MB × 5 files)
@@ -153,8 +153,8 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/all_positions`         | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
 | GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response      |
 | GET    | `/api/triggers`              | All active TP/SL triggers (standalone, independent of positions)                                                |
-| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"` (HTTP 400 if missing). For `alert`, an existing active row with the **same** sym pair, `zscore`, `timeframe`, `zscore_window`, and `candle_limit` is cancelled first (replace); differing lookback or z-window ⇒ separate concurrent alerts  |
-| DELETE | `/api/triggers/{id}`         | Cancel an active trigger                                                                                        |
+| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"` (HTTP 400 if missing). For `alert`, an existing active row with the **same** sym pair, `zscore`, `timeframe`, `zscore_window`, and `candle_limit` is deleted first (replace); differing lookback or z-window ⇒ separate concurrent alerts  |
+| DELETE | `/api/triggers/{id}`         | Hard-delete a trigger (gone permanently)                                                                        |
 | GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center          |
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
 | GET    | `/api/executions/history`    | Persisted terminal execution snapshots from SQLite (`?limit=100`)                                               |
@@ -278,7 +278,7 @@ Three-panel trading terminal:
 
 ### Alerts tab (frontend)
 
-- `refreshTriggersCache()` fetches `GET /api/triggers` into `_cachedAlerts` (alerts only); `loadAlertsTab()` refreshes the table and clears the notification badge
+- `refreshTriggersCache()` fetches `GET /api/triggers` into `_cachedAlerts` (alerts only); `loadAlertsTab(clearBadge=true)` refreshes the table; pass `false` when calling from background poller to avoid clearing badge set by `loadAllPositions()`
 - **Row highlight** (“current analysis”): same criteria as watchlist bell — includes **`candle_limit` vs `#limit-input`** so two alerts that differ only by lookback are not both highlighted
 - **`_loadAlertIntoAnalysis`**: applies symbols, timeframe, z-window, **lookback** (`limit-input` from `trig.candle_limit` when set), entry Z → `runAnalyze()`
 
@@ -390,7 +390,7 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - Status/health: `set_position_status(pos_id, status)`, `update_position_coint_health(pos_id, pvalue)`
 - `close_position(...)` accepts `commission` and `commission_asset` kwargs; saved to `closed_trades`
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
-- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore, timeframe, zscore_window, candle_limit)` → dict|None (dedup on alert create matches TF + z-window + lookback + z threshold), `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
+- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)` (**hard DELETE** — row gone immediately; no soft-delete/cancelled state), `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore, timeframe, zscore_window, candle_limit)` → dict|None (dedup on alert create matches TF + z-window + lookback + z threshold), `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
 - Execution history: `save_execution_history(...)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)`
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicates
 - On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance)
@@ -442,7 +442,7 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 - **Monitor** recomputes z like analysis: PriceCache closes for `(sym1, sym2, trig timeframe, candle_limit)`, OLS hedge on that series, rolling z with `trig["zscore_window"]`. Telegram when `abs(current_z) >= alert_pct * abs(trig_z)` while state is `"idle"`. `notify_alert(..., fire_at=thresh)` separates **Entry Z** from the **actual trip level** when `alert_pct < 1` so the message is not confused with “% of ±entry” only.
 - **First subscription (per process):** if `|z|` is **already** past that gate, the FSM starts in `"alerted"` **without** Telegram — avoids instant ping on create; after `abs(z) <= TELEGRAM_ALERT_RESET_Z` (default 0.5) state returns to `"idle"` and the next breach sends `notify_alert`.
-- Stays `status="active"` — never auto-cancelled (row not removed on fire).
+- Row stays in DB while active (fires repeatedly via hysteresis); user Cancel = hard DELETE.
 - **Hysteresis**: `"idle"` → fires → `"alerted"` → `abs(z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
 - Created via 🔔 on watchlist item or `addAlertFromPanel()` button in Pair Config panel
 - **Notification center**: `checkRecentAlerts()` piggybacked on the 5s positions interval (not a separate timer)
@@ -471,12 +471,14 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 - **TP/SL input only accepts positive numbers**: correct behavior with direction-agnostic logic — chart shows symmetric lines at ±threshold
 - **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present in HTML at parse time — use `element.style.color` with explicit hex values (`C_GREEN`/`C_YELLOW`/`C_RED` constants)
 - **SQLite upsert `lastrowid` unreliable**: after `INSERT ... ON CONFLICT DO UPDATE`, `cur.lastrowid` may return ID of a different previously inserted row, not the upserted one — always use a follow-up `SELECT` to get the actual ID
+- **SQLite datetime format**: always use `strftime("%Y-%m-%d %H:%M:%S")` (not `.isoformat()`) when writing timestamps that SQLite `datetime()` will compare — ISO format with `T` separator and `+00:00` breaks range queries like `last_fired_at >= datetime('now', '-60 minutes')`
+- **Alert z vs chart z may differ**: monitor computes z using the trigger's stored `candle_limit`/`zscore_window`/`timeframe`; chart uses current UI input values — different data windows → different hedge ratio → different z; load pair from watchlist to align parameters
 - **WebSocket requires absolute URL**: `new WebSocket('/ws/path')` throws — use `_wsUrl(path)` helper which builds `ws://` or `wss://` from `window.location`
 - **`ecosystem.config.js` path resolution**: PM2 resolves `script` relative to `cwd`; use `path.join(__dirname, '.venv/bin/uvicorn')` to avoid breakage when cwd ≠ project root
 
 ## Tests (`tests/`)
 
-310 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
+311 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
 
 | File                    | Tests | Coverage                                                    |
 | ----------------------- | ----- | ----------------------------------------------------------- |
