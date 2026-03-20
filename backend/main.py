@@ -11,6 +11,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from binance_client import BinanceClient
@@ -768,9 +769,7 @@ async def _handle_liquidation(symbol: str, position_amount: float) -> None:
         if pos["symbol1"] == symbol or pos["symbol2"] == symbol:
             db.set_position_status(pos["id"], "liquidated")
             log.error("LIQUIDATION: marked DB position %s as liquidated", pos["id"])
-    asyncio.create_task(tg_bot.notify_alert(
-        symbol, "", 0.0, 0.0,
-    ))
+    asyncio.create_task(tg_bot.notify_liquidation(symbol))
 
 
 async def _handle_adl(symbol: str, position_amount: float) -> None:
@@ -781,9 +780,7 @@ async def _handle_adl(symbol: str, position_amount: float) -> None:
             db.set_position_status(pos["id"], "adl_detected")
         elif pos["symbol2"] == symbol:
             db.set_position_status(pos["id"], "adl_detected")
-    asyncio.create_task(tg_bot.notify_alert(
-        symbol, "", 0.0, 0.0,
-    ))
+    asyncio.create_task(tg_bot.notify_adl(symbol))
 
 
 async def _handle_funding(asset: str, amount: float) -> None:
@@ -843,7 +840,7 @@ async def reconcile_positions() -> None:
                                 "RECONCILE: %s not found on exchange (pos_id=%s)",
                                 sym, pos["id"],
                             )
-                            asyncio.create_task(tg_bot.notify_alert(sym, "", 0.0, 0.0))
+                            asyncio.create_task(tg_bot.notify_reconcile_mismatch(sym))
                         else:
                             exch_qty = abs(exch_pos["size"])
                             try:
@@ -895,7 +892,7 @@ async def health_check_coint() -> None:
                                 "COINT HEALTH: %s/%s p=%.4f > 0.05 — cointegration may have broken",
                                 sym1, sym2, pvalue,
                             )
-                            asyncio.create_task(tg_bot.notify_alert(sym1, sym2, 0.0, 0.0))
+                            asyncio.create_task(tg_bot.notify_coint_breakdown(sym1, sym2, pvalue))
                 except Exception as e:
                     log.debug("health_check_coint error for %s/%s: %s", sym1, sym2, e)
         except Exception as e:
@@ -971,6 +968,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Frontend
+# ---------------------------------------------------------------------------
+
+@app.get("/")
+async def serve_frontend():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "../frontend/index.html"))
 
 
 # ---------------------------------------------------------------------------
@@ -1086,6 +1092,49 @@ class WatchlistItem(BaseModel):
     timeframe: str = "1h"
     limit: int = 500
     zscore_window: int = 20
+
+
+class WatchlistItemDB(BaseModel):
+    symbol1: str
+    symbol2: str
+    timeframe: str = "1h"
+    zwindow: int = 20
+    candle_limit: int = 500
+    entry_z: float = 2.0
+    exit_z: float = 1.0
+    pos_size: str = "1000"
+    sizing: str = "ols"
+    leverage: str = "1"
+
+
+@app.get("/api/watchlist")
+async def list_watchlist():
+    return {"items": db.get_watchlist()}
+
+
+@app.post("/api/watchlist")
+async def add_watchlist_item(item: WatchlistItemDB):
+    item_id = db.save_watchlist_item(
+        symbol1=item.symbol1,
+        symbol2=item.symbol2,
+        timeframe=item.timeframe,
+        zwindow=item.zwindow,
+        candle_limit=item.candle_limit,
+        entry_z=item.entry_z,
+        exit_z=item.exit_z,
+        pos_size=item.pos_size,
+        sizing=item.sizing,
+        leverage=item.leverage,
+    )
+    return {"id": item_id}
+
+
+@app.delete("/api/watchlist/{item_id}")
+async def remove_watchlist_item(item_id: int):
+    deleted = db.delete_watchlist_item(item_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Watchlist item not found")
+    return {"ok": True}
 
 
 @app.post("/api/watchlist/data")

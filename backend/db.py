@@ -110,6 +110,22 @@ def init_db() -> None:
                 asset       TEXT    NOT NULL,
                 paid_at     TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol1      TEXT    NOT NULL,
+                symbol2      TEXT    NOT NULL,
+                timeframe    TEXT    NOT NULL DEFAULT '1h',
+                zwindow      INTEGER NOT NULL DEFAULT 20,
+                candle_limit INTEGER NOT NULL DEFAULT 500,
+                entry_z      REAL    NOT NULL DEFAULT 2.0,
+                exit_z       REAL    NOT NULL DEFAULT 1.0,
+                pos_size     TEXT    NOT NULL DEFAULT '1000',
+                sizing       TEXT    NOT NULL DEFAULT 'ols',
+                leverage     TEXT    NOT NULL DEFAULT '1',
+                created_at   TEXT    NOT NULL,
+                UNIQUE(symbol1, symbol2, timeframe)
+            );
         """)
     _migrate()
 
@@ -605,3 +621,65 @@ def get_funding_total(position_id: int) -> float:
             (position_id,),
         ).fetchone()
         return float(row["total"]) if row else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Watchlist
+# ---------------------------------------------------------------------------
+
+def get_watchlist() -> list[dict]:
+    """Return all watchlist items ordered by creation time."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM watchlist ORDER BY created_at ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_watchlist_item(
+    symbol1: str,
+    symbol2: str,
+    timeframe: str = "1h",
+    zwindow: int = 20,
+    candle_limit: int = 500,
+    entry_z: float = 2.0,
+    exit_z: float = 1.0,
+    pos_size: str = "1000",
+    sizing: str = "ols",
+    leverage: str = "1",
+) -> int:
+    """Insert or update a watchlist item. Returns the row id."""
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO watchlist
+              (symbol1, symbol2, timeframe, zwindow, candle_limit,
+               entry_z, exit_z, pos_size, sizing, leverage, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(symbol1, symbol2, timeframe) DO UPDATE SET
+              zwindow      = excluded.zwindow,
+              candle_limit = excluded.candle_limit,
+              entry_z      = excluded.entry_z,
+              exit_z       = excluded.exit_z,
+              pos_size     = excluded.pos_size,
+              sizing       = excluded.sizing,
+              leverage     = excluded.leverage
+            """,
+            (
+                symbol1, symbol2, timeframe, zwindow, candle_limit,
+                entry_z, exit_z, pos_size, sizing, leverage,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM watchlist WHERE symbol1=? AND symbol2=? AND timeframe=?",
+            (symbol1, symbol2, timeframe),
+        ).fetchone()
+        return row["id"]
+
+
+def delete_watchlist_item(item_id: int) -> bool:
+    """Delete a watchlist item by id. Returns True if found."""
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM watchlist WHERE id = ?", (item_id,))
+        return cur.rowcount > 0

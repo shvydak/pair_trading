@@ -113,13 +113,13 @@ cd backend && ../.venv/bin/uvicorn main:app --reload --port 8080
 
 ### Frontend
 
-Open `frontend/index.html` directly in browser (no build/server needed).
+Open `http://localhost:8080` in browser — FastAPI serves `frontend/index.html` at `GET /`.
 
 ### Tests
 
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 283 tests
+.venv/bin/pytest tests/ -v        # all 306 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -158,6 +158,9 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center          |
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
 | GET    | `/api/executions/history`    | Persisted terminal execution snapshots from SQLite (`?limit=100`)                                               |
+| GET    | `/api/watchlist`             | All saved watchlist items from SQLite                                                                           |
+| POST   | `/api/watchlist`             | Add or update watchlist item (upsert by sym1+sym2+timeframe)                                                    |
+| DELETE | `/api/watchlist/{id}`        | Remove watchlist item by DB id                                                                                  |
 | POST   | `/api/watchlist/data`        | Subscribe watchlist pairs to PriceCache; returns current z-score + spread for each pair (legacy HTTP fallback) |
 | POST   | `/api/batch/sparklines`      | Batch z-score/spread data for multiple positions; uses PriceCache when available                                |
 | WS     | `/ws/stream`                 | Live spread/price/Z-score updates, event-driven on each kline (≤5 s timeout) for the active analysed pair      |
@@ -261,7 +264,7 @@ Three-panel trading terminal:
 
 ### Watchlist
 
-- `localStorage['pt_watchlist']` — saves **all analysis parameters** when adding a pair
+- `watchlist` SQLite table — stores all analysis parameters per pair; managed via `GET/POST/DELETE /api/watchlist`; `_watchlistItems` in-memory array populated on page load via `initWatchlist()` (async, before `renderWatchlist()` and `connectWatchlistWS()`)
 - **Dedup key**: `(sym1, sym2, timeframe)` — same pair with different timeframe stored as separate entry; adding BTC/ETH 5m does not overwrite BTC/ETH 4h
 - **Grouping by timeframe** in `renderWatchlist()`: section headers, order 5m→15m→30m→1h→2h→4h→8h→1d
 - Z-score/spread updated **event-driven** via `WS /ws/watchlist` (fires on each Binance kline, max 5s delay); response contains `timeframe` for exact record matching
@@ -269,6 +272,7 @@ Three-panel trading terminal:
 - `_applyWatchlistUpdate(data)` — common handler for incoming data (in-place DOM patch)
 - Threshold indication: `|z| >= entryZ*0.75` → yellow; `|z| >= entryZ` → red + blinking
 - Active pair highlight updates immediately after `runAnalyze()` (no wait for 5s tick)
+- **localStorage (remaining):** `pt_lang` (ru/en), `pt_mode` (trade/backtest), `pt_price_chart_h` (chart height px), `pt_last` (last analysis state) — UI-only preferences, not trading data
 
 ### Positions Tab
 
@@ -369,7 +373,8 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 ### SQLite Persistence (`backend/db.py`)
 
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
-- **Six tables**: `open_positions`, `closed_trades`, `triggers`, `execution_history`, `position_legs`, `funding_history`
+- **Seven tables**: `open_positions`, `closed_trades`, `triggers`, `execution_history`, `position_legs`, `funding_history`, `watchlist`
+- Watchlist functions: `get_watchlist()`, `save_watchlist_item(...)` → id (upsert by sym1+sym2+timeframe), `delete_watchlist_item(id)` → bool
 - `open_positions` has `status` column: `open` | `partial_close` | `liquidated` | `adl_detected`; also `coint_pvalue`, `coint_checked_at`
 - `find_open_position(sym1, sym2)` — excludes `liquidated`/`adl_detected`; returns `partial_close` (user may still want to close it)
 - Position leg functions: `save_position_leg(...)`, `get_position_legs(pos_id)`, `close_position_legs(pos_id)`, `add_position_entry(pos_id, leg_number, new_qty, new_price)` — updates weighted avg price in `open_positions`
@@ -421,7 +426,9 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 Lifecycle: `setup()` → `create_task(start_polling())` → `stop()` (on shutdown)
 
-Notification functions: `notify_position_opened`, `notify_position_closed`, `notify_trigger_fired`, `notify_alert`, `notify_rollback`, `notify_execution_failed` — all non-blocking via `_fire()` → `create_task(send())`; `send()` never raises.
+Notification functions: `notify_position_opened`, `notify_position_closed`, `notify_trigger_fired`, `notify_alert`, `notify_rollback`, `notify_execution_failed`, `notify_liquidation`, `notify_adl`, `notify_coint_breakdown`, `notify_reconcile_mismatch` — all non-blocking via `_fire()` → `create_task(send())`; `send()` never raises.
+
+**Rule:** `notify_alert` is ONLY for watchlist z-score threshold alerts. Use dedicated functions for all other events — never pass dummy `0.0, 0.0` args.
 
 ### Alert triggers (`type="alert"` in `triggers` table)
 
@@ -453,24 +460,35 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 - **Double close on TP fire**: fixed with `closing_pairs` set tracking `(sym1, sym2)`
 - **TP/SL input only accepts positive numbers**: correct behavior with direction-agnostic logic — chart shows symmetric lines at ±threshold
 - **Tailwind CDN dynamic classes don't work**: CDN only generates CSS for classes present in HTML at parse time — use `element.style.color` with explicit hex values (`C_GREEN`/`C_YELLOW`/`C_RED` constants)
+- **SQLite upsert `lastrowid` unreliable**: after `INSERT ... ON CONFLICT DO UPDATE`, `cur.lastrowid` may return ID of a different previously inserted row, not the upserted one — always use a follow-up `SELECT` to get the actual ID
+- **WebSocket requires absolute URL**: `new WebSocket('/ws/path')` throws — use `_wsUrl(path)` helper which builds `ws://` or `wss://` from `window.location`
+- **`ecosystem.config.js` path resolution**: PM2 resolves `script` relative to `cwd`; use `path.join(__dirname, '.venv/bin/uvicorn')` to avoid breakage when cwd ≠ project root
 
 ## Tests (`tests/`)
 
-283 unit tests (10 files), all pass in ~4–5s. Run: `.venv/bin/pytest tests/ -v`
+306 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
 
 | File                    | Tests | Coverage                                                    |
 | ----------------------- | ----- | ----------------------------------------------------------- |
 | `test_strategy.py`      | 41    | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
-| `test_db.py`            | 79    | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status |
+| `test_db.py`            | 88    | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status, watchlist |
 | `test_helpers.py`       | 26    | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 serialization |
 | `test_order_manager.py` | 18    | Smart v2 repricing, semi-aggressive, dust, reduceOnly on close, clientOrderId, commission, partial_close rollback, DUST flush avg_price |
 | `test_price_cache.py`   | 35    | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |
 | `test_symbol_feed.py`   | 15    | buffer update/append, `wait_for_update`, `start` idempotency |
 | `test_watchlist.py`     | 8     | WatchlistItem Pydantic model validation                     |
-| `test_telegram_bot.py`  | 56    | formatters, `send()` safety, all `notify_*` functions       |
+| `test_telegram_bot.py`  | 70    | formatters, `send()` safety, all `notify_*` functions       |
 | `test_lifespan.py`      | 5     | asyncio graceful shutdown pattern                           |
 
 **`conftest.py`** — `tmp_db` fixture: `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test.
+
+## Deployment
+
+- **`ecosystem.config.js`** — PM2 config; runs uvicorn on port 8080; uses `path.join(__dirname, ...)` for reliable path resolution regardless of where `pm2 start` is called from
+- **`.github/workflows/deploy.yml`** — GitHub Actions self-hosted runner on Raspberry Pi; no build step; runs `.venv/bin/pip install -r backend/requirements.txt` then `pm2 reload`; `clean: false` preserves `.env` between deploys
+- **`docs/DEPLOYMENT.md`** — full setup guide (venv creation, PM2 startup, Cloudflare Tunnel)
+- Cloudflare Tunnel: one tunnel `pair-trading.shvydak.com → localhost:8080` — serves both API and frontend (no separate static server)
+- Local dev: `cd backend && ../.venv/bin/uvicorn main:app --reload --port 8080` → open `http://localhost:8080`
 
 ## User Preferences
 

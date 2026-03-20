@@ -874,3 +874,89 @@ def test_save_execution_history_terminal_statuses(tmp_db):
     rows = tmp_db.get_execution_history()
     stored_statuses = {r["status"] for r in rows}
     assert stored_statuses == {"open", "done", "cancelled", "failed"}
+
+
+# ---------------------------------------------------------------------------
+# watchlist
+# ---------------------------------------------------------------------------
+
+def test_get_watchlist_empty(tmp_db):
+    """Returns empty list when no items saved."""
+    assert tmp_db.get_watchlist() == []
+
+
+def test_save_watchlist_item_returns_id(tmp_db):
+    item_id = tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert isinstance(item_id, int)
+    assert item_id >= 1
+
+
+def test_save_watchlist_item_persisted(tmp_db):
+    tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT", timeframe="4h", entry_z=2.5)
+    items = tmp_db.get_watchlist()
+    assert len(items) == 1
+    assert items[0]["symbol1"] == "BTC/USDT:USDT"
+    assert items[0]["symbol2"] == "ETH/USDT:USDT"
+    assert items[0]["timeframe"] == "4h"
+    assert items[0]["entry_z"] == pytest.approx(2.5)
+
+
+def test_save_watchlist_item_defaults(tmp_db):
+    tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT")
+    item = tmp_db.get_watchlist()[0]
+    assert item["timeframe"] == "1h"
+    assert item["zwindow"] == 20
+    assert item["candle_limit"] == 500
+    assert item["entry_z"] == pytest.approx(2.0)
+    assert item["exit_z"] == pytest.approx(1.0)
+    assert item["sizing"] == "ols"
+    assert item["leverage"] == "1"
+
+
+def test_save_watchlist_item_upsert_updates_params(tmp_db):
+    """Same (sym1, sym2, timeframe) updates existing row, not duplicates."""
+    tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT", entry_z=2.0)
+    tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT", entry_z=3.0)
+    items = tmp_db.get_watchlist()
+    assert len(items) == 1
+    assert items[0]["entry_z"] == pytest.approx(3.0)
+
+
+def test_save_watchlist_different_timeframes_are_separate_rows(tmp_db):
+    """Same pair with different timeframe is a separate watchlist entry."""
+    tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT", timeframe="1h")
+    tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT", timeframe="4h")
+    assert len(tmp_db.get_watchlist()) == 2
+
+
+def test_delete_watchlist_item_returns_true(tmp_db):
+    item_id = tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert tmp_db.delete_watchlist_item(item_id) is True
+
+
+def test_delete_watchlist_item_removes_from_list(tmp_db):
+    item_id = tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT")
+    tmp_db.delete_watchlist_item(item_id)
+    assert tmp_db.get_watchlist() == []
+
+
+def test_delete_watchlist_item_missing_returns_false(tmp_db):
+    assert tmp_db.delete_watchlist_item(9999) is False
+
+
+def test_delete_watchlist_item_only_deletes_target(tmp_db):
+    id1 = tmp_db.save_watchlist_item("BTC/USDT:USDT", "ETH/USDT:USDT")
+    tmp_db.save_watchlist_item("SOL/USDT:USDT", "BNB/USDT:USDT")
+    tmp_db.delete_watchlist_item(id1)
+    items = tmp_db.get_watchlist()
+    assert len(items) == 1
+    assert items[0]["symbol1"] == "SOL/USDT:USDT"
+
+
+def test_get_watchlist_ordered_by_creation(tmp_db):
+    """Items are returned in insertion order (oldest first)."""
+    tmp_db.save_watchlist_item("AAA/USDT:USDT", "BBB/USDT:USDT")
+    tmp_db.save_watchlist_item("CCC/USDT:USDT", "DDD/USDT:USDT")
+    items = tmp_db.get_watchlist()
+    assert items[0]["symbol1"] == "AAA/USDT:USDT"
+    assert items[1]["symbol1"] == "CCC/USDT:USDT"

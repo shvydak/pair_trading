@@ -356,3 +356,48 @@ class TestNotifyExecutionFailed:
 
     def test_reason_in_message(self, monkeypatch):
         assert "connection timeout" in self._run(monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# notify_coint_breakdown
+# ---------------------------------------------------------------------------
+
+class TestNotifyCointegrationBreakdown:
+    def _msg(self, monkeypatch, pvalue=0.08) -> str:
+        fired = _capture_fire(monkeypatch)
+        asyncio.run(tg_bot.notify_coint_breakdown("BTC/USDT:USDT", "ETH/USDT:USDT", pvalue))
+        return fired[0]
+
+    def test_warning_emoji(self, monkeypatch):
+        assert "⚠️" in self._msg(monkeypatch)
+
+    def test_pair_in_message(self, monkeypatch):
+        msg = self._msg(monkeypatch)
+        assert "BTC/USDT" in msg
+        assert "ETH/USDT" in msg
+
+    def test_pvalue_in_message(self, monkeypatch):
+        assert "0.0800" in self._msg(monkeypatch, pvalue=0.08)
+
+    def test_threshold_mentioned(self, monkeypatch):
+        assert "0.05" in self._msg(monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# notify_reconcile_mismatch
+# ---------------------------------------------------------------------------
+
+class TestNotifyReconcileMismatch:
+    def _msg(self, monkeypatch, sym="BTC/USDT:USDT") -> str:
+        fired = _capture_fire(monkeypatch)
+        asyncio.run(tg_bot.notify_reconcile_mismatch(sym))
+        return fired[0]
+
+    def test_warning_emoji(self, monkeypatch):
+        assert "⚠️" in self._msg(monkeypatch)
+
+    def test_symbol_in_message(self, monkeypatch):
+        assert "BTC/USDT" in self._msg(monkeypatch)
+
+    def test_different_symbol(self, monkeypatch):
+        assert "SOL/USDC" in self._msg(monkeypatch, sym="SOL/USDC:USDC")

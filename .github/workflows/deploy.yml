@@ -1,0 +1,25 @@
+name: Deploy to Raspberry Pi
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Install Python dependencies
+        run: .venv/bin/pip install -r backend/requirements.txt
+
+      - name: Deploy with PM2
+        run: |
+          pm2 reload ecosystem.config.js || pm2 start ecosystem.config.js
+          pm2 save

@@ -215,6 +215,45 @@ async def notify_alert(
     )
 
 
+async def notify_liquidation(sym: str) -> None:
+    """Notify when Binance liquidates a position."""
+    _fire(
+        f"🔴 <b>Ликвидация позиции</b>\n"
+        f"Символ: <b>{sym.split(':')[0]}</b>\n"
+        f"Позиция принудительно закрыта биржей"
+    )
+
+
+async def notify_adl(sym: str) -> None:
+    """Notify when Binance performs ADL on a position."""
+    _fire(
+        f"🟠 <b>ADL — автоделевераж</b>\n"
+        f"Символ: <b>{sym.split(':')[0]}</b>\n"
+        f"Binance снизил позицию через ADL"
+    )
+
+
+async def notify_coint_breakdown(sym1: str, sym2: str, pvalue: float) -> None:
+    """Notify when cointegration health check detects p-value > 0.05."""
+    pair = _fmt_pair(sym1, sym2)
+    _fire(
+        f"⚠️ <b>Коинтеграция ослабла</b>\n"
+        f"Пара: <b>{pair}</b>\n"
+        f"p-value: <code>{pvalue:.4f}</code> (порог 0.05)\n"
+        f"Пара может больше не быть коинтегрирована"
+    )
+
+
+async def notify_reconcile_mismatch(sym: str) -> None:
+    """Notify when a DB position symbol is not found on the exchange."""
+    _fire(
+        f"⚠️ <b>Расхождение позиций</b>\n"
+        f"Символ: <b>{sym}</b>\n"
+        f"Позиция есть в БД, но не найдена на бирже\n"
+        f"Проверьте вручную"
+    )
+
+
 async def notify_rollback(sym1: str, sym2: str, exec_id: str) -> None:
     """Notify when smart execution triggers a rollback due to partial fill."""
     pair = _fmt_pair(sym1, sym2)
