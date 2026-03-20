@@ -387,12 +387,9 @@ def get_triggers_for_pair(symbol1: str, symbol2: str) -> list[dict]:
 
 
 def cancel_trigger(trigger_id: int) -> bool:
-    """Set trigger status to 'cancelled'. Returns True if found."""
+    """Hard-delete a trigger. Returns True if a row was deleted."""
     with _conn() as conn:
-        cur = conn.execute(
-            "UPDATE triggers SET status = 'cancelled' WHERE id = ? AND status = 'active'",
-            (trigger_id,),
-        )
+        cur = conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
         return cur.rowcount > 0
 
 
@@ -407,10 +404,10 @@ def trigger_fired(trigger_id: int) -> bool:
 
 
 def alert_fired(trigger_id: int) -> bool:
-    """Record that an alert notification was sent. Keeps status='active' for hysteresis."""
+    """Record that an alert notification was sent. Keeps row active for hysteresis."""
     with _conn() as conn:
         cur = conn.execute(
-            "UPDATE triggers SET last_fired_at = ? WHERE id = ? AND status = 'active'",
+            "UPDATE triggers SET last_fired_at = ? WHERE id = ?",
             (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), trigger_id),
         )
         return cur.rowcount > 0

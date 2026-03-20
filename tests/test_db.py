@@ -553,10 +553,10 @@ def test_find_active_alert_same_key_different_lookback_zwindow(tmp_db):
     assert b["zscore_window"] == 100 and b["candle_limit"] == 1000
 
 
-def test_find_active_alert_ignores_cancelled(tmp_db):
-    """find_active_alert does not return cancelled alerts."""
+def test_find_active_alert_ignores_deleted(tmp_db):
+    """find_active_alert does not return hard-deleted alerts."""
     tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
-    tmp_db.cancel_trigger(tid)
+    tmp_db.cancel_trigger(tid)  # hard delete
     result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
     assert result is None
 
@@ -598,10 +598,10 @@ def test_alert_fired_returns_false_when_not_found(tmp_db):
     assert tmp_db.alert_fired(9999) is False
 
 
-def test_alert_fired_returns_false_when_cancelled(tmp_db):
-    """alert_fired() does not update a cancelled trigger."""
+def test_alert_fired_returns_false_when_deleted(tmp_db):
+    """alert_fired() returns False after trigger is hard-deleted."""
     tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
-    tmp_db.cancel_trigger(tid)
+    tmp_db.cancel_trigger(tid)  # hard delete
     assert tmp_db.alert_fired(tid) is False
 
 
@@ -620,14 +620,12 @@ def test_get_recent_alerts_excludes_unfired(tmp_db):
     assert tmp_db.get_recent_alerts(minutes=60) == []
 
 
-def test_get_recent_alerts_includes_recently_fired_cancelled(tmp_db):
-    """Cancelled alerts that fired recently are still returned (fire-then-cancel scenario)."""
+def test_get_recent_alerts_excludes_deleted(tmp_db):
+    """Hard-deleted alerts do not appear in recent alerts even if they fired recently."""
     tid = tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     tmp_db.alert_fired(tid)
-    tmp_db.cancel_trigger(tid)
-    results = tmp_db.get_recent_alerts(minutes=60)
-    assert len(results) == 1
-    assert results[0]["id"] == tid
+    tmp_db.cancel_trigger(tid)  # hard delete
+    assert tmp_db.get_recent_alerts(minutes=60) == []
 
 
 def test_get_recent_alerts_excludes_tp_sl_type(tmp_db):
