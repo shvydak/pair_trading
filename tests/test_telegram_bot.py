@@ -288,9 +288,23 @@ class TestNotifyTriggerFired:
 # ---------------------------------------------------------------------------
 
 class TestNotifyAlert:
-    def _run(self, monkeypatch, current_z=1.8, threshold_z=2.0) -> str:
+    def _run(
+        self,
+        monkeypatch,
+        current_z=1.8,
+        threshold_z=2.0,
+        fire_at=None,
+    ) -> str:
         fired = _capture_fire(monkeypatch)
-        asyncio.run(tg_bot.notify_alert("BTC/USDT:USDT", "ETH/USDT:USDT", current_z, threshold_z))
+        asyncio.run(
+            tg_bot.notify_alert(
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+                current_z,
+                threshold_z,
+                fire_at=fire_at,
+            )
+        )
         return fired[0]
 
     def test_bell_emoji(self, monkeypatch):
@@ -303,8 +317,15 @@ class TestNotifyAlert:
         assert "2.00" in self._run(monkeypatch, threshold_z=2.0)
 
     def test_percentage_90(self, monkeypatch):
-        # 1.8 / 2.0 * 100 = 90%
+        # |z| / entry * 100 = 1.8 / 2.0 * 100 = 90%
         assert "90%" in self._run(monkeypatch, current_z=1.8, threshold_z=2.0)
+
+    def test_fire_at_shows_trip_line(self, monkeypatch):
+        # Entry 2.5, notify at 90% => trip 2.25; message shows both levels
+        msg = self._run(monkeypatch, current_z=2.265, threshold_z=2.5, fire_at=2.25)
+        assert "2.25" in msg
+        assert "От входного" in msg or "входного" in msg
+        assert "уровня срабатывания" in msg
 
     def test_direction_up_for_positive_z(self, monkeypatch):
         assert "↑" in self._run(monkeypatch, current_z=1.8)

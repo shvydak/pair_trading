@@ -201,17 +201,26 @@ async def notify_alert(
     sym2: str,
     current_z: float,
     threshold_z: float,
+    fire_at: Optional[float] = None,
 ) -> None:
-    """Notify when z-score reaches 90% of entry threshold (watchlist alert trigger)."""
+    """Notify when |z| reaches fire_at (default = entry threshold; lower when alert_pct < 1)."""
     pair = _fmt_pair(sym1, sym2)
     direction = "вверх ↑" if current_z > 0 else "вниз ↓"
-    pct = abs(current_z) / abs(threshold_z) * 100 if threshold_z else 0
+    entry = abs(threshold_z) if threshold_z else 0.0
+    trip = float(fire_at) if fire_at is not None else entry
+    pct_of_entry = abs(current_z) / entry * 100 if entry else 0.0
+    pct_of_trip = abs(current_z) / trip * 100 if trip else 0.0
+    trip_line = ""
+    if trip > 0 and abs(trip - entry) > 1e-9:
+        trip_line = f"Срабатывание при |Z| ≥ <code>{trip:.2f}</code> ({(trip / entry * 100):.0f}% от входного)\n"
     _fire(
         f"🔔 <b>Z-score приближается к порогу входа</b>\n"
         f"Пара: <b>{pair}</b>\n"
         f"Z-score: <code>{current_z:.3f}</code> ({direction})\n"
-        f"Порог: <code>±{abs(threshold_z):.2f}</code>\n"
-        f"Достигнуто: {pct:.0f}% от порога"
+        f"Порог входа (Entry Z): <code>±{entry:.2f}</code>\n"
+        f"{trip_line}"
+        f"Сейчас |Z| = <code>{abs(current_z):.3f}</code> — {pct_of_entry:.0f}% от входного порога"
+        + (f", {pct_of_trip:.0f}% от уровня срабатывания" if trip_line else "")
     )
 
 

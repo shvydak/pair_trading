@@ -627,16 +627,35 @@ async def monitor_position_triggers() -> None:
                     # ── Alert trigger: notify-only, no position close ────────
                     if trig_type == "alert":
                         alert_pct = trig.get("alert_pct") or 1.0
-                        tag_state = alert_states.get(tag, "idle")
-                        if tag_state == "idle" and abs(current_z) >= alert_pct * abs(trig_z):
+                        thresh = alert_pct * abs(trig_z)
+                        abs_z = abs(current_z)
+                        # First monitor cycle for this trigger in this process: align FSM with
+                        # the market. If |z| is already past the gate, start in "alerted"
+                        # without Telegram — avoids instant ping on create while z is extreme;
+                        # user gets a notify only after z drops below ALERT_RESET_Z and breaches again.
+                        if tag not in alert_states:
+                            alert_states[tag] = "alerted" if abs_z >= thresh else "idle"
+                            if abs_z >= thresh:
+                                lim = trig.get("candle_limit")
+                                log.info(
+                                    f"ALERT sync (no Telegram): |z|={abs_z:.3f} >= {thresh:.3f} "
+                                    f"| trig_id={trig_id} {sym1}/{sym2} "
+                                    f"tf={trig.get('timeframe')} zw={trig_zw} limit={lim}"
+                                )
+                        tag_state = alert_states[tag]
+                        if tag_state == "idle" and abs_z >= thresh:
                             log.info(
                                 f"ALERT | trig_id={trig_id} | {sym1}/{sym2} | "
-                                f"z={current_z:.3f} threshold={trig_z}"
+                                f"z={current_z:.3f} | |z|>={thresh:.3f} "
+                                f"(entry_z={trig_z} alert_pct={alert_pct}) "
+                                f"tf={trig.get('timeframe')} zw={trig_zw} limit={trig.get('candle_limit')}"
                             )
-                            await tg_bot.notify_alert(sym1, sym2, current_z, trig_z)
+                            await tg_bot.notify_alert(
+                                sym1, sym2, current_z, trig_z, fire_at=thresh
+                            )
                             db.alert_fired(trig_id)
                             alert_states[tag] = "alerted"
-                        elif tag_state == "alerted" and abs(current_z) <= tg_bot.ALERT_RESET_Z:
+                        elif tag_state == "alerted" and abs_z <= tg_bot.ALERT_RESET_Z:
                             alert_states[tag] = "idle"
                         continue  # never close position for alert type
 
@@ -2257,10 +2276,17 @@ async def execute_trade(req: TradeRequest):
 @app.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
     """
-    Accept {symbol1, symbol2, timeframe, zscore_window, limit, hedge_ratio}
-    and broadcast live updates on every kline event (event-driven, no fixed sleep).
-    Reads from price_cache which is backed by Binance WebSocket kline streams.
-    Falls back to a 5 s timeout if no kline arrives within that window.
+    Client → server (first message, JSON):
+      symbol1, symbol2 — required (ccxt or raw ticker form, resolved via _resolve_pair).
+      timeframe — default "1h".
+      zscore_window — default 20.
+      limit — candle count for PriceCache; server uses max(limit, zscore_window * 3).
+      hedge_ratio — optional float. If omitted, OLS hedge is recomputed on the full
+        window each push (same idea as /api/history and the alert monitor). If set,
+        spread/Z use that fixed β.
+
+    Broadcasts live OHLCV-derived fields on every kline (event-driven); 5 s wait timeout.
+    Backed by price_cache / Binance kline WebSocket feeds.
     """
     await websocket.accept()
     cache_key = None

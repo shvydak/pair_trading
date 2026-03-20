@@ -4658,13 +4658,19 @@ function connectWebSocket(sym1, sym2, zwindow) {
   state.ws = new WebSocket(wsUrl);
 
   state.ws.onopen = () => {
+    const limParsed = parseInt(document.getElementById('limit-input')?.value, 10);
+    const lim = Number.isFinite(limParsed) && limParsed > 0
+      ? limParsed
+      : (state.historyLimit || 500);
+    const zw = parseInt(zwindow, 10) || 20;
+    // Do not send hedge_ratio: server recomputes OLS on the full window each push — same basis
+    // as /api/history, watchlist WS, and alert monitor (avoids stale β vs rolling series).
     state.ws.send(JSON.stringify({
       symbol1: sym1,
       symbol2: sym2,
       timeframe: state.timeframe,
-      zscore_window: zwindow,
-      limit: state.historyLimit || undefined,
-      hedge_ratio: state.hedgeRatio || undefined,
+      zscore_window: zw,
+      limit: lim,
     }));
     setWsStatus(true);
   };

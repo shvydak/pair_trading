@@ -440,7 +440,9 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ### Alert triggers (`type="alert"` in `triggers` table)
 
-- Fires when `abs(current_z) >= alert_pct * abs(trig_z)`; stays `status="active"` — never auto-cancelled
+- **Monitor** recomputes z like analysis: PriceCache closes for `(sym1, sym2, trig timeframe, candle_limit)`, OLS hedge on that series, rolling z with `trig["zscore_window"]`. Telegram when `abs(current_z) >= alert_pct * abs(trig_z)` while state is `"idle"`. `notify_alert(..., fire_at=thresh)` separates **Entry Z** from the **actual trip level** when `alert_pct < 1` so the message is not confused with “% of ±entry” only.
+- **First subscription (per process):** if `|z|` is **already** past that gate, the FSM starts in `"alerted"` **without** Telegram — avoids instant ping on create; after `abs(z) <= TELEGRAM_ALERT_RESET_Z` (default 0.5) state returns to `"idle"` and the next breach sends `notify_alert`.
+- Stays `status="active"` — never auto-cancelled (row not removed on fire).
 - **Hysteresis**: `"idle"` → fires → `"alerted"` → `abs(z) <= ALERT_RESET_Z` → `"idle"` (ready to fire again)
 - Created via 🔔 on watchlist item or `addAlertFromPanel()` button in Pair Config panel
 - **Notification center**: `checkRecentAlerts()` piggybacked on the 5s positions interval (not a separate timer)
