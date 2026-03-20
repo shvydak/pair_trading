@@ -1624,22 +1624,27 @@ async def get_recent_alerts(minutes: int = Query(60)):
 
 @app.post("/api/triggers")
 async def create_trigger(req: TriggerCreateRequest):
-    """Create a new TP/SL/alert trigger. For alerts: replace duplicate (same sym, z, timeframe, zscore_window)."""
+    """Create a new TP/SL/alert trigger. For alerts: replace duplicate (same sym, z, TF, z-window, candle_limit)."""
     sym1 = _normalise_symbol(req.symbol1)
     sym2 = _normalise_symbol(req.symbol2)
 
-    # For alert type: cancel existing alert with same (sym1, sym2, z, timeframe, zscore_window)
+    # For alert type: cancel existing alert with same full analysis key (incl. lookback candles)
     if req.type == "alert":
         if req.candle_limit is None or req.candle_limit <= 0:
             raise HTTPException(status_code=400, detail="Укажите количество свечей (candle_limit)")
         existing = db.find_active_alert(
-            sym1, sym2, req.zscore, req.timeframe, req.zscore_window
+            sym1,
+            sym2,
+            req.zscore,
+            req.timeframe,
+            req.zscore_window,
+            req.candle_limit,
         )
         if existing:
             db.cancel_trigger(existing["id"])
             log.info(
                 f"Alert replaced: cancelled old id={existing['id']} for {sym1}/{sym2} "
-                f"z={req.zscore} tf={req.timeframe} w={req.zscore_window}"
+                f"z={req.zscore} tf={req.timeframe} w={req.zscore_window} limit={req.candle_limit}"
             )
 
     trigger_id = db.save_trigger(

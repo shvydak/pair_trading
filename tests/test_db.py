@@ -401,7 +401,7 @@ def test_save_alert_trigger_alert_pct_75(tmp_db):
 
 
 def test_find_active_alert_returns_match(tmp_db):
-    """find_active_alert finds an active alert by sym pair, zscore, timeframe, zscore_window (defaults 1h/20)."""
+    """find_active_alert finds an alert by sym, zscore, tf, z-window; candle_limit None matches NULL in DB."""
     tmp_db.save_trigger("BTC/USDT:USDT", "ETH/USDT:USDT", "both", "alert", 2.0)
     result = tmp_db.find_active_alert("BTC/USDT:USDT", "ETH/USDT:USDT", 2.0)
     assert result is not None
@@ -466,6 +466,91 @@ def test_find_active_alert_different_zscore_window_no_match(tmp_db):
         zscore_window=20,
     )
     assert result_w20 is not None
+
+
+def test_find_active_alert_different_candle_limit_no_match(tmp_db):
+    """Same pair, z, tf, z-window but different lookback (candle_limit) = distinct alerts."""
+    tmp_db.save_trigger(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "both",
+        "alert",
+        2.0,
+        timeframe="1h",
+        zscore_window=50,
+        candle_limit=500,
+    )
+    tmp_db.save_trigger(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "both",
+        "alert",
+        2.0,
+        timeframe="1h",
+        zscore_window=50,
+        candle_limit=1000,
+    )
+    r500 = tmp_db.find_active_alert(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        2.0,
+        timeframe="1h",
+        zscore_window=50,
+        candle_limit=500,
+    )
+    r1000 = tmp_db.find_active_alert(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        2.0,
+        timeframe="1h",
+        zscore_window=50,
+        candle_limit=1000,
+    )
+    assert r500 is not None and r500["candle_limit"] == 500
+    assert r1000 is not None and r1000["candle_limit"] == 1000
+    assert r500["id"] != r1000["id"]
+
+
+def test_find_active_alert_same_key_different_lookback_zwindow(tmp_db):
+    """500/50 vs 1000/100: both rows exist; each find_active_alert returns the right row."""
+    tmp_db.save_trigger(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "both",
+        "alert",
+        2.0,
+        timeframe="4h",
+        zscore_window=50,
+        candle_limit=500,
+    )
+    tmp_db.save_trigger(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "both",
+        "alert",
+        2.0,
+        timeframe="4h",
+        zscore_window=100,
+        candle_limit=1000,
+    )
+    a = tmp_db.find_active_alert(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        2.0,
+        timeframe="4h",
+        zscore_window=50,
+        candle_limit=500,
+    )
+    b = tmp_db.find_active_alert(
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        2.0,
+        timeframe="4h",
+        zscore_window=100,
+        candle_limit=1000,
+    )
+    assert a["zscore_window"] == 50 and a["candle_limit"] == 500
+    assert b["zscore_window"] == 100 and b["candle_limit"] == 1000
 
 
 def test_find_active_alert_ignores_cancelled(tmp_db):

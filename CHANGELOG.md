@@ -6,9 +6,9 @@
 
 ### Что изменено
 
-- **`backend/db.py`**: `find_active_alert` учитывает `timeframe` и `zscore_window`; замена дубликата при `POST /api/triggers` (тип `alert`) не снимает алерт с другим таймфреймом или окном Z при той же паре и пороге Z.
-- **`backend/main.py`**: вызов `find_active_alert` передаёт `req.timeframe` и `req.zscore_window`.
-- **`tests/test_db.py`**: тесты на несовпадение по TF и по `zscore_window`.
+- **`backend/db.py`**: `find_active_alert` учитывает `timeframe`, `zscore_window` и **`candle_limit` (История свечей)**; две конфигурации с одной парой и порогом Z, но разными `candle_limit` и/или окном Z — **разные** алерты; замена при `POST` только при полном совпадении ключа (включая lookback).
+- **`backend/main.py`**: в `find_active_alert` передаётся `req.candle_limit` (раньше дубликат не учитывал длину истории).
+- **`tests/test_db.py`**: тесты на несовпадение по TF, по `zscore_window`, по `candle_limit`, сценарий 500/50 vs 1000/100.
 - **`frontend/index.html`**: кэш триггеров при старте (`refreshTriggersCache` + `Promise.all` с `initWatchlist`); колокольчик на карточке watchlist всегда виден, если есть подходящий активный алерт; подписи `wl_alert_btn` / `wl_alert_active` (i18n); после добавления/отмены алерта — обновление списка и watchlist; из watchlist в `POST` алерта передаётся `candle_limit` (раньше API отклонял запрос без него).
 
 ---

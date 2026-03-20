@@ -119,7 +119,7 @@ Open `http://localhost:8080` in browser — FastAPI serves `frontend/index.html`
 
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 308 tests
+.venv/bin/pytest tests/ -v        # all 310 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -153,7 +153,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | GET    | `/api/all_positions`         | Single endpoint: one Binance call → returns `{strategy_positions: [...enriched], exchange_positions: [...raw]}` |
 | GET    | `/api/dashboard`             | **Combined polling**: positions (enriched) + exchange positions + balances + recent alerts in one response      |
 | GET    | `/api/triggers`              | All active TP/SL triggers (standalone, independent of positions)                                                |
-| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"` (HTTP 400 if missing)  |
+| POST   | `/api/triggers`              | Create a new trigger: `{symbol1, symbol2, side, type, zscore, tp_smart, timeframe, zscore_window, alert_pct, candle_limit}`; `candle_limit` required for `type="alert"` (HTTP 400 if missing). For `alert`, an existing active row with the **same** sym pair, `zscore`, `timeframe`, `zscore_window`, and `candle_limit` is cancelled first (replace); differing lookback or z-window ⇒ separate concurrent alerts  |
 | DELETE | `/api/triggers/{id}`         | Cancel an active trigger                                                                                        |
 | GET    | `/api/alerts/recent`         | Alert triggers that fired within last N minutes (`?minutes=60`); used by frontend notification center          |
 | GET    | `/api/executions`            | All active execution contexts (for inline progress monitoring in position rows)                                 |
@@ -264,15 +264,23 @@ Three-panel trading terminal:
 
 ### Watchlist
 
-- `watchlist` SQLite table — stores all analysis parameters per pair; managed via `GET/POST/DELETE /api/watchlist`; `_watchlistItems` in-memory array populated on page load via `initWatchlist()` (async, before `renderWatchlist()` and `connectWatchlistWS()`)
+- `watchlist` SQLite table — stores all analysis parameters per pair; managed via `GET/POST/DELETE /api/watchlist`; `_watchlistItems` in-memory array populated on page load via `initWatchlist()`
+- **Startup**: `Promise.all([initWatchlist(), refreshTriggersCache()])` then `renderWatchlist()` + `connectWatchlistWS()` — alert list must load before first paint so the 🔔 state is correct
 - **Dedup key**: `(sym1, sym2, timeframe)` — same pair with different timeframe stored as separate entry; adding BTC/ETH 5m does not overwrite BTC/ETH 4h
 - **Grouping by timeframe** in `renderWatchlist()`: section headers, order 5m→15m→30m→1h→2h→4h→8h→1d
+- **Telegram alert (🔔)**: `addAlertTrigger` / `addAlertFromPanel` → `POST /api/triggers` with `candle_limit` (from row `limit` or `#limit-input`). `_watchlistItemHasAlert(w, _cachedAlerts)` — bell stays visible (yellow, always-on opacity) when an active `type=alert` matches the row: normalised sym pair, `timeframe`, `zscore_window`, entry Z (`|tr.zscore|` ≈ `entryZ`), and `candle_limit` when both row and trigger have it. After add/cancel alert: `loadAlertsTab()` (or equivalent cache refresh) + `renderWatchlist()`. i18n: `wl_alert_btn`, `wl_alert_active`
 - Z-score/spread updated **event-driven** via `WS /ws/watchlist` (fires on each Binance kline, max 5s delay); response contains `timeframe` for exact record matching
 - `connectWatchlistWS()` opens WS on start; `_sendWatchlistToWs()` sends updated list on add/remove; reconnect with backoff (1s → 30s)
 - `_applyWatchlistUpdate(data)` — common handler for incoming data (in-place DOM patch)
 - Threshold indication: `|z| >= entryZ*0.75` → yellow; `|z| >= entryZ` → red + blinking
 - Active pair highlight updates immediately after `runAnalyze()` (no wait for 5s tick)
 - **localStorage (remaining):** `pt_lang` (ru/en), `pt_mode` (trade/backtest), `pt_price_chart_h` (chart height px), `pt_last` (last analysis state) — UI-only preferences, not trading data
+
+### Alerts tab (frontend)
+
+- `refreshTriggersCache()` fetches `GET /api/triggers` into `_cachedAlerts` (alerts only); `loadAlertsTab()` refreshes the table and clears the notification badge
+- **Row highlight** (“current analysis”): same criteria as watchlist bell — includes **`candle_limit` vs `#limit-input`** so two alerts that differ only by lookback are not both highlighted
+- **`_loadAlertIntoAnalysis`**: applies symbols, timeframe, z-window, **lookback** (`limit-input` from `trig.candle_limit` when set), entry Z → `runAnalyze()`
 
 ### Positions Tab
 
@@ -382,7 +390,7 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - Status/health: `set_position_status(pos_id, status)`, `update_position_coint_health(pos_id, pvalue)`
 - `close_position(...)` accepts `commission` and `commission_asset` kwargs; saved to `closed_trades`
 - Key functions: `save_open_position(...)` → id, `close_position(...)`, `find_open_position(sym1, sym2)`, `get_open_positions()`, `get_closed_trades(limit)`, `delete_open_position(id)`
-- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore, timeframe, zscore_window)` → dict|None (dedup on alert create uses full key), `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
+- Trigger functions: `save_trigger(...)` → id, `get_active_triggers()`, `cancel_trigger(id)`, `trigger_fired(id)`, `find_active_alert(sym1, sym2, zscore, timeframe, zscore_window, candle_limit)` → dict|None (dedup on alert create matches TF + z-window + lookback + z threshold), `alert_fired(id)`, `get_recent_alerts(minutes=60)` → list[dict]; `candle_limit` stored per trigger (required for `type="alert"`); monitor uses `trig["candle_limit"] or max(zw*3, 60)`
 - Execution history: `save_execution_history(...)` — `INSERT OR IGNORE` (idempotent); `get_execution_history(limit=100)`
 - `save_open_position` raises `ValueError` if a position for (symbol1, symbol2) already exists — prevents duplicates
 - On `action=open`: validates notional FIRST, then sets leverage, then places orders; qty saved is `order.get("amount")` (actual rounded qty from Binance)
@@ -466,12 +474,12 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Tests (`tests/`)
 
-308 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
+310 unit tests (10 files), all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
 
 | File                    | Tests | Coverage                                                    |
 | ----------------------- | ----- | ----------------------------------------------------------- |
 | `test_strategy.py`      | 41    | spread, zscore, sizing (OLS/ATR/Equal), signals, ATR, half-life, Hurst, coint, backtest |
-| `test_db.py`            | 101   | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status, watchlist |
+| `test_db.py`            | 103   | positions, triggers, trade journal, duplicate guard, alert triggers, execution_history, position_legs, funding_history, coint_health, status, watchlist |
 | `test_helpers.py`       | 26    | `_clean()` / `_safe_float()` — NaN/Inf/np.float64 serialization |
 | `test_order_manager.py` | 18    | Smart v2 repricing, semi-aggressive, dust, reduceOnly on close, clientOrderId, commission, partial_close rollback, DUST flush avg_price |
 | `test_price_cache.py`   | 35    | subscribe/unsubscribe ref-counting, `find_cached`, `wait_update`, `wait_any_update`, `stop_all` |

@@ -2121,13 +2121,18 @@ function renderAlerts(alerts) {
   const _alCurTf = state.timeframe || '1h';
   const _alCurZw = parseInt(document.getElementById('zwindow-input')?.value) || 20;
   const _alCurEz = parseFloat(document.getElementById('entry-z-input')?.value) || 2;
+  const _alCurLimParsed = parseInt(document.getElementById('limit-input')?.value, 10);
+  const _alCurLim = Number.isFinite(_alCurLimParsed) ? _alCurLimParsed : null;
 
   tbody.innerHTML = alerts.map(tr => {
+    const trLim = tr.candle_limit != null ? tr.candle_limit : null;
+    const limitMatches = !(trLim != null && _alCurLim != null && trLim !== _alCurLim);
     const alertIsActive = _alCurS1 && _alCurS2
       && _alNorm(tr.symbol1) === _alCurS1 && _alNorm(tr.symbol2) === _alCurS2
       && (tr.timeframe || '1h') === _alCurTf
       && (tr.zscore_window || 20) === _alCurZw
-      && Math.abs(Math.abs(tr.zscore) - _alCurEz) < 0.01;
+      && Math.abs(Math.abs(tr.zscore) - _alCurEz) < 0.01
+      && limitMatches;
     const statusBadge = tr.status === 'active'
       ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-green-900 text-green-300">active</span>'
       : tr.status === 'triggered'
@@ -2188,6 +2193,10 @@ function _loadAlertIntoAnalysis(trig) {
   const zw = trig.zscore_window || 20;
   setTimeframe(tf);
   document.getElementById('zwindow-input').value = zw;
+  const limInput = document.getElementById('limit-input');
+  if (limInput && trig.candle_limit != null && trig.candle_limit > 0) {
+    limInput.value = String(trig.candle_limit);
+  }
   const entryZInput = document.getElementById('entry-z-input');
   if (entryZInput) entryZInput.value = Math.abs(trig.zscore).toFixed(2);
   updatePairContext();

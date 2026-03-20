@@ -339,8 +339,9 @@ def find_active_alert(
     zscore: float,
     timeframe: str = "1h",
     zscore_window: int = 20,
+    candle_limit: Optional[int] = None,
 ) -> Optional[dict]:
-    """Return existing active alert matching sym pair, z threshold, timeframe and z-window, or None."""
+    """Return active alert matching pair, z threshold, TF, z-window, and lookback (candle_limit), or None."""
     with _conn() as conn:
         row = conn.execute(
             """
@@ -348,9 +349,20 @@ def find_active_alert(
             WHERE symbol1 = ? AND symbol2 = ? AND type = 'alert'
               AND zscore = ? AND status = 'active'
               AND timeframe = ? AND zscore_window = ?
+              AND ((? IS NULL AND candle_limit IS NULL)
+                   OR (? IS NOT NULL AND candle_limit = ?))
             LIMIT 1
             """,
-            (symbol1, symbol2, zscore, timeframe, zscore_window),
+            (
+                symbol1,
+                symbol2,
+                zscore,
+                timeframe,
+                zscore_window,
+                candle_limit,
+                candle_limit,
+                candle_limit,
+            ),
         ).fetchone()
         return dict(row) if row else None
 
