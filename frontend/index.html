@@ -452,6 +452,7 @@
       bot_sl_smart: 'Smart execution SL',
       bot_confirmation: 'Signal confirmation',
       bot_confirmation_unit: 'min',
+      bot_signal_since: '⏱ signal since',
       bot_avg_levels: 'Averaging',
       bot_avg_add: '+ Level',
       bot_save: 'Save',
@@ -724,6 +725,7 @@
       bot_sl_smart: 'Смарт-исполнение SL',
       bot_confirmation: 'Подтверждение сигнала',
       bot_confirmation_unit: 'мин',
+      bot_signal_since: '⏱ сигнал с',
       bot_avg_levels: 'Усреднение',
       bot_avg_add: '+ Уровень',
       bot_save: 'Сохранить',
@@ -1865,6 +1867,10 @@ function openBotConfigModal(wlItem, existingCfg) {
     ? (t('wl_bot_' + existingCfg.status.replace('paused_after_sl','paused')) || existingCfg.status)
     : t('wl_bot_btn');
 
+  const signalSince = existingCfg && existingCfg.signal_first_seen_at && existingCfg.confirmation_minutes > 0
+    ? `<div class="text-xs" style="color:#eab308">${t('bot_signal_since')} ${existingCfg.signal_first_seen_at}</div>`
+    : '';
+
   const pair = `${(wlItem.sym1 || wlItem.symbol1 || '').split(':')[0]} / ${(wlItem.sym2 || wlItem.symbol2 || '').split(':')[0]}`;
 
   let avgRowsHtml = avgLevels.map((lvl, i) => `
@@ -1883,7 +1889,10 @@ function openBotConfigModal(wlItem, existingCfg) {
           <div class="font-bold text-base">${t('bot_modal_title')}</div>
           <div class="text-gray-400 text-xs">${pair}</div>
         </div>
-        <div class="text-xs text-gray-400">${statusLabel}</div>
+        <div>
+          <div class="text-xs text-gray-400">${statusLabel}</div>
+          ${signalSince}
+        </div>
       </div>
       <div class="space-y-2">
         <div class="flex justify-between items-center">

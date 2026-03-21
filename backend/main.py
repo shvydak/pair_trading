@@ -5,6 +5,7 @@ import math
 import os
 import time
 import uuid
+from datetime import datetime
 from typing import Optional
 
 import numpy as np
@@ -83,6 +84,9 @@ SUPPORTED_MARGIN_ASSETS = {"USDT", "USDC"}
 _coint_cache: dict[tuple, tuple[dict, float]] = {}
 _COINT_TTL = 600.0  # recompute cointegration at most once per 10 minutes per pair/limit
 _coint_computing: set[tuple] = set()  # keys with a background precompute already running
+
+# Bot signal timers: cfg_id → ISO datetime string when signal first seen
+_bot_signal_seen_at: dict[int, str] = {}
 
 
 async def _precompute_coint(key: tuple, p1, p2) -> None:
@@ -1057,6 +1061,7 @@ async def monitor_auto_trading() -> None:
                 if cid not in current_ids:
                     price_cache.unsubscribe(_bot_keys.pop(cid))
                     _signal_first_seen.pop(cid, None)
+                    _bot_signal_seen_at.pop(cid, None)
 
             # Load watchlist once per cycle — not once per bot config
             wl_map = {w["id"]: w for w in db.get_watchlist()}
@@ -1122,6 +1127,7 @@ async def monitor_auto_trading() -> None:
                             )
                         db.set_bot_status(cid, "in_position")
                         _signal_first_seen.pop(cid, None)
+                        _bot_signal_seen_at.pop(cid, None)
                         continue
 
                     # 2. Check entry signal
@@ -1131,6 +1137,7 @@ async def monitor_auto_trading() -> None:
                         if conf_min > 0:
                             if cid not in _signal_first_seen:
                                 _signal_first_seen[cid] = now_mono
+                                _bot_signal_seen_at[cid] = datetime.utcnow().strftime("%H:%M")
                                 log.info(
                                     "BOT SIGNAL | cfg=%s | %s/%s | z=%.3f >= %.2f "
                                     "| confirmation timer started (%dm)",
@@ -1158,6 +1165,7 @@ async def monitor_auto_trading() -> None:
                                         cid, sym1, sym2, free, required, margin_asset,
                                     )
                                     _signal_first_seen.pop(cid, None)
+                                    _bot_signal_seen_at.pop(cid, None)
                                     continue
                         except Exception as e:
                             log.warning("BOT balance check error cfg=%s: %s", cid, e)
@@ -1170,6 +1178,7 @@ async def monitor_auto_trading() -> None:
                             cid, sym1, sym2, current_z, side, size_usd,
                         )
                         _signal_first_seen.pop(cid, None)
+                        _bot_signal_seen_at.pop(cid, None)
                         try:
                             await _bot_open_position(
                                 cfg=cfg, wl=wl, sym1=sym1, sym2=sym2,
@@ -1182,6 +1191,7 @@ async def monitor_auto_trading() -> None:
                             log.warning("BOT OPEN failed cfg=%s: %s", cid, e)
                     else:
                         _signal_first_seen.pop(cid, None)
+                        _bot_signal_seen_at.pop(cid, None)
 
                 # ── IN_POSITION ───────────────────────────────────────────────
                 elif cfg["status"] == "in_position":
@@ -1205,6 +1215,7 @@ async def monitor_auto_trading() -> None:
                                 tg_bot.notify_bot_paused(sym1, sym2, reason)
                             )
                         _signal_first_seen.pop(cid, None)
+                        _bot_signal_seen_at.pop(cid, None)
                         continue
 
                     # Check averaging
@@ -2124,7 +2135,10 @@ async def delete_trigger(trigger_id: int):
 @app.get("/api/bot/configs")
 async def list_bot_configs():
     """List all bot configs."""
-    return {"configs": db.get_bot_configs()}
+    configs = [dict(c) for c in db.get_bot_configs()]
+    for cfg in configs:
+        cfg['signal_first_seen_at'] = _bot_signal_seen_at.get(cfg['id'])
+    return {"configs": configs}
 
 
 @app.post("/api/bot/configs")
