@@ -288,6 +288,8 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 - `price_cache.unsubscribe(key)` — decrements refs; stops SymbolFeed when its ref count reaches 0; removes `_store[key]`
 - `price_cache.get(key) → dict | None` — read-only; `None` if not yet assembled
 - `price_cache.find_cached(sym1, sym2, tf, limit) → dict | None` — finds entry with matching `(sym1, sym2, tf)` and key limit `>= requested`; always verify `len(cached["price1"]) >= limit` before use — buffer may be incomplete shortly after server start
+- **`_assemble_from_feeds` ignores the `limit` in the cache key** — always stores the full SymbolFeed buffer. Consumers that need exactly `limit` rows must slice explicitly: `entry["price1"].iloc[-limit:]`. `/api/history` does this; any new WS endpoint must too. Mismatch between consumer's slice and the OLS window causes a different β → PnL line goes flat.
+- **`find_cached` miss when user's limit > watchlist's saved `candle_limit`**: `find_cached(sym1, sym2, tf, 500)` returns `None` if only a `(sym1, sym2, tf, 200)` key exists (200 < 500) → `/api/history` falls back to REST. Meanwhile `/ws/stream` subscribes fresh PriceCache entry — slightly different time window → different β → flat PnL line. **Fix: always send `hedge_ratio: state.hedgeRatio` from the frontend in the `/ws/stream` WS subscription payload** so the backend uses a fixed β (backend already supports `fixed_hedge_ratio` param). This makes spread computation consistent regardless of PriceCache vs REST source.
 - `price_cache.run()` — background task in lifespan; calls `feed.start()` on all registered feeds; reassembles all pair stores every `ASSEMBLE_INTERVAL = 1s`
 - `price_cache.wait_update(key, timeout=5.0)` — waits for next kline on either symbol of the pair; used by `/ws/stream` for event-driven push
 - `price_cache.wait_any_update(keys, timeout=5.0)` — waits for ANY kline across a list of pairs (deduplicates feeds); used by `/ws/watchlist`
@@ -378,6 +380,7 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Common Issues & Fixes
 
+- **FOREIGN KEY constraint failed on position close/delete**: `position_legs` references `open_positions(id)` without `ON DELETE CASCADE` — always `DELETE FROM position_legs WHERE position_id = ?` before `DELETE FROM open_positions`; applies to both `close_position()` and `delete_open_position()`
 - **`partial_close` position in UI**: orange badge; remaining leg must be closed manually on exchange
 - **Cointegration health dot is empty**: normal for first 4h after server start — `health_check_coint` has 120s initial delay then 4h interval
 - **HTTP 400 "notional below minimum"**: `size_usd` too small for the contract
@@ -391,6 +394,7 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 - **Alert z vs chart z may differ**: monitor uses trigger's `candle_limit`/`zscore_window`/`timeframe`; chart uses current UI values — load pair from watchlist to align
 - **WebSocket requires absolute URL**: `new WebSocket('/ws/path')` throws — use `_wsUrl(path)` helper
 - **`ecosystem.config.js` path resolution**: use `path.join(__dirname, '.venv/bin/uvicorn')` — PM2 resolves `script` relative to `cwd`
+- **PnL line goes flat after loading pair from watchlist then changing limit**: watchlist's saved `candle_limit` < new limit → `find_cached` misses → `/api/history` uses REST, WS uses PriceCache → β mismatch → flat line. Root fix: send `hedge_ratio: state.hedgeRatio` in `/ws/stream` WS payload (already fixed in frontend).
 
 ## Tests (`tests/`)
 

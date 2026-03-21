@@ -2801,7 +2801,8 @@ async def websocket_stream(websocket: WebSocket):
         symbol2 = meta2["symbol"]
         timeframe = params.get("timeframe", "1h")
         zscore_window = int(params.get("zscore_window", 20))
-        history_limit = max(int(params.get("limit", zscore_window * 3)), zscore_window * 3)
+        raw_limit = int(params.get("limit", 0))
+        history_limit = raw_limit if raw_limit > 0 else zscore_window * 3
         fixed_hedge_ratio = params.get("hedge_ratio")
         if fixed_hedge_ratio is not None:
             fixed_hedge_ratio = float(fixed_hedge_ratio)
@@ -2812,8 +2813,8 @@ async def websocket_stream(websocket: WebSocket):
             entry = price_cache.get(cache_key)
             if entry is not None:
                 try:
-                    price1 = entry["price1"]
-                    price2 = entry["price2"]
+                    price1 = entry["price1"].iloc[-history_limit:]
+                    price2 = entry["price2"].iloc[-history_limit:]
                     hedge_ratio = fixed_hedge_ratio if fixed_hedge_ratio is not None else strategy.calculate_hedge_ratio(price1, price2)
                     spread = strategy.calculate_spread(price1, price2, hedge_ratio)
                     zscore = strategy.calculate_zscore(spread, window=zscore_window)

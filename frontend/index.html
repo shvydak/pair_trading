@@ -5006,15 +5006,19 @@ function connectWebSocket(sym1, sym2, zwindow) {
       ? limParsed
       : (state.historyLimit || 500);
     const zw = parseInt(zwindow, 10) || 20;
-    // Do not send hedge_ratio: server recomputes OLS on the full window each push — same basis
-    // as /api/history, watchlist WS, and alert monitor (avoids stale β vs rolling series).
-    state.ws.send(JSON.stringify({
+    // Send the hedge_ratio from the current analysis so the server uses a fixed β.
+    // This ensures spread values from the WS are computed on the same basis as
+    // /api/history, making (spread - meanSpread) consistent regardless of PriceCache
+    // vs REST timing differences or how many candles the SymbolFeed buffer contains.
+    const payload = {
       symbol1: sym1,
       symbol2: sym2,
       timeframe: state.timeframe,
       zscore_window: zw,
       limit: lim,
-    }));
+    };
+    if (state.hedgeRatio != null) payload.hedge_ratio = state.hedgeRatio;
+    state.ws.send(JSON.stringify(payload));
     setWsStatus(true);
   };
 

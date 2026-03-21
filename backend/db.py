@@ -267,6 +267,7 @@ def close_position(
                 commission, commission_asset or "",
             ),
         )
+        conn.execute("DELETE FROM position_legs WHERE position_id = ?", (position_id,))
         conn.execute("DELETE FROM open_positions WHERE id = ?", (position_id,))
         return True
 
@@ -295,6 +296,7 @@ def get_open_positions() -> list[dict]:
 
 def delete_open_position(position_id: int) -> bool:
     with _conn() as conn:
+        conn.execute("DELETE FROM position_legs WHERE position_id = ?", (position_id,))
         cur = conn.execute("DELETE FROM open_positions WHERE id = ?", (position_id,))
         return cur.rowcount > 0
 
