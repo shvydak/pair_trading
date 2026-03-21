@@ -2132,6 +2132,18 @@ async def delete_trigger(trigger_id: int):
     return {"ok": True}
 
 
+class BotConfigRequest(BaseModel):
+    watchlist_id: int
+    symbol1: str
+    symbol2: str
+    tp_zscore: float
+    sl_zscore: float
+    tp_smart: bool = True
+    sl_smart: bool = True
+    confirmation_minutes: int = 0
+    avg_levels_json: Optional[str] = None
+
+
 @app.get("/api/bot/configs")
 async def list_bot_configs():
     """List all bot configs."""
@@ -2229,18 +2241,6 @@ class SmartTradeRequest(BaseModel):
     passive_s: float = 30.0
     aggressive_s: float = 20.0
     allow_market: bool = True
-
-
-class BotConfigRequest(BaseModel):
-    watchlist_id: int
-    symbol1: str
-    symbol2: str
-    tp_zscore: float
-    sl_zscore: float
-    tp_smart: bool = True
-    sl_smart: bool = True
-    confirmation_minutes: int = 0
-    avg_levels_json: Optional[str] = None
 
 
 @app.get("/api/pre_trade_check")
