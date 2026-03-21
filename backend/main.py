@@ -2121,6 +2121,56 @@ async def delete_trigger(trigger_id: int):
     return {"ok": True}
 
 
+@app.get("/api/bot/configs")
+async def list_bot_configs():
+    """List all bot configs."""
+    return {"configs": db.get_bot_configs()}
+
+
+@app.post("/api/bot/configs")
+async def upsert_bot_config(req: BotConfigRequest):
+    """Upsert a bot config."""
+    cfg_id = db.save_bot_config(
+        watchlist_id=req.watchlist_id,
+        symbol1=_normalise_symbol(req.symbol1),
+        symbol2=_normalise_symbol(req.symbol2),
+        tp_zscore=req.tp_zscore,
+        sl_zscore=req.sl_zscore,
+        tp_smart=req.tp_smart,
+        sl_smart=req.sl_smart,
+        confirmation_minutes=req.confirmation_minutes,
+        avg_levels_json=req.avg_levels_json,
+    )
+    return {"id": cfg_id}
+
+
+@app.delete("/api/bot/configs/{config_id}")
+async def delete_bot_config(config_id: int):
+    """Delete a bot config."""
+    ok = db.delete_bot_config(config_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Bot config {config_id} not found")
+    return {"ok": True}
+
+
+@app.patch("/api/bot/configs/{config_id}/enable")
+async def enable_bot_config(config_id: int):
+    """Enable a bot config (set status to 'waiting')."""
+    ok = db.set_bot_status(config_id, "waiting")
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Bot config {config_id} not found")
+    return {"status": "waiting"}
+
+
+@app.patch("/api/bot/configs/{config_id}/disable")
+async def disable_bot_config(config_id: int):
+    """Disable a bot config (set status to 'disabled')."""
+    ok = db.set_bot_status(config_id, "disabled")
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Bot config {config_id} not found")
+    return {"status": "disabled"}
+
+
 @app.get("/api/db/history")
 async def get_db_history(limit: int = Query(100)):
     """Return closed trade history."""
@@ -2165,6 +2215,18 @@ class SmartTradeRequest(BaseModel):
     passive_s: float = 30.0
     aggressive_s: float = 20.0
     allow_market: bool = True
+
+
+class BotConfigRequest(BaseModel):
+    watchlist_id: int
+    symbol1: str
+    symbol2: str
+    tp_zscore: float
+    sl_zscore: float
+    tp_smart: bool = True
+    sl_smart: bool = True
+    confirmation_minutes: int = 0
+    avg_levels_json: Optional[str] = None
 
 
 @app.get("/api/pre_trade_check")
