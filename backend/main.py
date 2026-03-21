@@ -4,6 +4,7 @@ import json
 import math
 import os
 import time
+import uuid
 from typing import Optional
 
 import numpy as np
@@ -876,6 +877,374 @@ async def _handle_funding(asset: str, amount: float) -> None:
         db.save_funding_history(pos["id"], sym, share, asset)
 
 
+async def _bot_open_position(
+    cfg: dict, wl: dict, sym1: str, sym2: str,
+    side: str, size_usd: float, sizing: str, leverage: int,
+    current_z: float, hedge: float,
+) -> None:
+    """Open a new position for the bot via smart execution, then set TP/SL."""
+    ticker1, ticker2 = await asyncio.gather(
+        client.fetch_ticker(sym1),
+        client.fetch_ticker(sym2),
+    )
+    price1 = ticker1["last"]
+    price2 = ticker2["last"]
+
+    # Min-notional check before placing orders
+    sizes = strategy.calculate_position_sizes(
+        price1=price1, price2=price2,
+        size_usd=size_usd, hedge_ratio=hedge,
+        atr1=None, atr2=None, method=sizing,
+    )
+    qty1 = sizes["qty1"]
+    qty2 = sizes["qty2"]
+
+    (ok1, notional1, min1), (ok2, notional2, min2) = await asyncio.gather(
+        client.check_min_notional(sym1, qty1, price1),
+        client.check_min_notional(sym2, qty2, price2),
+    )
+    if not ok1:
+        raise ValueError(f"{sym1}: notional ${notional1:.2f} < min ${min1:.2f}")
+    if not ok2:
+        raise ValueError(f"{sym2}: notional ${notional2:.2f} < min ${min2:.2f}")
+
+    side1, side2 = ("buy", "sell") if side == "long_spread" else ("sell", "buy")
+
+    exec_id = uuid.uuid4().hex[:8]
+    cfg_exec = ExecConfig(passive_s=30.0, aggressive_s=20.0, allow_market=True)
+    ctx = ExecContext(
+        exec_id=exec_id,
+        leg1=LegState(symbol=sym1, side=side1, qty=qty1),
+        leg2=LegState(symbol=sym2, side=side2, qty=qty2),
+        config=cfg_exec,
+        spread_side=side,
+        is_close=False,
+        hedge_ratio=hedge,
+        entry_zscore=current_z,
+        size_usd=size_usd,
+        sizing_method=sizing,
+        leverage=leverage,
+        timeframe=wl.get("timeframe") or "1h",
+        candle_limit=int(wl.get("candle_limit") or 500),
+        zscore_window=int(wl.get("zwindow") or 20),
+    )
+    for sym in (sym1, sym2):
+        if sym not in _book_feeds:
+            feed = BookTickerFeed(sym)
+            feed.start()
+            _book_feeds[sym] = feed
+    ctx.book_feeds = _book_feeds
+    ctx.user_data_feed = _user_data_feed
+    active_executions[exec_id] = ctx
+    _exec_created_at[exec_id] = time.monotonic()
+
+    # Awaited so we know the position exists before setting in_position status.
+    # NOTE: run_execution can take up to 50s (passive_s=30 + aggressive_s=20).
+    await run_execution(ctx, client, db)
+
+    # Set TP/SL on the new DB position (ExecContext does not carry these fields)
+    new_pos = db.find_open_position(sym1, sym2)
+    if new_pos:
+        db.set_position_triggers(
+            new_pos["id"],
+            cfg["tp_zscore"],
+            cfg["sl_zscore"],
+            bool(cfg["tp_smart"]),
+            bool(cfg["sl_smart"]),
+        )
+    else:
+        raise RuntimeError(
+            f"run_execution completed but no open position for {sym1}/{sym2} "
+            f"(exec={exec_id}, status={ctx.status})"
+        )
+
+
+async def _bot_averaging_task(
+    cfg_id: int,
+    pos: dict,
+    sym1: str, sym2: str,
+    size_usd: float, sizing: str, leverage: int,
+    current_z: float, hedge: float, p1, p2,
+) -> None:
+    """
+    Coroutine launched as asyncio.Task to add an averaging entry.
+    Sets avg_in_progress=0 when done regardless of outcome.
+    """
+    try:
+        ticker1, ticker2 = await asyncio.gather(
+            client.fetch_ticker(sym1),
+            client.fetch_ticker(sym2),
+        )
+        price1 = ticker1["last"]
+        price2 = ticker2["last"]
+
+        sizes = strategy.calculate_position_sizes(
+            price1=price1, price2=price2,
+            size_usd=size_usd, hedge_ratio=hedge,
+            atr1=None, atr2=None, method=sizing,
+        )
+        qty1 = sizes["qty1"]
+        qty2 = sizes["qty2"]
+
+        # Same direction as existing position
+        side1, side2 = ("buy", "sell") if pos["side"] == "long_spread" else ("sell", "buy")
+
+        exec_id = uuid.uuid4().hex[:8]
+        cfg_exec = ExecConfig(passive_s=30.0, aggressive_s=20.0, allow_market=True)
+        ctx = ExecContext(
+            exec_id=exec_id,
+            leg1=LegState(symbol=sym1, side=side1, qty=qty1),
+            leg2=LegState(symbol=sym2, side=side2, qty=qty2),
+            config=cfg_exec,
+            spread_side=pos["side"],
+            is_close=False,
+            is_average=True,
+            average_position_id=pos["id"],
+            hedge_ratio=hedge,
+            entry_zscore=current_z,
+            size_usd=size_usd,
+            sizing_method=sizing,
+            leverage=pos.get("leverage") or 1,
+        )
+        for sym in (sym1, sym2):
+            if sym not in _book_feeds:
+                feed = BookTickerFeed(sym)
+                feed.start()
+                _book_feeds[sym] = feed
+        ctx.book_feeds = _book_feeds
+        ctx.user_data_feed = _user_data_feed
+        active_executions[exec_id] = ctx
+        _exec_created_at[exec_id] = time.monotonic()
+
+        await run_execution(ctx, client, db)
+
+        # Check if position still exists after fill
+        if db.find_open_position(sym1, sym2):
+            db.increment_bot_avg_level(cfg_id)
+            log.info("BOT AVG DONE | cfg=%s | %s/%s | exec=%s", cfg_id, sym1, sym2, exec_id)
+        else:
+            log.warning(
+                "BOT AVG ORPHAN | cfg=%s | %s/%s | position gone at fill time",
+                cfg_id, sym1, sym2,
+            )
+    except Exception as e:
+        log.warning("BOT AVG FAILED | cfg=%s | %s/%s: %s", cfg_id, sym1, sym2, e)
+    finally:
+        db.set_bot_avg_in_progress(cfg_id, False)
+
+
+async def monitor_auto_trading() -> None:
+    """
+    Background task: auto-open positions and manage averaging for bot_configs.
+
+    Runs every 2s. For each active bot_config (status='waiting'/'in_position'):
+    - 'waiting': adopt existing position OR open new one when z-score hits entry_z
+    - 'in_position': detect position close (update bot status) + fire averaging levels
+
+    Exit logic (TP/SL) is handled by monitor_position_triggers — not here.
+    """
+    await asyncio.sleep(20)  # wait for PriceCache to populate
+    _signal_first_seen: dict[int, float] = {}   # cfg_id → monotonic when signal first seen
+    _bot_keys: dict[int, tuple] = {}            # cfg_id → PriceCache cache_key
+
+    while True:
+        try:
+            active_cfgs = db.get_active_bot_configs()
+            current_ids = {cfg["id"] for cfg in active_cfgs}
+
+            # Unsubscribe PriceCache for bots no longer active
+            for cid in list(_bot_keys):
+                if cid not in current_ids:
+                    price_cache.unsubscribe(_bot_keys.pop(cid))
+                    _signal_first_seen.pop(cid, None)
+
+            # Load watchlist once per cycle — not once per bot config
+            wl_map = {w["id"]: w for w in db.get_watchlist()}
+
+            for cfg in active_cfgs:
+                cid = cfg["id"]
+                sym1, sym2 = cfg["symbol1"], cfg["symbol2"]
+
+                # Load watchlist params
+                wl = wl_map.get(cfg["watchlist_id"])
+                if wl is None:
+                    log.warning(
+                        "BOT: watchlist item %s missing for bot cfg %s — disabling",
+                        cfg["watchlist_id"], cid,
+                    )
+                    db.set_bot_status(cid, "disabled")
+                    continue
+
+                tf = wl.get("timeframe") or "1h"
+                zw = int(wl.get("zwindow") or 20)
+                limit = int(wl.get("candle_limit") or 500)
+                entry_z = float(wl.get("entry_z") or 2.0)
+                size_usd = float(wl.get("pos_size") or 1000)
+                sizing = wl.get("sizing") or "ols"
+                leverage = int(wl.get("leverage") or 1)
+
+                # Subscribe to PriceCache if needed
+                if cid not in _bot_keys:
+                    _bot_keys[cid] = price_cache.subscribe(sym1, sym2, tf, limit)
+                cache_entry = price_cache.get(_bot_keys[cid])
+                if cache_entry is None:
+                    continue  # data not ready yet
+
+                p1 = cache_entry["price1"]
+                p2 = cache_entry["price2"]
+                if len(p1) < zw:
+                    continue
+
+                hedge = strategy.calculate_hedge_ratio(p1, p2)
+                spread = strategy.calculate_spread(p1, p2, hedge)
+                zscore_series = strategy.calculate_zscore(spread, window=zw)
+                if zscore_series.dropna().empty:
+                    continue
+                current_z = float(zscore_series.dropna().iloc[-1])
+                abs_z = abs(current_z)
+
+                # ── WAITING ──────────────────────────────────────────────────
+                if cfg["status"] == "waiting":
+                    # 1. Adopt existing position (server restart / manual trade)
+                    existing_pos = db.find_open_position(sym1, sym2)
+                    if existing_pos:
+                        log.info(
+                            "BOT ADOPT | cfg=%s | %s/%s | existing pos %s",
+                            cid, sym1, sym2, existing_pos["id"],
+                        )
+                        if existing_pos.get("tp_zscore") is None:
+                            db.set_position_triggers(
+                                existing_pos["id"],
+                                cfg["tp_zscore"],
+                                cfg["sl_zscore"],
+                                bool(cfg["tp_smart"]),
+                                bool(cfg["sl_smart"]),
+                            )
+                        db.set_bot_status(cid, "in_position")
+                        _signal_first_seen.pop(cid, None)
+                        continue
+
+                    # 2. Check entry signal
+                    if abs_z >= entry_z:
+                        now_mono = time.monotonic()
+                        conf_min = cfg.get("confirmation_minutes") or 0
+                        if conf_min > 0:
+                            if cid not in _signal_first_seen:
+                                _signal_first_seen[cid] = now_mono
+                                log.info(
+                                    "BOT SIGNAL | cfg=%s | %s/%s | z=%.3f >= %.2f "
+                                    "| confirmation timer started (%dm)",
+                                    cid, sym1, sym2, current_z, entry_z, conf_min,
+                                )
+                                continue
+                            elapsed_min = (now_mono - _signal_first_seen[cid]) / 60
+                            if elapsed_min < conf_min:
+                                continue  # waiting for confirmation
+                        # Confirmation passed (or not required) — check balance
+                        try:
+                            meta1, meta2 = await asyncio.gather(
+                                client.get_market_info(_normalise_symbol(sym1)),
+                                client.get_market_info(_normalise_symbol(sym2)),
+                            )
+                            margin_asset = _shared_margin_asset(meta1, meta2)
+                            if margin_asset and client.has_creds:
+                                balance = await client.get_balance(margin_asset)
+                                free = balance.get("free", 0)
+                                required = size_usd / leverage * 1.1
+                                if free < required:
+                                    log.warning(
+                                        "BOT SKIP | cfg=%s | %s/%s | "
+                                        "insufficient balance %.2f < %.2f %s",
+                                        cid, sym1, sym2, free, required, margin_asset,
+                                    )
+                                    _signal_first_seen.pop(cid, None)
+                                    continue
+                        except Exception as e:
+                            log.warning("BOT balance check error cfg=%s: %s", cid, e)
+                            continue
+
+                        # Determine entry side
+                        side = "long_spread" if current_z < 0 else "short_spread"
+                        log.info(
+                            "BOT OPEN | cfg=%s | %s/%s | z=%.3f | side=%s | size=%.0f",
+                            cid, sym1, sym2, current_z, side, size_usd,
+                        )
+                        _signal_first_seen.pop(cid, None)
+                        try:
+                            await _bot_open_position(
+                                cfg=cfg, wl=wl, sym1=sym1, sym2=sym2,
+                                side=side, size_usd=size_usd,
+                                sizing=sizing, leverage=leverage,
+                                current_z=current_z, hedge=hedge,
+                            )
+                            db.set_bot_status(cid, "in_position")
+                        except Exception as e:
+                            log.warning("BOT OPEN failed cfg=%s: %s", cid, e)
+                    else:
+                        _signal_first_seen.pop(cid, None)
+
+                # ── IN_POSITION ───────────────────────────────────────────────
+                elif cfg["status"] == "in_position":
+                    pos = db.find_open_position(sym1, sym2)
+
+                    if pos is None:
+                        # Position is gone — read close reason set by monitor_position_triggers
+                        reason = cfg.get("last_close_reason") or "sl"
+                        if reason == "tp":
+                            log.info(
+                                "BOT TP | cfg=%s | %s/%s → waiting", cid, sym1, sym2
+                            )
+                            db.set_bot_status(cid, "waiting")
+                        else:
+                            log.info(
+                                "BOT SL/LIQ | cfg=%s | %s/%s reason=%s → paused_after_sl",
+                                cid, sym1, sym2, reason,
+                            )
+                            db.set_bot_status(cid, "paused_after_sl")
+                            asyncio.create_task(
+                                tg_bot.notify_bot_paused(sym1, sym2, reason)
+                            )
+                        _signal_first_seen.pop(cid, None)
+                        continue
+
+                    # Check averaging
+                    avg_levels_raw = cfg.get("avg_levels_json")
+                    if avg_levels_raw and not cfg.get("avg_in_progress"):
+                        try:
+                            avg_levels = json.loads(avg_levels_raw)
+                        except Exception:
+                            avg_levels = []
+                        current_level = cfg.get("current_avg_level") or 0
+                        if current_level < len(avg_levels):
+                            next_level = avg_levels[current_level]
+                            next_z = float(next_level["z"])
+                            next_size = float(next_level["size_usd"])
+                            if abs_z >= next_z:
+                                log.info(
+                                    "BOT AVG | cfg=%s | %s/%s | level=%d | z=%.3f >= %.2f",
+                                    cid, sym1, sym2, current_level, abs_z, next_z,
+                                )
+                                db.set_bot_avg_in_progress(cid, True)
+                                asyncio.create_task(
+                                    _bot_averaging_task(
+                                        cfg_id=cid,
+                                        pos=pos,
+                                        sym1=sym1, sym2=sym2,
+                                        size_usd=next_size,
+                                        sizing=sizing,
+                                        leverage=leverage,
+                                        current_z=current_z,
+                                        hedge=hedge,
+                                        p1=p1, p2=p2,
+                                    )
+                                )
+
+        except Exception as e:
+            log.warning("monitor_auto_trading outer error: %s", e)
+
+        await asyncio.sleep(2)
+
+
 async def reconcile_positions() -> None:
     """
     Background task: every 5 minutes compare DB open positions vs exchange.
@@ -994,6 +1363,7 @@ async def lifespan(app: FastAPI):
     _bg_tasks = [
         asyncio.create_task(price_cache.run()),
         asyncio.create_task(monitor_position_triggers()),
+        asyncio.create_task(monitor_auto_trading()),
         asyncio.create_task(tg_bot.start_polling()),
         asyncio.create_task(reconcile_positions()),
         asyncio.create_task(health_check_coint()),
