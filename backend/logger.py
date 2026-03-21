@@ -16,7 +16,8 @@ def get_logger(name: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    logger.setLevel(logging.INFO)
+    level = logging.DEBUG if os.getenv("LOG_LEVEL", "").upper() == "DEBUG" else logging.INFO
+    logger.setLevel(level)
 
     ch = logging.StreamHandler()
     ch.setFormatter(_FMT)

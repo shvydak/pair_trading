@@ -1050,6 +1050,7 @@ async def monitor_auto_trading() -> None:
     await asyncio.sleep(20)  # wait for PriceCache to populate
     _signal_first_seen: dict[int, float] = {}   # cfg_id → monotonic when signal first seen
     _bot_keys: dict[int, tuple] = {}            # cfg_id → PriceCache cache_key
+    _last_z_log: dict[int, float] = {}          # cfg_id → monotonic of last z debug log
 
     while True:
         try:
@@ -1062,6 +1063,7 @@ async def monitor_auto_trading() -> None:
                     price_cache.unsubscribe(_bot_keys.pop(cid))
                     _signal_first_seen.pop(cid, None)
                     _bot_signal_seen_at.pop(cid, None)
+                    _last_z_log.pop(cid, None)
 
             # Load watchlist once per cycle — not once per bot config
             wl_map = {w["id"]: w for w in db.get_watchlist()}
@@ -1107,6 +1109,15 @@ async def monitor_auto_trading() -> None:
                     continue
                 current_z = float(zscore_series.dropna().iloc[-1])
                 abs_z = abs(current_z)
+
+                # Throttled debug: log z-score once per 30s per bot
+                now_mono = time.monotonic()
+                if now_mono - _last_z_log.get(cid, 0) >= 30:
+                    log.debug(
+                        "BOT TICK | cfg=%s | %s/%s | status=%s | z=%.3f | entry_z=%.2f",
+                        cid, sym1, sym2, cfg["status"], current_z, entry_z,
+                    )
+                    _last_z_log[cid] = now_mono
 
                 # ── WAITING ──────────────────────────────────────────────────
                 if cfg["status"] == "waiting":

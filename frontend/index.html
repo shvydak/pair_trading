@@ -2019,9 +2019,11 @@ async function saveBotConfig(wlId, existingCfgId) {
 async function openBotConfigFromPosition(posId) {
   const pos = _stratPosMap[posId];
   if (!pos) return;
-  const wlItem = _watchlistItems.find(w =>
-    (w.sym1 || w.symbol1) === pos.symbol1 && (w.sym2 || w.symbol2) === pos.symbol2
-  );
+  // Prefer watchlist_id from bot config (reliable), fall back to symbol name match
+  const botCfg = _cachedBotConfigs.find(c => c.symbol1 === pos.symbol1 && c.symbol2 === pos.symbol2);
+  const wlItem = botCfg
+    ? _watchlistItems.find(w => w.id === botCfg.watchlist_id)
+    : _watchlistItems.find(w => (w.sym1 || w.symbol1) === pos.symbol1 && (w.sym2 || w.symbol2) === pos.symbol2);
   if (!wlItem) {
     alert(t('bot_no_watchlist') || 'Добавьте пару в Watch List для настройки бота');
     return;
