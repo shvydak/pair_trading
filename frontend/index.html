@@ -2951,6 +2951,21 @@ function _updateZScorePnlLabel(z) {
   }
 }
 
+function _getBotLinesForCurrentPair() {
+  if (!state.sym1 || !state.sym2) return null;
+  const cfg = _cachedBotConfigs.find(c =>
+    c.symbol1 === state.sym1 && c.symbol2 === state.sym2 &&
+    c.status !== 'disabled'
+  );
+  if (!cfg) return null;
+  const avgLevels = cfg.avg_levels_json ? JSON.parse(cfg.avg_levels_json) : [];
+  return {
+    tp: cfg.tp_zscore,
+    sl: cfg.sl_zscore,
+    avgZscores: avgLevels.map(l => l.z),
+  };
+}
+
 function renderSpreadChart(data) {
   const ctx = document.getElementById('spread-chart').getContext('2d');
   if (state.spreadChart) { state.spreadChart.destroy(); }
@@ -2979,6 +2994,48 @@ function renderSpreadChart(data) {
     } else {
       pnlEl.textContent = '-';
     }
+  }
+
+  // Build chart annotations — bot lines override watchlist lines when bot is active
+  const _botLines = _getBotLinesForCurrentPair();
+  const _chartAnnotations = {
+    zero: { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, borderColor: 'rgba(139,148,158,0.3)', borderWidth: 1 },
+    tpHigh: { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(63,185,80,0.9)',  borderWidth: 1.5, borderDash: [6,3], label: { content: 'TP', enabled: true, position: 'start', color: '#3fb950', font: { size: 10 } } },
+    tpLow:  { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(63,185,80,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
+    slHigh: { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3], label: { content: 'SL', enabled: true, position: 'start', color: '#f85149', font: { size: 10 } } },
+    slLow:  { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
+  };
+  if (_botLines) {
+    // Bot active — show TP/SL/avg lines, hide watchlist entry/exit lines
+    [_botLines.tp, -_botLines.tp].forEach(val => {
+      _chartAnnotations[`bot_tp_${val}`] = {
+        type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
+        borderColor: '#22c55e', borderWidth: 1, borderDash: [4, 4],
+        label: { display: false },
+      };
+    });
+    [_botLines.sl, -_botLines.sl].forEach(val => {
+      _chartAnnotations[`bot_sl_${val}`] = {
+        type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
+        borderColor: '#ef4444', borderWidth: 1, borderDash: [4, 4],
+        label: { display: false },
+      };
+    });
+    _botLines.avgZscores.forEach((z, idx) => {
+      [z, -z].forEach(val => {
+        _chartAnnotations[`bot_avg_${idx}_${val}`] = {
+          type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
+          borderColor: '#eab308', borderWidth: 1, borderDash: [2, 4],
+          label: { display: false },
+        };
+      });
+    });
+  } else {
+    // Bot inactive — show watchlist entry/exit lines
+    _chartAnnotations.entryHigh = { type: 'line', yScaleID: 'yZ', yMin: entryZ,  yMax: entryZ,  borderColor: 'rgba(248,81,73,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `+${entryZ}σ`, enabled: true, position: 'end', color: '#f85149', font: { size: 10 } } };
+    _chartAnnotations.entryLow  = { type: 'line', yScaleID: 'yZ', yMin: -entryZ, yMax: -entryZ, borderColor: 'rgba(63,185,80,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `-${entryZ}σ`, enabled: true, position: 'end', color: '#3fb950', font: { size: 10 } } };
+    _chartAnnotations.exitHigh  = { type: 'line', yScaleID: 'yZ', yMin: exitZ,   yMax: exitZ,   borderColor: 'rgba(248,81,73,0.35)', borderWidth: 1, borderDash: [2,4] };
+    _chartAnnotations.exitLow   = { type: 'line', yScaleID: 'yZ', yMin: -exitZ,  yMax: -exitZ,  borderColor: 'rgba(63,185,80,0.35)', borderWidth: 1, borderDash: [2,4] };
   }
 
   state.spreadChart = new Chart(ctx, {
@@ -3013,17 +3070,7 @@ function renderSpreadChart(data) {
       plugins: {
         legend: { display: false },
         annotation: {
-          annotations: {
-            entryHigh: { type: 'line', yScaleID: 'yZ', yMin: entryZ,  yMax: entryZ,  borderColor: 'rgba(248,81,73,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `+${entryZ}σ`, enabled: true, position: 'end', color: '#f85149', font: { size: 10 } } },
-            entryLow:  { type: 'line', yScaleID: 'yZ', yMin: -entryZ, yMax: -entryZ, borderColor: 'rgba(63,185,80,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `-${entryZ}σ`, enabled: true, position: 'end', color: '#3fb950', font: { size: 10 } } },
-            exitHigh:  { type: 'line', yScaleID: 'yZ', yMin: exitZ,   yMax: exitZ,   borderColor: 'rgba(248,81,73,0.35)', borderWidth: 1, borderDash: [2,4] },
-            exitLow:   { type: 'line', yScaleID: 'yZ', yMin: -exitZ,  yMax: -exitZ,  borderColor: 'rgba(63,185,80,0.35)', borderWidth: 1, borderDash: [2,4] },
-            zero:      { type: 'line', yScaleID: 'yZ', yMin: 0,       yMax: 0,       borderColor: 'rgba(139,148,158,0.3)', borderWidth: 1 },
-            tpHigh:    { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(63,185,80,0.9)',  borderWidth: 1.5, borderDash: [6,3], label: { content: 'TP', enabled: true, position: 'start', color: '#3fb950', font: { size: 10 } } },
-            tpLow:     { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(63,185,80,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
-            slHigh:    { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3], label: { content: 'SL', enabled: true, position: 'start', color: '#f85149', font: { size: 10 } } },
-            slLow:     { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
-          }
+          annotations: _chartAnnotations,
         },
         zoom: {
           pan: {
