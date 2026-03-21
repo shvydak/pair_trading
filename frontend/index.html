@@ -441,6 +441,23 @@
       toast_trigger_created: 'Trigger created.',
       toast_trigger_cancelled: 'Trigger cancelled.',
       toast_trigger_error: 'Trigger error: ',
+      wl_bot_btn: 'BOT',
+      wl_bot_waiting: 'Waiting',
+      wl_bot_in_position: 'In Position',
+      wl_bot_paused: 'Paused',
+      bot_modal_title: 'Auto-Trading',
+      bot_tp: 'Take Profit (z-score)',
+      bot_sl: 'Stop Loss (z-score)',
+      bot_tp_smart: 'Smart execution TP',
+      bot_sl_smart: 'Smart execution SL',
+      bot_confirmation: 'Signal confirmation',
+      bot_confirmation_unit: 'min',
+      bot_avg_levels: 'Averaging',
+      bot_avg_add: '+ Level',
+      bot_save: 'Save',
+      bot_enable: 'Enable',
+      bot_disable: 'Disable',
+      bot_no_watchlist: 'Add pair to Watch List to configure the bot',
     },
     ru: {
       title: 'Дашборд Парного Трейдинга',
@@ -696,6 +713,23 @@
       toast_trigger_created: 'Триггер создан.',
       toast_trigger_cancelled: 'Триггер отменён.',
       toast_trigger_error: 'Ошибка триггера: ',
+      wl_bot_btn: 'BOT',
+      wl_bot_waiting: 'Ждёт',
+      wl_bot_in_position: 'В позиции',
+      wl_bot_paused: 'Пауза',
+      bot_modal_title: 'Авто-торговля',
+      bot_tp: 'Take Profit (z-score)',
+      bot_sl: 'Stop Loss (z-score)',
+      bot_tp_smart: 'Смарт-исполнение TP',
+      bot_sl_smart: 'Смарт-исполнение SL',
+      bot_confirmation: 'Подтверждение сигнала',
+      bot_confirmation_unit: 'мин',
+      bot_avg_levels: 'Усреднение',
+      bot_avg_add: '+ Уровень',
+      bot_save: 'Сохранить',
+      bot_enable: 'Включить',
+      bot_disable: 'Выключить',
+      bot_no_watchlist: 'Добавьте пару в Watch List для настройки бота',
     }
   };
 
@@ -1425,7 +1459,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Charts vertical resize
   initChartsResize();
   // Watchlist — load rows + alert triggers, then render (bell visibility needs _cachedAlerts)
-  Promise.all([initWatchlist(), refreshTriggersCache()]).then(() => {
+  Promise.all([initWatchlist(), refreshTriggersCache(), refreshBotConfigs()]).then(() => {
     renderWatchlist();
     connectWatchlistWS();
   });
@@ -1814,6 +1848,174 @@ function _watchlistItemHasAlert(w, alerts) {
   });
 }
 
+// ------------------------------------------------------------------ //
+//  Bot Config Modal
+// ------------------------------------------------------------------ //
+function openBotConfigModal(wlItem, existingCfg) {
+  const tp = existingCfg ? existingCfg.tp_zscore : (parseFloat(wlItem.exit_z) || 0.5);
+  const sl = existingCfg ? existingCfg.sl_zscore : ((parseFloat(wlItem.entry_z) || 2.0) * 2);
+  const tpSmart = existingCfg ? !!existingCfg.tp_smart : true;
+  const slSmart = existingCfg ? !!existingCfg.sl_smart : true;
+  const confMin = existingCfg ? (existingCfg.confirmation_minutes || 0) : 0;
+  const avgLevels = existingCfg && existingCfg.avg_levels_json
+    ? JSON.parse(existingCfg.avg_levels_json)
+    : [];
+  const isEnabled = existingCfg && existingCfg.status !== 'disabled';
+  const statusLabel = existingCfg
+    ? (t('wl_bot_' + existingCfg.status.replace('paused_after_sl','paused')) || existingCfg.status)
+    : t('wl_bot_btn');
+
+  const pair = `${wlItem.symbol1.split(':')[0]} / ${wlItem.symbol2.split(':')[0]}`;
+
+  let avgRowsHtml = avgLevels.map((lvl, i) => `
+    <div class="flex gap-2 items-center" id="avg-row-${i}">
+      <input type="number" step="0.1" value="${lvl.z}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm avg-z" placeholder="z">
+      <input type="number" step="1" value="${lvl.size_usd}" class="w-24 bg-gray-700 text-white rounded px-2 py-1 text-sm avg-size" placeholder="USD">
+      <button onclick="this.closest('[id^=avg-row]').remove()" class="text-red-400 text-sm">✕</button>
+    </div>
+  `).join('');
+
+  const html = `
+  <div id="bot-modal-overlay" class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50" onclick="if(event.target.id==='bot-modal-overlay')closeBotModal()">
+    <div class="bg-gray-800 rounded-lg p-5 w-80 text-white text-sm" onclick="event.stopPropagation()">
+      <div class="flex justify-between items-center mb-3">
+        <div>
+          <div class="font-bold text-base">${t('bot_modal_title')}</div>
+          <div class="text-gray-400 text-xs">${pair}</div>
+        </div>
+        <div class="text-xs text-gray-400">${statusLabel}</div>
+      </div>
+      <div class="space-y-2">
+        <div class="flex justify-between items-center">
+          <label class="text-gray-300">${t('bot_tp')}</label>
+          <input id="bot-tp" type="number" step="0.1" value="${tp}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm">
+        </div>
+        <div class="flex justify-between items-center">
+          <label class="text-gray-300">${t('bot_sl')}</label>
+          <input id="bot-sl" type="number" step="0.1" value="${sl}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm">
+        </div>
+        <div class="flex justify-between items-center">
+          <label class="text-gray-300">${t('bot_tp_smart')}</label>
+          <input id="bot-tp-smart" type="checkbox" ${tpSmart ? 'checked' : ''}>
+        </div>
+        <div class="flex justify-between items-center">
+          <label class="text-gray-300">${t('bot_sl_smart')}</label>
+          <input id="bot-sl-smart" type="checkbox" ${slSmart ? 'checked' : ''}>
+        </div>
+        <div class="flex justify-between items-center">
+          <label class="text-gray-300">${t('bot_confirmation')}</label>
+          <div class="flex items-center gap-1">
+            <input id="bot-conf-min" type="number" min="0" step="1" value="${confMin}" class="w-16 bg-gray-700 text-white rounded px-2 py-1 text-sm">
+            <span class="text-gray-400">${t('bot_confirmation_unit')}</span>
+          </div>
+        </div>
+      </div>
+      <div class="mt-3 border-t border-gray-700 pt-3">
+        <div class="text-gray-400 mb-2">${t('bot_avg_levels')}</div>
+        <div id="avg-levels-container" class="space-y-1">${avgRowsHtml}</div>
+        <button onclick="addAvgLevelRow()" class="mt-1 text-xs text-blue-400 hover:text-blue-300">${t('bot_avg_add')}</button>
+      </div>
+      <div class="flex gap-2 mt-4">
+        <button onclick="closeBotModal()" class="flex-1 bg-gray-700 hover:bg-gray-600 rounded py-1">${t('cancel') || 'Отмена'}</button>
+        <button onclick="saveBotConfig(${wlItem.id}, ${existingCfg ? existingCfg.id : 'null'})"
+          class="flex-1 bg-blue-600 hover:bg-blue-500 rounded py-1">${t('bot_save')}</button>
+      </div>
+      ${existingCfg ? `
+      <div class="flex gap-2 mt-2">
+        ${isEnabled
+          ? `<button onclick="toggleBotEnabled(${existingCfg.id}, false)" class="flex-1 text-xs bg-gray-700 hover:bg-gray-600 rounded py-1">${t('bot_disable')}</button>`
+          : `<button onclick="toggleBotEnabled(${existingCfg.id}, true)" class="flex-1 text-xs bg-green-700 hover:bg-green-600 rounded py-1">${t('bot_enable')}</button>`
+        }
+      </div>` : ''}
+    </div>
+  </div>`;
+
+  document.body.insertAdjacentHTML('beforeend', html);
+  window._botModalWlItem = wlItem;
+}
+
+function closeBotModal() {
+  document.getElementById('bot-modal-overlay')?.remove();
+}
+
+function addAvgLevelRow() {
+  const container = document.getElementById('avg-levels-container');
+  const i = container.children.length;
+  const row = document.createElement('div');
+  row.className = 'flex gap-2 items-center';
+  row.id = `avg-row-${i}`;
+  row.innerHTML = `
+    <input type="number" step="0.1" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm avg-z" placeholder="z">
+    <input type="number" step="1" class="w-24 bg-gray-700 text-white rounded px-2 py-1 text-sm avg-size" placeholder="USD">
+    <button onclick="this.closest('div').remove()" class="text-red-400 text-sm">✕</button>`;
+  container.appendChild(row);
+}
+
+async function saveBotConfig(wlId, existingCfgId) {
+  const wlItem = window._botModalWlItem;
+  const tp = parseFloat(document.getElementById('bot-tp').value);
+  const sl = parseFloat(document.getElementById('bot-sl').value);
+  const tpSmart = document.getElementById('bot-tp-smart').checked;
+  const slSmart = document.getElementById('bot-sl-smart').checked;
+  const confMin = parseInt(document.getElementById('bot-conf-min').value) || 0;
+
+  const avgLevels = [];
+  document.querySelectorAll('#avg-levels-container .avg-z').forEach((zInput, i) => {
+    const sizeInput = document.querySelectorAll('#avg-levels-container .avg-size')[i];
+    const z = parseFloat(zInput.value);
+    const size = parseFloat(sizeInput.value);
+    if (!isNaN(z) && !isNaN(size) && z > 0 && size > 0) {
+      avgLevels.push({z, size_usd: size});
+    }
+  });
+
+  const body = {
+    watchlist_id: wlId,
+    symbol1: wlItem.symbol1,
+    symbol2: wlItem.symbol2,
+    tp_zscore: tp,
+    sl_zscore: sl,
+    tp_smart: tpSmart,
+    sl_smart: slSmart,
+    confirmation_minutes: confMin,
+    avg_levels_json: avgLevels.length ? JSON.stringify(avgLevels) : null,
+  };
+
+  try {
+    const r = await fetch(`${API}/api/bot/configs`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+
+    // Re-enable only if was in 'waiting' state.
+    const prevStatus = existingCfgId
+      ? (_cachedBotConfigs.find(c => c.id === existingCfgId)?.status ?? 'disabled')
+      : 'disabled';
+    if (prevStatus === 'waiting') {
+      await fetch(`${API}/api/bot/configs/${data.id}/enable`, {method: 'PATCH'});
+    }
+
+    closeBotModal();
+    await refreshBotConfigs();
+    renderWatchlist();
+  } catch(e) {
+    alert('Error saving bot config: ' + e.message);
+  }
+}
+
+async function toggleBotEnabled(cfgId, enable) {
+  const url = enable
+    ? `${API}/api/bot/configs/${cfgId}/enable`
+    : `${API}/api/bot/configs/${cfgId}/disable`;
+  await fetch(url, {method: 'PATCH'});
+  closeBotModal();
+  await refreshBotConfigs();
+  renderWatchlist();
+}
+
 function renderWatchlist() {
   const list = document.getElementById('watchlist-list');
   if (!list) return;
@@ -1908,6 +2110,17 @@ function renderWatchlist() {
       : 'text-muted hover:text-yellow opacity-0 group-hover:opacity-100 transition text-[10px]';
     const bellTitle = hasAlert ? t('wl_alert_active') : t('wl_alert_btn');
 
+    // BOT badge — inline style to avoid Tailwind CDN dynamic class issues
+    const BOT_COLORS = {disabled:'#6b7280',waiting:'#22c55e',in_position:'#eab308',paused_after_sl:'#ef4444'};
+    const botCfg = _getBotConfigForWatchlistItem(w);
+    const botStatus = botCfg ? botCfg.status : 'disabled';
+    const botColor = BOT_COLORS[botStatus] || BOT_COLORS.disabled;
+    const botOpacity = botCfg ? '1' : '0.4';
+    const botStatusKey = 'wl_bot_' + botStatus.replace('paused_after_sl','paused');
+    const botTitle = botCfg ? (t(botStatusKey) || botStatus) : t('wl_bot_btn');
+    // wlIndex captured for onclick closure
+    const botBadgeHtml = `<button onclick="event.stopPropagation();openBotConfigModal(getWatchlist()[${i}],_getBotConfigForWatchlistItem(getWatchlist()[${i}]))" class="text-[9px] font-bold px-1 py-0.5 rounded cursor-pointer select-none" style="color:${botColor};border:1px solid ${botColor};opacity:${botOpacity}" title="${botTitle}">${t('wl_bot_btn')}</button>`;
+
     return header + `
     <div class="px-2 py-1.5 bg-card ${rowBorder} ${isActivePair ? 'hover:bg-blue-900/40' : 'hover:bg-panel'} cursor-pointer transition group" style="border-bottom:4px solid #0f1117" onclick="loadPairFromWatchlist(${i})">
       <div class="flex items-start justify-between gap-1">
@@ -1922,6 +2135,7 @@ function renderWatchlist() {
           <span id="wl-z-${i}" class="text-[11px] font-mono font-bold leading-none ${zColor}">${zDisplay}${zArrow}</span>
           <div class="flex items-center gap-0.5 mt-0.5">
             <button onclick="event.stopPropagation();addAlertTrigger(${i})" class="${bellClasses}" title="${bellTitle}">🔔</button>
+            ${botBadgeHtml}
             <button onclick="event.stopPropagation();removeWatchlistItem(${i})" class="text-muted hover:text-red opacity-0 group-hover:opacity-100 transition text-[10px]" title="${t('remove_from_watchlist')}">✕</button>
           </div>
         </div>
@@ -2047,6 +2261,24 @@ function connectWatchlistWS() {
 //  Alerts tab
 // ------------------------------------------------------------------ //
 let _cachedAlerts = null;
+let _cachedBotConfigs = []; // fetched from GET /api/bot/configs
+
+async function refreshBotConfigs() {
+  try {
+    const r = await fetch(`${API}/api/bot/configs`);
+    const data = await r.json();
+    _cachedBotConfigs = data.configs || [];
+  } catch(e) {
+    console.warn('refreshBotConfigs error', e);
+  }
+}
+
+function _getBotConfigForWatchlistItem(w) {
+  // Match on watchlist_id — the same symbol pair can appear in multiple
+  // watchlist rows (different timeframes), each with its own bot config.
+  return _cachedBotConfigs.find(c => c.watchlist_id === w.id) || null;
+}
+
 async function refreshTriggersCache() {
   try {
     const res = await fetch(`${API}/api/triggers`);
@@ -3023,6 +3255,8 @@ function renderBacktest(data) {
 //  Positions
 // ------------------------------------------------------------------ //
 async function loadAllPositions() {
+  // Refresh bot configs in background and re-render watchlist badges
+  refreshBotConfigs().then(() => renderWatchlist());
   try {
     const res = await fetch(`${API}/api/dashboard`);
     const dashData = res.ok ? await res.json() : {};
