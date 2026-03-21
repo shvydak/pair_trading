@@ -455,6 +455,7 @@ async def monitor_position_triggers() -> None:
     closing_tags: set[str] = set()     # tags currently being closed (smart)
     closing_pairs: set[tuple] = set()  # (sym1,sym2) pairs being closed — prevents double close across position TP + standalone trigger
     alert_states: dict[str, str] = {}  # tag → "idle" | "alerted" (hysteresis)
+    _avg_wait_start: dict[str, float] = {}  # "avg_wait_{pos_id}" → monotonic start time
     # Hedge ratio cache for standalone triggers: (sym1, sym2, tf, limit) → (hedge, timestamp)
     _hedge_cache: dict[tuple, tuple[float, float]] = {}
     _HEDGE_TTL = 60.0  # recompute hedge ratio once per minute
@@ -540,6 +541,33 @@ async def monitor_position_triggers() -> None:
 
                     if trigger:
                         sym1, sym2 = pos["symbol1"], pos["symbol2"]
+                        # Guard: if bot averaging is in progress for this pair,
+                        # delay TP/SL up to 70s to avoid race condition.
+                        # IMPORTANT: do NOT use closing_tags for this — it is
+                        # pruned every cycle. Use _avg_wait_start exclusively.
+                        bot_cfg = db.get_bot_config_by_pair(sym1, sym2)
+                        if bot_cfg and bot_cfg.get("avg_in_progress"):
+                            avg_wait_key = f"avg_wait_{pos_id}"
+                            if avg_wait_key not in _avg_wait_start:
+                                _avg_wait_start[avg_wait_key] = time.monotonic()
+                                log.info(
+                                    f"monitor: avg_in_progress for pos {pos_id}, "
+                                    f"delaying {trigger.upper()} close (0s / 70s)"
+                                )
+                            elapsed = time.monotonic() - _avg_wait_start[avg_wait_key]
+                            if elapsed < 70:
+                                log.info(
+                                    f"monitor: avg_in_progress for pos {pos_id}, "
+                                    f"delaying {trigger.upper()} close ({elapsed:.0f}s / 70s)"
+                                )
+                                continue
+                            else:
+                                log.warning(
+                                    f"monitor: avg_in_progress timeout (70s) for pos {pos_id}, "
+                                    f"forcing {trigger.upper()} close"
+                                )
+                                db.set_bot_avg_in_progress(bot_cfg["id"], False)
+                                del _avg_wait_start[avg_wait_key]
                         # Guard: if another source already started a close for this pair, skip
                         if (sym1, sym2) in closing_pairs:
                             continue
@@ -569,6 +597,10 @@ async def monitor_position_triggers() -> None:
                         # Clear TP/SL in DB immediately — prevents re-firing on the
                         # next monitor cycle regardless of closing_tags state.
                         db.set_position_triggers(pos_id, None, None, False)
+
+                        # Inform bot monitor of the close reason before we close
+                        if bot_cfg:
+                            db.set_bot_close_reason(bot_cfg["id"], trigger)
 
                         closing_pairs.add((sym1, sym2))  # block standalone triggers for same pair
 
@@ -692,6 +724,10 @@ async def monitor_position_triggers() -> None:
                             continue
 
                         db_pos = db.find_open_position(sym1, sym2)
+                        # Inform bot monitor of the close reason before we close
+                        if db_pos:
+                            if st_bot_cfg := db.get_bot_config_by_pair(sym1, sym2):
+                                db.set_bot_close_reason(st_bot_cfg["id"], trig_type)
                         if db_pos:
                             smart_key = "tp_smart" if trig_type == "tp" else "sl_smart"
                             use_smart = bool(trig.get(smart_key, True))
@@ -730,6 +766,11 @@ async def monitor_position_triggers() -> None:
 
             # ── Cleanup ─────────────────────────────────────────────────────
             closing_tags &= current_tags
+            # Clean stale avg_wait keys for positions no longer tracked
+            for k in list(_avg_wait_start):
+                pos_id_str = k.replace("avg_wait_", "")
+                if f"pos_{pos_id_str}" not in current_tags:
+                    del _avg_wait_start[k]
             # closing_pairs is rebuilt each cycle (local to the loop body),
             # so it auto-resets. But we also keep pairs with active smart closes:
             active_syms = set()
