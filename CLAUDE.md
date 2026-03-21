@@ -60,12 +60,12 @@ pair_trading/
 │   ├── strategy.py          # Pair trading math (cointegration, z-score, backtest)
 │   ├── binance_client.py    # ccxt async wrapper for Binance Futures (USDT-M + USDC-M)
 │   ├── order_manager.py     # Smart limit-order execution engine (state machine)
-│   ├── db.py                # SQLite persistence — 7 tables
+│   ├── db.py                # SQLite persistence — 8 tables
 │   ├── telegram_bot.py      # Telegram notifications + bot (aiogram v3)
 │   └── logger.py            # RotatingFileHandler → logs/pair_trading.log (10 MB × 5)
 ├── frontend/
 │   └── index.html           # Single-file UI (Tailwind + Chart.js, no build step)
-├── tests/                   # 311 tests (see Tests section)
+├── tests/                   # 334 tests (see Tests section)
 ├── pair_trading.db          # SQLite trade journal (auto-created)
 ├── .env                     # API keys (not committed)
 └── .venv/                   # Python virtual environment
@@ -135,6 +135,11 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | PATCH | `/api/watchlist/{id}/stats` | Persist computed stats (half_life, hurst, corr, pval); called after each Analyze |
 | POST | `/api/watchlist/data` | Subscribe pairs to PriceCache; return current z-score + spread (legacy HTTP fallback) |
 | POST | `/api/batch/sparklines` | Batch z-score/spread for multiple positions; uses PriceCache when available |
+| GET | `/api/bot/configs` | All bot configs (enriched with `signal_first_seen_at` from memory) |
+| POST | `/api/bot/configs` | Create or update bot config (upsert by `watchlist_id`) |
+| DELETE | `/api/bot/configs/{id}` | Delete bot config |
+| PATCH | `/api/bot/configs/{id}/enable` | Set bot status = `waiting` |
+| PATCH | `/api/bot/configs/{id}/disable` | Set bot status = `disabled` |
 | WS | `/ws/stream` | Live spread/price/Z-score updates, event-driven on each kline (≤5s timeout) |
 | WS | `/ws/watchlist` | Event-driven watchlist z-score/spread feed; client sends full list, server pushes |
 
@@ -186,7 +191,8 @@ Three-panel trading terminal:
 ### Watchlist
 
 - `watchlist` SQLite table — stores all analysis parameters per pair; managed via `GET/POST/DELETE /api/watchlist`; `_watchlistItems` in-memory array populated on page load via `initWatchlist()`
-- **Startup**: `Promise.all([initWatchlist(), refreshTriggersCache()])` then `renderWatchlist()` + `connectWatchlistWS()` — alert list must load before first paint so the 🔔 state is correct
+- **Startup**: `Promise.all([initWatchlist(), refreshTriggersCache(), refreshBotConfigs()])` then `renderWatchlist()` + `connectWatchlistWS()` — alert list and bot configs must load before first paint
+- **BOT badge**: `_cachedBotConfigs` — fetched via `refreshBotConfigs()` → `GET /api/bot/configs`; matched to watchlist row by `watchlist_id` (not symbol pair); refreshed every 5s in `loadAllPositions()`; after save/toggle call `renderSpreadChart(state.historyData)` to update chart annotations
 - **Dedup key**: `(sym1, sym2, timeframe)` — same pair with different timeframe stored as separate entry; adding BTC/ETH 5m does not overwrite BTC/ETH 4h
 - **Grouping by timeframe** in `renderWatchlist()`: section headers, order 5m→15m→30m→1h→2h→4h→8h→1d
 - **Telegram alert (🔔)**: `addAlertTrigger` / `addAlertFromPanel` → `POST /api/triggers` with `candle_limit` (from row `limit` or `#limit-input`). `_watchlistItemHasAlert(w, _cachedAlerts)` — bell stays visible (yellow, always-on opacity) when an active `type=alert` matches the row: normalised sym pair, `timeframe`, `zscore_window`, entry Z (`|tr.zscore|` ≈ `entryZ`), and `candle_limit` when both row and trigger have it. After add/cancel alert: `loadAlertsTab()` (or equivalent cache refresh) + `renderWatchlist()`. i18n: `wl_alert_btn`, `wl_alert_active`
@@ -300,7 +306,10 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 ### SQLite Persistence (`backend/db.py`)
 
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
-- **Seven tables**: `open_positions`, `closed_trades`, `triggers`, `execution_history`, `position_legs`, `funding_history`, `watchlist`
+- **Eight tables**: `open_positions`, `closed_trades`, `triggers`, `execution_history`, `position_legs`, `funding_history`, `watchlist`, `bot_configs`
+- `bot_configs` — per-pair auto-trading config; `UNIQUE(watchlist_id)`, `ON DELETE CASCADE`; statuses: `disabled` | `waiting` | `in_position` | `paused_after_sl`; `last_close_reason` written by `monitor_position_triggers` before closing; `avg_in_progress` flag blocks TP/SL during averaging
+- `_conn()` includes `PRAGMA foreign_keys = ON` — required for `ON DELETE CASCADE`; must be kept
+- **Enriching DB rows in endpoints**: `sqlite3.Row` is read-only — convert first: `[dict(c) for c in db.get_X()]`, then add fields
 - Watchlist functions: `get_watchlist()`, `save_watchlist_item(...)` → id (upsert by sym1+sym2+timeframe), `delete_watchlist_item(id)` → bool, `update_watchlist_stats(item_id, half_life, hurst, corr, pval)` — called after each analysis to persist computed stats
 - `open_positions` has `status` column: `open` | `partial_close` | `liquidated` | `adl_detected`; also `coint_pvalue`, `coint_checked_at`
 - `find_open_position(sym1, sym2)` — excludes `liquidated`/`adl_detected`; returns `partial_close` (user may still want to close it)
@@ -339,7 +348,8 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 - Balance check: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Validation order: balance → min_notional → lot_size → leverage (informational)
-- **monitor_position_triggers** runs every **2s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle
+- **monitor_position_triggers** runs every **2s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle; writes `last_close_reason` to `bot_configs` before closing; skips close up to 70s if `avg_in_progress = 1`
+- **monitor_auto_trading** runs every **2s** — handles bot entry detection, position adoption, z-score confirmation timer, averaging; `_bot_signal_seen_at: dict[int, str]` module-level (cfg_id → HH:MM UTC) exposed via `GET /api/bot/configs`
 - **Direction-agnostic TP/SL**: uses `abs(current_z)` — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values always positive
 - **Double-close prevention**: `closing_tags` (tag-based) + `closing_pairs` (pair-based) — prevents same pair closed simultaneously by position TP and standalone trigger
 - **Cointegration cache**: `_coint_cache` with 10-min TTL; **background precompute** via `_precompute_coint` — watchlist pairs analyze instantly after ~15s priming
