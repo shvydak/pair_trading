@@ -1865,7 +1865,7 @@ function openBotConfigModal(wlItem, existingCfg) {
     ? (t('wl_bot_' + existingCfg.status.replace('paused_after_sl','paused')) || existingCfg.status)
     : t('wl_bot_btn');
 
-  const pair = `${wlItem.symbol1.split(':')[0]} / ${wlItem.symbol2.split(':')[0]}`;
+  const pair = `${(wlItem.sym1 || wlItem.symbol1 || '').split(':')[0]} / ${(wlItem.sym2 || wlItem.symbol2 || '').split(':')[0]}`;
 
   let avgRowsHtml = avgLevels.map((lvl, i) => `
     <div class="flex gap-2 items-center" id="avg-row-${i}">
@@ -1971,8 +1971,8 @@ async function saveBotConfig(wlId, existingCfgId) {
 
   const body = {
     watchlist_id: wlId,
-    symbol1: wlItem.symbol1,
-    symbol2: wlItem.symbol2,
+    symbol1: wlItem.sym1 || wlItem.symbol1,
+    symbol2: wlItem.sym2 || wlItem.symbol2,
     tp_zscore: tp,
     sl_zscore: sl,
     tp_smart: tpSmart,
@@ -2004,6 +2004,20 @@ async function saveBotConfig(wlId, existingCfgId) {
   } catch(e) {
     alert('Error saving bot config: ' + e.message);
   }
+}
+
+async function openBotConfigFromPosition(posId) {
+  const pos = _stratPosMap[posId];
+  if (!pos) return;
+  const wlItem = _watchlistItems.find(w =>
+    (w.sym1 || w.symbol1) === pos.symbol1 && (w.sym2 || w.symbol2) === pos.symbol2
+  );
+  if (!wlItem) {
+    alert(t('bot_no_watchlist') || 'Добавьте пару в Watch List для настройки бота');
+    return;
+  }
+  const existingCfg = _getBotConfigForWatchlistItem(wlItem);
+  openBotConfigModal(wlItem, existingCfg);
 }
 
 async function toggleBotEnabled(cfgId, enable) {
@@ -3933,6 +3947,19 @@ function renderStrategyPositions(positions) {
     const s1 = _dispSym(pos.symbol1);
     const s2 = _dispSym(pos.symbol2);
 
+    // Bot detection for this position
+    const _posBotCfg = _cachedBotConfigs.find(c =>
+      c.symbol1 === pos.symbol1 && c.symbol2 === pos.symbol2 &&
+      c.status === 'in_position'
+    );
+    const _autoBadgeHtml = _posBotCfg
+      ? `<span class="text-[9px] font-bold px-1 rounded ml-1" style="color:#eab308;border:1px solid #eab308">AUTO</span>`
+      : '';
+    const _posBotBtnHtml = `<button onclick="openBotConfigFromPosition(${pos.id})"
+      class="px-1.5 py-1 rounded text-[10px] whitespace-nowrap"
+      style="color:#6b7280;border:1px solid #6b7280"
+      title="${t('wl_bot_btn')}">BOT</button>`;
+
     const tr = document.createElement('tr');
     tr.id = `pos-row-${pos.id}`;
     tr.style.cursor = 'pointer';
@@ -3947,6 +3974,7 @@ function renderStrategyPositions(positions) {
         <div class="flex items-center gap-1 leading-tight">
           <span class="font-medium text-white text-xs">${s1}</span>
           <span id="coint-dot-${pos.id}">${_coIntDotHtml(pos)}</span>
+          ${_autoBadgeHtml}
         </div>
         <div class="text-muted text-[10px] leading-tight">${s2}</div>
         <div id="status-badge-${pos.id}" class="mt-0.5">${_posStatusBadgeHtml(pos)}</div>
@@ -3990,6 +4018,7 @@ function renderStrategyPositions(positions) {
           <button onclick="_deleteDbPos(${pos.id})"
             class="px-1.5 py-1 rounded text-[10px] border border-border text-muted hover:border-red-600 hover:text-red-600 transition whitespace-nowrap"
             title="${t('delete_db_btn')}">🗑</button>
+          ${_posBotBtnHtml}
         </div>
         <!-- Active trigger "orders" (shown when set) -->
         <div id="tpsl-badges-${pos.id}" class="flex flex-wrap gap-1 mt-1.5">
