@@ -2001,6 +2001,7 @@ async function saveBotConfig(wlId, existingCfgId) {
     closeBotModal();
     await refreshBotConfigs();
     renderWatchlist();
+    if (state.historyData) renderSpreadChart(state.historyData);
   } catch(e) {
     alert('Error saving bot config: ' + e.message);
   }
@@ -2028,6 +2029,7 @@ async function toggleBotEnabled(cfgId, enable) {
   closeBotModal();
   await refreshBotConfigs();
   renderWatchlist();
+  if (state.historyData) renderSpreadChart(state.historyData);
 }
 
 function renderWatchlist() {
