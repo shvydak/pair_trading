@@ -466,6 +466,9 @@ async def monitor_position_triggers() -> None:
     _HEDGE_TTL = 60.0  # recompute hedge ratio once per minute
     # PriceCache subscriptions managed by the monitor
     _monitor_keys: dict[str, tuple] = {}  # tag → cache_key
+    # Safety: count consecutive "not on exchange" results per pos_id before stale deletion.
+    # Require 2 cycles to avoid false-positive from Binance API lag (1-3 s after fill).
+    _stale_counts: dict[int, int] = {}
 
     while True:
         try:
@@ -602,34 +605,54 @@ async def monitor_position_triggers() -> None:
                         if not sym1_on_exchange and not sym2_on_exchange:
                             # Guard against Binance API lag (1-3s after smart fill).
                             # If we opened this position ourselves and the execution
-                            # is recent (< 60s), skip stale deletion — exchange just
+                            # is recent (< 120s), skip stale deletion — exchange just
                             # hasn't propagated the fill yet.
                             _now_mono = time.monotonic()
                             _recently_opened = any(
                                 ctx.db_id == pos_id
                                 and not ctx.is_close
                                 and ctx.status.name == "OPEN"
-                                and (_now_mono - _exec_created_at.get(eid, 0)) < 60
+                                and (_now_mono - _exec_created_at.get(eid, 0)) < 120
                                 for eid, ctx in active_executions.items()
                             )
+                            # Diagnostic: log state for every stale-check occurrence
+                            _exec_snapshot = [
+                                (eid, getattr(c, "db_id", None), c.status.name,
+                                 round(_now_mono - _exec_created_at.get(eid, 0), 1))
+                                for eid, c in active_executions.items()
+                            ]
+                            log.warning(
+                                f"STALE CHECK | trigger={trigger.upper()} | pos={pos_id} | "
+                                f"z={current_z:.3f} | tp={tp} sl={sl} | "
+                                f"recently_opened={_recently_opened} | "
+                                f"active_execs={_exec_snapshot}"
+                            )
                             if _recently_opened:
+                                _stale_counts.pop(pos_id, None)
+                                continue
+                            # Require 2 consecutive cycles with no exchange position before
+                            # treating as stale — prevents single-cycle false positives.
+                            _stale_counts[pos_id] = _stale_counts.get(pos_id, 0) + 1
+                            if _stale_counts[pos_id] < 2:
                                 log.warning(
-                                    f"TRIGGER {trigger.upper()} | pos={pos_id} | "
-                                    f"no live positions found but opening execution "
-                                    f"is recent — skipping stale check (API lag)"
+                                    f"STALE CHECK | pos={pos_id} | "
+                                    f"cycle {_stale_counts[pos_id]}/2 — waiting for confirmation"
                                 )
                                 continue
                             log.warning(
-                                f"TRIGGER {trigger.upper()} | pos={pos_id} | "
-                                f"no live positions found — position was closed manually. "
+                                f"STALE CHECK | pos={pos_id} | "
+                                f"2 cycles confirmed — position not on exchange. "
                                 f"Removing stale DB record."
                             )
+                            _stale_counts.pop(pos_id, None)
                             if bot_cfg:
                                 db.set_bot_close_reason(bot_cfg["id"], trigger)
                             db.delete_open_position(pos_id)
                             current_tags.discard(tag)
                             continue
 
+                        # Position confirmed on exchange — reset any stale counter
+                        _stale_counts.pop(pos_id, None)
                         # Clear TP/SL in DB immediately — prevents re-firing on the
                         # next monitor cycle regardless of closing_tags state.
                         db.set_position_triggers(pos_id, None, None, False)
@@ -1245,8 +1268,11 @@ async def monitor_auto_trading() -> None:
                     pos = db.find_open_position(sym1, sym2)
 
                     if pos is None:
-                        # Position is gone — read close reason set by monitor_position_triggers
-                        reason = cfg.get("last_close_reason") or "sl"
+                        # Position is gone — reload cfg to get fresh last_close_reason
+                        # (the cfg snapshot at loop start may be stale if monitor_position_triggers
+                        # called set_bot_close_reason during the current cycle)
+                        fresh_cfg = db.get_bot_config_by_pair(sym1, sym2)
+                        reason = (fresh_cfg or {}).get("last_close_reason") or "sl"
                         if reason == "tp":
                             log.info(
                                 "BOT TP | cfg=%s | %s/%s → waiting", cid, sym1, sym2
@@ -1261,6 +1287,25 @@ async def monitor_auto_trading() -> None:
                             asyncio.create_task(
                                 tg_bot.notify_bot_paused(sym1, sym2, reason)
                             )
+                            # Safety: warn if exchange still holds the position (orphan)
+                            try:
+                                live = await client.get_positions()
+                                live_map = _build_live_map(live)
+                                s1n = _normalise_symbol(sym1)
+                                s2n = _normalise_symbol(sym2)
+                                if live_map.get(s1n) or live_map.get(s2n):
+                                    log.error(
+                                        "BOT ORPHAN | cfg=%s | %s/%s — DB position gone but "
+                                        "exchange position still open! Manual close required.",
+                                        cid, sym1, sym2,
+                                    )
+                                    asyncio.create_task(
+                                        tg_bot.notify_reconcile_mismatch(
+                                            f"{sym1}/{sym2} (BOT ORPHAN)"
+                                        )
+                                    )
+                            except Exception as _oe:
+                                log.warning("BOT ORPHAN check failed cfg=%s: %s", cid, _oe)
                         _signal_first_seen.pop(cid, None)
                         _bot_signal_seen_at.pop(cid, None)
                         continue
