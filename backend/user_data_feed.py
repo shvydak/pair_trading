@@ -184,7 +184,7 @@ class UserDataFeed:
         self._notify()
         log.debug(
             "UserDataFeed: order %s → %s filled=%.6f/%.6f commission=%.8f %s",
-            order_id, ccxt_status, filled, qty, commission, commission_asset,
+            order_id, ccxt_status, filled, qty, cumulative_commission, commission_asset,
         )
 
     def _handle_account_update(self, data: dict) -> None:

@@ -350,7 +350,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 
 - Balance check: `required_margin = size_usd / leverage * 1.1` — initial margin with 10% buffer
 - Validation order: balance → min_notional → lot_size → leverage (informational)
-- **monitor_position_triggers** runs every **2s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle; writes `last_close_reason` to `bot_configs` before closing; skips close up to 70s if `avg_in_progress = 1`
+- **monitor_position_triggers** runs every **2s** — reads from PriceCache (zero direct Binance calls); subscribes active positions/triggers, unsubscribes stale ones each cycle; writes `last_close_reason` to `bot_configs` before closing; skips close up to 70s if `avg_in_progress = 1`; uses **fresh OLS hedge** (`strategy.calculate_hedge_ratio`) every cycle — never `pos["hedge_ratio"]` from DB (it drifts from entry and produces a z inconsistent with the chart, causing false TP/SL); **stale check guard**: if `get_positions()` returns empty, checks `active_executions` for a recent opening execution (`ctx.db_id == pos_id`, `not ctx.is_close`, `status=OPEN`, created < 60s ago) before deleting — protects against Binance API lag (1-3s after smart fill)
 - **monitor_auto_trading** runs every **2s** — handles bot entry detection, position adoption, z-score confirmation timer, averaging; `_bot_signal_seen_at: dict[int, str]` module-level (cfg_id → HH:MM UTC) exposed via `GET /api/bot/configs`
 - **Direction-agnostic TP/SL**: uses `abs(current_z)` — TP when `abs_z <= tp`, SL when `abs_z >= sl`; values always positive
 - **Double-close prevention**: `closing_tags` (tag-based) + `closing_pairs` (pair-based) — prevents same pair closed simultaneously by position TP and standalone trigger
@@ -380,6 +380,10 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Common Issues & Fixes
 
+- **Symbol format mismatch (DB vs exchange)**: DB stores symbols as `SOLUSDC`; ccxt/Binance returns `SOL/USDC:USDC`. Never compare them directly. Always use `_normalise_symbol(sym)` (→ `SOL/USDC`) and build lookup maps with both full and base keys (`sym.split(":")[0]`). Affected anywhere we call `get_positions()` and match against DB: `reconcile_positions`, `monitor_position_triggers` (live check before close), `_build_live_map` / `_enrich_positions`. Use `_build_live_map()` to construct all `live_map` dicts — it handles all variants.
+
+- **When fixing a bug — check propagation**: After fixing a bug, always grep for the same pattern across the entire codebase before closing. Ask: "where else does code do the same thing?" A symbol format bug found in `reconcile_positions` was silently present in `monitor_position_triggers`, `_enrich_positions`, and two other endpoints — causing wrong PnL display and phantom TP failures.
+
 - **FOREIGN KEY constraint failed on position close/delete**: `position_legs` references `open_positions(id)` without `ON DELETE CASCADE` — always `DELETE FROM position_legs WHERE position_id = ?` before `DELETE FROM open_positions`; applies to both `close_position()` and `delete_open_position()`
 - **`partial_close` position in UI**: orange badge; remaining leg must be closed manually on exchange
 - **Cointegration health dot is empty**: normal for first 4h after server start — `health_check_coint` has 120s initial delay then 4h interval
@@ -395,13 +399,16 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 - **WebSocket requires absolute URL**: `new WebSocket('/ws/path')` throws — use `_wsUrl(path)` helper
 - **`ecosystem.config.js` path resolution**: use `path.join(__dirname, '.venv/bin/uvicorn')` — PM2 resolves `script` relative to `cwd`
 - **PnL line goes flat after loading pair from watchlist then changing limit**: watchlist's saved `candle_limit` < new limit → `find_cached` misses → `/api/history` uses REST, WS uses PriceCache → β mismatch → flat line. Root fix: send `hedge_ratio: state.hedgeRatio` in `/ws/stream` WS payload (already fixed in frontend).
+- **Bot TP/SL fires seconds after position opens (API lag)**: Binance `get_positions()` returns empty 1-3s after fill. Stale check guard: `_recently_opened = any(ctx.db_id == pos_id and not ctx.is_close and ctx.status.name == "OPEN" and elapsed < 60 ...)` over `active_executions`. Do NOT use time-based `pos_age_s` — it parses `opened_at` string from DB and is fragile. Pattern: gate on execution knowledge, not wall-clock.
+- **Stored `hedge_ratio` drift causes false TP**: `pos["hedge_ratio"]` is saved at entry time. Even minutes later, fresh OLS gives a different β → different z. If monitor uses stored β but bot ticker uses fresh OLS, they compute different z-scores — monitor can see `abs_z < tp` when chart shows `abs_z >> tp` → premature TP fires. Always use fresh OLS in monitor.
 
 ## Tests (`tests/`)
 
-311 unit tests, all pass in ~5s. Run: `.venv/bin/pytest tests/ -v`
+367 unit tests, all pass in ~7s. Run: `.venv/bin/pytest tests/ -v`
 
-- `test_strategy.py`(41), `test_db.py`(103), `test_helpers.py`(26), `test_order_manager.py`(18), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(70), `test_lifespan.py`(5)
+- `test_strategy.py`(41), `test_db.py`(103), `test_helpers.py`(26), `test_order_manager.py`(18), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(70), `test_lifespan.py`(5), `test_bot_monitor.py`(46), `test_user_data_feed.py`(19), `test_symbol_helpers.py`(14)
 - `conftest.py`: `tmp_db` fixture — `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test
+- **`main.py` cannot be imported in tests** — side effects at import time (BinanceClient, PriceCache, .env). Test pure helpers by copying logic inline with a comment, as done in `test_symbol_helpers.py`.
 
 ## Deployment
 

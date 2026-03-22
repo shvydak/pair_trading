@@ -530,7 +530,11 @@ async def monitor_position_triggers() -> None:
                     continue
                 try:
                     p1, p2 = ohlcv_data[fk]
-                    hedge = pos["hedge_ratio"]
+                    # Fresh OLS hedge — same as standalone triggers (line ~661) and
+                    # bot ticker. Stored hedge_ratio can diverge after execution and
+                    # produce a z wildly different from what the user sees, causing
+                    # premature TP/SL. Fresh hedge keeps all z computations consistent.
+                    hedge = strategy.calculate_hedge_ratio(p1, p2)
                     spread = strategy.calculate_spread(p1, p2, hedge)
                     zscore_series = strategy.calculate_zscore(spread, window=pos_zw)
                     current_z = float(zscore_series.dropna().iloc[-1])
@@ -588,13 +592,40 @@ async def monitor_position_triggers() -> None:
                         )
                         # Safety: check that the position still exists on the exchange.
                         live_positions = await client.get_positions()
+                        # live positions use ccxt format (SOL/USDC:USDC); normalise both sides
                         live_syms = {p["symbol"] for p in live_positions if p.get("size")}
-                        if sym1 not in live_syms and sym2 not in live_syms:
+                        live_syms_base = {s.split(":")[0] for s in live_syms}
+                        sym1_norm = _normalise_symbol(sym1)
+                        sym2_norm = _normalise_symbol(sym2)
+                        sym1_on_exchange = sym1_norm in live_syms or sym1_norm in live_syms_base
+                        sym2_on_exchange = sym2_norm in live_syms or sym2_norm in live_syms_base
+                        if not sym1_on_exchange and not sym2_on_exchange:
+                            # Guard against Binance API lag (1-3s after smart fill).
+                            # If we opened this position ourselves and the execution
+                            # is recent (< 60s), skip stale deletion — exchange just
+                            # hasn't propagated the fill yet.
+                            _now_mono = time.monotonic()
+                            _recently_opened = any(
+                                ctx.db_id == pos_id
+                                and not ctx.is_close
+                                and ctx.status.name == "OPEN"
+                                and (_now_mono - _exec_created_at.get(eid, 0)) < 60
+                                for eid, ctx in active_executions.items()
+                            )
+                            if _recently_opened:
+                                log.warning(
+                                    f"TRIGGER {trigger.upper()} | pos={pos_id} | "
+                                    f"no live positions found but opening execution "
+                                    f"is recent — skipping stale check (API lag)"
+                                )
+                                continue
                             log.warning(
                                 f"TRIGGER {trigger.upper()} | pos={pos_id} | "
                                 f"no live positions found — position was closed manually. "
                                 f"Removing stale DB record."
                             )
+                            if bot_cfg:
+                                db.set_bot_close_reason(bot_cfg["id"], trigger)
                             db.delete_open_position(pos_id)
                             current_tags.discard(tag)
                             continue
@@ -719,7 +750,12 @@ async def monitor_position_triggers() -> None:
                         )
                         live_positions = await client.get_positions()
                         live_syms = {p["symbol"] for p in live_positions if p.get("size")}
-                        if sym1 not in live_syms and sym2 not in live_syms:
+                        live_syms_base = {s.split(":")[0] for s in live_syms}
+                        sym1_norm_st = _normalise_symbol(sym1)
+                        sym2_norm_st = _normalise_symbol(sym2)
+                        sym1_on_exch = sym1_norm_st in live_syms or sym1_norm_st in live_syms_base
+                        sym2_on_exch = sym2_norm_st in live_syms or sym2_norm_st in live_syms_base
+                        if not sym1_on_exch and not sym2_on_exch:
                             log.warning(
                                 f"STANDALONE TRIGGER | trig_id={trig_id} | "
                                 f"no live positions found — cancelling trigger."
@@ -1279,13 +1315,19 @@ async def reconcile_positions() -> None:
             open_positions = db.get_open_positions()
             if open_positions and client.has_creds:
                 exchange_positions = await client.get_positions()
-                exch_map = {p["symbol"]: p for p in exchange_positions}
+                # Index by both full ccxt key (SOL/USDC:USDC) and base key (SOL/USDC)
+                # so _normalise_symbol("SOLUSDC") → "SOL/USDC" finds the position.
+                exch_map: dict[str, dict] = {}
+                for p in exchange_positions:
+                    exch_map[p["symbol"]] = p
+                    base_key = p["symbol"].split(":")[0]
+                    exch_map.setdefault(base_key, p)
                 await client._ensure_markets()
                 for pos in open_positions:
                     if pos.get("status") in ("partial_close", "liquidated", "adl_detected"):
                         continue
                     for sym, db_qty in [(pos["symbol1"], pos["qty1"]), (pos["symbol2"], pos["qty2"])]:
-                        exch_pos = exch_map.get(sym)
+                        exch_pos = exch_map.get(_normalise_symbol(sym)) or exch_map.get(sym)
                         if exch_pos is None:
                             log.warning(
                                 "RECONCILE: %s not found on exchange (pos_id=%s)",
@@ -1295,7 +1337,7 @@ async def reconcile_positions() -> None:
                         else:
                             exch_qty = abs(exch_pos["size"])
                             try:
-                                market = client.exchange.market(sym)
+                                market = client.exchange.market(_normalise_symbol(sym))
                                 step = float((market.get("precision") or {}).get("amount") or 0)
                             except Exception:
                                 step = 0.0
@@ -1306,7 +1348,7 @@ async def reconcile_positions() -> None:
                                 )
         except Exception as e:
             log.warning("reconcile_positions error: %s", e)
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
 
 
 async def health_check_coint() -> None:
@@ -1896,6 +1938,21 @@ async def get_positions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _build_live_map(live_positions: list[dict]) -> dict:
+    """Build a lookup map from exchange positions indexed by all symbol variants.
+
+    Exchange returns ccxt format (SOL/USDC:USDC). DB stores SOLUSDC.
+    We index by full key, base key (SOL/USDC), and raw DB key so any format works.
+    """
+    live_map: dict[str, dict] = {}
+    for p in live_positions:
+        full = p["symbol"]          # SOL/USDC:USDC
+        base = full.split(":")[0]   # SOL/USDC
+        live_map[full] = p
+        live_map.setdefault(base, p)
+    return live_map
+
+
 def _enrich_positions(db_positions: list[dict], live_map: dict) -> list[dict]:
     """
     Enrich DB positions with live mark prices and PnL.
@@ -1906,8 +1963,8 @@ def _enrich_positions(db_positions: list[dict], live_map: dict) -> list[dict]:
     enriched = []
     for pos in db_positions:
         sym1, sym2 = pos["symbol1"], pos["symbol2"]
-        live1 = live_map.get(sym1, {})
-        live2 = live_map.get(sym2, {})
+        live1 = live_map.get(sym1) or live_map.get(_normalise_symbol(sym1), {})
+        live2 = live_map.get(sym2) or live_map.get(_normalise_symbol(sym2), {})
         mark_price1 = live1.get("mark_price") or pos.get("entry_price1")
         mark_price2 = live2.get("mark_price") or pos.get("entry_price2")
         pnl = None
@@ -1941,7 +1998,7 @@ async def get_all_positions():
 
     try:
         live_positions = await client.get_positions()
-        live_map = {p["symbol"]: p for p in live_positions}
+        live_map = _build_live_map(live_positions)
     except Exception:
         live_positions = []
         live_map = {}
@@ -1979,7 +2036,7 @@ async def get_dashboard(alert_minutes: int = Query(60)):
             client.get_positions(),
             client.get_all_balances(),
         )
-        live_map = {p["symbol"]: p for p in live_positions}
+        live_map = _build_live_map(live_positions)
     except Exception:
         live_positions = []
         live_map = {}
@@ -2014,7 +2071,7 @@ async def get_db_positions_enriched():
 
     try:
         live_positions = await client.get_positions()
-        live_map = {p["symbol"]: p for p in live_positions}
+        live_map = _build_live_map(live_positions)
     except Exception:
         live_map = {}
 
