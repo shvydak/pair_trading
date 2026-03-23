@@ -7,6 +7,8 @@ State machine:
                                                                                                           ↘ CANCELLED
 """
 import asyncio
+import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +19,25 @@ from logger import get_logger
 import telegram_bot as tg_bot
 
 log = get_logger("order_manager")
+_DEBUG_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", ".cursor", "debug-342352.log")
+_DEBUG_SESSION_ID = "342352"
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": _DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True, default=str) + "\n")
+    except Exception:
+        pass
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -87,8 +108,14 @@ class LegState:
         avg       = order.get("average")
         status    = order.get("status", "open")
 
-        self.filled    = filled
-        self.remaining = remaining
+        # Repriced orders are placed only for the residual amount, so per-order
+        # "filled" may reset to 0 on the new order while the leg already has a
+        # partial fill from a previous placement. Derive cumulative progress from
+        # the leg target quantity and never let filled move backwards.
+        derived_filled = max(0.0, self.qty - remaining)
+        effective_filled = min(self.qty, max(self.filled, filled, derived_filled))
+        self.filled = effective_filled
+        self.remaining = max(0.0, self.qty - effective_filled)
         if avg:
             self.avg_price = float(avg)
 
@@ -102,13 +129,13 @@ class LegState:
             if asset:
                 self.commission_asset = asset
 
-        if status in ("closed", "filled") or remaining <= 1e-9:
+        if status in ("closed", "filled") or self.remaining <= 1e-9:
             self.status = LegStatus.FILLED
         elif status in ("canceled", "cancelled"):
-            self.status = LegStatus.PARTIAL if filled > 0 else LegStatus.CANCELLED
+            self.status = LegStatus.PARTIAL if self.filled > 0 else LegStatus.CANCELLED
         elif status in ("rejected", "expired"):
-            self.status = LegStatus.PARTIAL if filled > 0 else LegStatus.FAILED
-        elif filled > 0:
+            self.status = LegStatus.PARTIAL if self.filled > 0 else LegStatus.FAILED
+        elif self.filled > 0:
             self.status = LegStatus.PARTIAL
         else:
             self.status = LegStatus.WAITING
@@ -505,7 +532,29 @@ async def _refresh_fills(ctx: ExecContext, client) -> None:
     )
     for leg, result in zip(legs_needing_rest, results):
         if isinstance(result, Exception):
+            ws_fill = udf.get_fill_data(leg.order_id) if (udf and leg.order_id) else None
             ctx.evt(f"  Poll error {leg.symbol}: {result}")
+            # region agent log
+            _debug_log(
+                "initial-debug",
+                "H7,H8",
+                "backend/order_manager.py:_refresh_fills",
+                "REST order refresh failed",
+                {
+                    "exec_id": ctx.exec_id,
+                    "status": str(ctx.status),
+                    "is_close": ctx.is_close,
+                    "symbol": leg.symbol,
+                    "side": leg.side,
+                    "order_id": leg.order_id,
+                    "leg_status": str(leg.status),
+                    "filled": leg.filled,
+                    "remaining": leg.remaining,
+                    "exception": str(result),
+                    "ws_fill": ws_fill,
+                },
+            )
+            # endregion
             continue
         prev = leg.status
         leg.absorb_order(result)
@@ -532,6 +581,26 @@ async def _start_stage(ctx: ExecContext, client, mode: str) -> None:
             except Exception as e:
                 ctx.evt(f"  Cancel {leg.symbol} warn: {e} — refreshing fill")
             await _refresh_fills(ctx, client)
+            # region agent log
+            _debug_log(
+                "initial-debug",
+                "H7",
+                "backend/order_manager.py:_start_stage",
+                "Post-cancel refresh state",
+                {
+                    "exec_id": ctx.exec_id,
+                    "stage_mode": mode,
+                    "is_close": ctx.is_close,
+                    "symbol": leg.symbol,
+                    "side": leg.side,
+                    "order_id": leg.order_id,
+                    "leg_status": str(leg.status),
+                    "filled": leg.filled,
+                    "remaining": leg.remaining,
+                    "working_price": leg.working_price,
+                },
+            )
+            # endregion
 
         leg.order_id = None
         leg.working_price = None
@@ -593,6 +662,27 @@ async def _reprice_live_orders(ctx: ExecContext, client, mode: str) -> None:
             except Exception as e:
                 ctx.evt(f"  Cancel {leg.symbol} warn: {e} — refreshing fill")
             await _refresh_fills(ctx, client)
+            # region agent log
+            _debug_log(
+                "initial-debug",
+                "H7",
+                "backend/order_manager.py:_reprice_live_orders",
+                "Post-cancel refresh state",
+                {
+                    "exec_id": ctx.exec_id,
+                    "reprice_mode": mode,
+                    "is_close": ctx.is_close,
+                    "symbol": leg.symbol,
+                    "side": leg.side,
+                    "order_id": leg.order_id,
+                    "leg_status": str(leg.status),
+                    "filled": leg.filled,
+                    "remaining": leg.remaining,
+                    "working_price": leg.working_price,
+                    "new_price": new_price,
+                },
+            )
+            # endregion
 
         if leg.is_done:
             continue
@@ -625,6 +715,26 @@ async def _force_market(ctx: ExecContext, client, udf=None, registered_orders: O
                 _finalise_non_placeable_leg(ctx, leg, reason)
                 continue
             ctx.evt(f"  Market fill: {leg.symbol} {leg.side} {leg.remaining:.6f}")
+            # region agent log
+            _debug_log(
+                "initial-debug",
+                "H8",
+                "backend/order_manager.py:_force_market:before_place",
+                "Preparing market fallback",
+                {
+                    "exec_id": ctx.exec_id,
+                    "is_close": ctx.is_close,
+                    "symbol": leg.symbol,
+                    "side": leg.side,
+                    "order_id": leg.order_id,
+                    "leg_status": str(leg.status),
+                    "filled": leg.filled,
+                    "remaining": leg.remaining,
+                    "avg_price": leg.avg_price,
+                    "ref_price": ref_price,
+                },
+            )
+            # endregion
             try:
                 prev_filled = leg.filled
                 prev_avg = leg.avg_price
@@ -651,6 +761,28 @@ async def _force_market(ctx: ExecContext, client, udf=None, registered_orders: O
                         leg.avg_price = total_cost / max(leg.filled, 1e-9)
                     else:
                         leg.avg_price = market_avg
+                # region agent log
+                _debug_log(
+                    "initial-debug",
+                    "H8",
+                    "backend/order_manager.py:_force_market:after_place",
+                    "Market fallback response",
+                    {
+                        "exec_id": ctx.exec_id,
+                        "is_close": ctx.is_close,
+                        "symbol": leg.symbol,
+                        "side": leg.side,
+                        "market_order_id": leg.order_id,
+                        "response_status": order.get("status"),
+                        "response_filled": order.get("filled"),
+                        "response_remaining": order.get("remaining"),
+                        "response_average": order.get("average"),
+                        "leg_filled_after": leg.filled,
+                        "leg_remaining_after": leg.remaining,
+                        "leg_status_after": str(leg.status),
+                    },
+                )
+                # endregion
             except Exception as e:
                 ctx.evt(f"  Market order FAILED {leg.symbol}: {e}")
                 leg.status = LegStatus.FAILED

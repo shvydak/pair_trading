@@ -100,6 +100,7 @@ class FakeDb:
     def __init__(self):
         self.saved = None
         self.closed = None
+        self.added_entries = []
 
     def save_open_position(self, **kwargs):
         self.saved = kwargs
@@ -114,6 +115,10 @@ class FakeDb:
 
     def close_position_legs(self, *args, **kwargs):
         pass
+
+    def add_position_entry(self, *args, **kwargs):
+        self.added_entries.append((args, kwargs))
+        return True
 
     def set_position_status(self, *args, **kwargs):
         pass
@@ -423,6 +428,93 @@ def test_commission_accumulates_ws_per_fill_events():
     assert leg.commission == pytest.approx(0.03)
 
 
+def test_absorb_order_preserves_partial_fill_across_repriced_orders():
+    """A new residual order must not erase fills from the previous placement."""
+    leg = om.LegState(symbol="AAA/USDC:USDC", side="buy", qty=0.421)
+
+    # First placement partially fills 0.007, leaving 0.414 for the next order.
+    leg.absorb_order({
+        "id": "L1",
+        "status": "canceled",
+        "filled": 0.007,
+        "remaining": 0.414,
+        "average": 53.57,
+    })
+    assert leg.status == om.LegStatus.PARTIAL
+    assert leg.filled == pytest.approx(0.007)
+    assert leg.remaining == pytest.approx(0.414)
+
+    # The repriced order is a fresh order for only the residual 0.414.
+    # Its per-order filled resets to 0, but total leg progress must stay 0.007.
+    leg.absorb_order({
+        "id": "L2",
+        "status": "open",
+        "filled": 0.0,
+        "remaining": 0.414,
+        "average": 53.58,
+    })
+    assert leg.status == om.LegStatus.PARTIAL
+    assert leg.filled == pytest.approx(0.007)
+    assert leg.remaining == pytest.approx(0.414)
+
+    # Once the residual order fully fills, the total must become 0.421.
+    leg.absorb_order({
+        "id": "L2",
+        "status": "closed",
+        "filled": 0.414,
+        "remaining": 0.0,
+        "average": 53.59,
+    })
+    assert leg.status == om.LegStatus.FILLED
+    assert leg.filled == pytest.approx(0.421)
+    assert leg.remaining == pytest.approx(0.0)
+
+
+def test_average_execution_preserves_partial_fill_and_adds_full_qty(monkeypatch):
+    """Averaging must add the total filled qty, not just the repriced residual."""
+    _patch_runtime(monkeypatch)
+    client = FakeClient(
+        orderbooks={
+            "AAA/USDC:USDC": [{"bid": 100.0, "ask": 101.0, "spread_pct": 1.0}],
+            "BBB/USDC:USDC": [{"bid": 200.0, "ask": 201.0, "spread_pct": 0.5}],
+        },
+        limit_status_scripts=[
+            [
+                {"id": "L1", "status": "closed", "filled": 1.0, "remaining": 0.0, "average": 100.0},
+            ],
+            [
+                {"id": "L2", "status": "open", "filled": 0.2, "remaining": 0.8, "average": 200.0},
+                {"id": "L2", "status": "canceled", "filled": 0.2, "remaining": 0.8, "average": 200.0},
+            ],
+            [
+                {"id": "L3", "status": "closed", "filled": 0.8, "remaining": 0.0, "average": 201.0},
+            ],
+        ],
+    )
+    db = FakeDb()
+    ctx = _ctx(passive_s=2.0, aggressive_s=10.0, poll_s=2.0, reprice_s=4.0)
+    ctx.is_average = True
+    ctx.average_position_id = 77
+    ctx.leg2 = om.LegState(symbol="BBB/USDC:USDC", side="sell", qty=1.0)
+    ctx.leg2.last_reprice_at = 0.0
+
+    asyncio.run(om.run_execution(ctx, client, db))
+
+    assert ctx.status == om.ExecStatus.OPEN
+    assert ctx.db_id == 77
+    assert len(db.added_entries) == 2
+    leg1_args, _ = db.added_entries[0]
+    leg2_args, _ = db.added_entries[1]
+    assert leg1_args[0] == 77
+    assert leg1_args[1] == 1
+    assert leg1_args[2] == pytest.approx(1.0)
+    assert leg2_args[0] == 77
+    assert leg2_args[1] == 2
+    assert leg2_args[2] == pytest.approx(1.0)
+    assert ctx.leg2.filled == pytest.approx(1.0)
+    assert ctx.leg2.remaining == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # ROLLBACK for close — sets partial_close status, does not re-open
 # ---------------------------------------------------------------------------
@@ -591,3 +683,46 @@ def test_force_market_updates_leg_order_id(monkeypatch):
     # UDF must have been notified with the market order ID
     assert ctx.leg2.order_id in registered
     assert ctx.leg2.order_id in registered_orders
+
+
+def test_close_execution_uses_accumulated_qty_after_averaging(monkeypatch):
+    """Smart close of an averaged position must use the full accumulated leg qty."""
+    _patch_runtime(monkeypatch)
+    client = FakeClient(
+        orderbooks={
+            "AAA/USDC:USDC": [{"bid": 100.0, "ask": 101.0, "spread_pct": 1.0}],
+            "BBB/USDC:USDC": [{"bid": 200.0, "ask": 201.0, "spread_pct": 0.5}],
+        },
+        limit_status_scripts=[
+            [
+                {"id": "L1", "status": "closed", "filled": 1.5, "remaining": 0.0, "average": 100.0},
+            ],
+            [
+                {"id": "L2", "status": "open", "filled": 0.3, "remaining": 2.7, "average": 200.0},
+                {"id": "L2", "status": "canceled", "filled": 0.3, "remaining": 2.7, "average": 200.0},
+            ],
+            [
+                {"id": "L3", "status": "closed", "filled": 2.7, "remaining": 0.0, "average": 201.0},
+            ],
+        ],
+    )
+    db = FakeDb()
+    ctx = _ctx(passive_s=2.0, aggressive_s=10.0, poll_s=2.0, reprice_s=4.0)
+    ctx.is_close = True
+    ctx.close_db_id = 42
+    ctx.entry_price1 = 95.0
+    ctx.entry_price2 = 195.0
+    ctx.spread_side = "long_spread"
+    ctx.leg1 = om.LegState(symbol="AAA/USDC:USDC", side="sell", qty=1.5)
+    ctx.leg2 = om.LegState(symbol="BBB/USDC:USDC", side="buy", qty=3.0)
+    ctx.leg1.last_reprice_at = 0.0
+    ctx.leg2.last_reprice_at = 0.0
+
+    asyncio.run(om.run_execution(ctx, client, db))
+
+    assert ctx.status == om.ExecStatus.OPEN
+    assert ctx.leg1.filled == pytest.approx(1.5)
+    assert ctx.leg2.filled == pytest.approx(3.0)
+    assert db.closed is not None
+    assert db.closed[0] == 42
+    assert len(client.market_orders) == 0

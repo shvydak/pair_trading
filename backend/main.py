@@ -1,4 +1,5 @@
 import asyncio
+import fcntl
 import functools
 import json
 import math
@@ -28,6 +29,10 @@ import telegram_bot as tg_bot
 load_dotenv()
 
 log = get_logger("pair_trading")
+_DEBUG_LOG_PATH = "/Users/y.shvydak/Projects/pair_trading/.cursor/debug-342352.log"
+_DEBUG_SESSION_ID = "342352"
+_INSTANCE_LOCK_PATH = os.path.join(os.path.dirname(__file__), "..", ".cursor", "backend-instance.lock")
+_INSTANCE_LOCK_FH = None
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,6 +62,57 @@ def _clean(obj):
     if isinstance(obj, np.integer):
         return int(obj)
     return obj
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": _DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _acquire_instance_lock() -> None:
+    global _INSTANCE_LOCK_FH
+    os.makedirs(os.path.dirname(_INSTANCE_LOCK_PATH), exist_ok=True)
+    fh = open(_INSTANCE_LOCK_PATH, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.seek(0)
+        holder = fh.read().strip() or "unknown"
+        fh.close()
+        raise RuntimeError(
+            f"Another backend instance already holds the trading lock (pid={holder}). "
+            "Stop the old server before starting a new one."
+        )
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _INSTANCE_LOCK_FH = fh
+
+
+def _release_instance_lock() -> None:
+    global _INSTANCE_LOCK_FH
+    if _INSTANCE_LOCK_FH is None:
+        return
+    try:
+        _INSTANCE_LOCK_FH.seek(0)
+        _INSTANCE_LOCK_FH.truncate()
+        fcntl.flock(_INSTANCE_LOCK_FH.fileno(), fcntl.LOCK_UN)
+    finally:
+        _INSTANCE_LOCK_FH.close()
+        _INSTANCE_LOCK_FH = None
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +636,27 @@ async def monitor_position_triggers() -> None:
                                 )
                                 db.set_bot_avg_in_progress(bot_cfg["id"], False)
                                 del _avg_wait_start[avg_wait_key]
+                        # region agent log
+                        _debug_log(
+                            run_id="initial-debug",
+                            hypothesis_id="H2,H3",
+                            location="backend/main.py:trigger-detected",
+                            message="Monitor trigger detected",
+                            data={
+                                "pos_id": pos_id,
+                                "sym1": sym1,
+                                "sym2": sym2,
+                                "trigger": trigger,
+                                "current_z": round(current_z, 6),
+                                "abs_z": round(abs_z, 6),
+                                "tp": tp,
+                                "sl": sl,
+                                "bot_cfg_id": bot_cfg.get("id") if bot_cfg else None,
+                                "bot_cfg_status": bot_cfg.get("status") if bot_cfg else None,
+                                "bot_last_close_reason": bot_cfg.get("last_close_reason") if bot_cfg else None,
+                            },
+                        )
+                        # endregion
                         # Guard: if another source already started a close for this pair, skip
                         if (sym1, sym2) in closing_pairs:
                             continue
@@ -602,6 +679,26 @@ async def monitor_position_triggers() -> None:
                         sym2_norm = _normalise_symbol(sym2)
                         sym1_on_exchange = sym1_norm in live_syms or sym1_norm in live_syms_base
                         sym2_on_exchange = sym2_norm in live_syms or sym2_norm in live_syms_base
+                        # region agent log
+                        _debug_log(
+                            run_id="initial-debug",
+                            hypothesis_id="H1",
+                            location="backend/main.py:trigger-live-check",
+                            message="Monitor exchange presence check",
+                            data={
+                                "pos_id": pos_id,
+                                "trigger": trigger,
+                                "sym1": sym1,
+                                "sym2": sym2,
+                                "sym1_norm": sym1_norm,
+                                "sym2_norm": sym2_norm,
+                                "live_syms": sorted(live_syms),
+                                "live_syms_base": sorted(live_syms_base),
+                                "sym1_on_exchange": sym1_on_exchange,
+                                "sym2_on_exchange": sym2_on_exchange,
+                            },
+                        )
+                        # endregion
                         if not sym1_on_exchange and not sym2_on_exchange:
                             # Guard against Binance API lag (1-3s after smart fill).
                             # If we opened this position ourselves and the execution
@@ -639,6 +736,24 @@ async def monitor_position_triggers() -> None:
                                     f"cycle {_stale_counts[pos_id]}/2 — waiting for confirmation"
                                 )
                                 continue
+                            # region agent log
+                            _debug_log(
+                                run_id="initial-debug",
+                                hypothesis_id="H1,H2",
+                                location="backend/main.py:stale-delete",
+                                message="Monitor deleting stale DB position",
+                                data={
+                                    "pos_id": pos_id,
+                                    "trigger": trigger,
+                                    "sym1": sym1,
+                                    "sym2": sym2,
+                                    "stale_count": _stale_counts[pos_id],
+                                    "bot_cfg_id": bot_cfg.get("id") if bot_cfg else None,
+                                    "recently_opened": _recently_opened,
+                                    "active_exec_snapshot": _exec_snapshot,
+                                },
+                            )
+                            # endregion
                             log.warning(
                                 f"STALE CHECK | pos={pos_id} | "
                                 f"2 cycles confirmed — position not on exchange. "
@@ -1195,6 +1310,7 @@ async def monitor_auto_trading() -> None:
                                 bool(cfg["tp_smart"]),
                                 bool(cfg["sl_smart"]),
                             )
+                        db.set_bot_close_reason(cid, None)
                         db.set_bot_status(cid, "in_position")
                         _signal_first_seen.pop(cid, None)
                         _bot_signal_seen_at.pop(cid, None)
@@ -1256,6 +1372,7 @@ async def monitor_auto_trading() -> None:
                                 sizing=sizing, leverage=leverage,
                                 current_z=current_z, hedge=hedge,
                             )
+                            db.set_bot_close_reason(cid, None)
                             db.set_bot_status(cid, "in_position")
                         except Exception as e:
                             log.warning("BOT OPEN failed cfg=%s: %s", cid, e)
@@ -1273,6 +1390,47 @@ async def monitor_auto_trading() -> None:
                         # called set_bot_close_reason during the current cycle)
                         fresh_cfg = db.get_bot_config_by_pair(sym1, sym2)
                         reason = (fresh_cfg or {}).get("last_close_reason") or "sl"
+                        # region agent log
+                        _debug_log(
+                            run_id="initial-debug",
+                            hypothesis_id="H2",
+                            location="backend/main.py:bot-pos-missing",
+                            message="Bot config sees DB position missing",
+                            data={
+                                "cfg_id": cid,
+                                "sym1": sym1,
+                                "sym2": sym2,
+                                "reason_used": reason,
+                                "fresh_cfg_id": (fresh_cfg or {}).get("id"),
+                                "fresh_cfg_status": (fresh_cfg or {}).get("status"),
+                                "fresh_last_close_reason": (fresh_cfg or {}).get("last_close_reason"),
+                            },
+                        )
+                        # endregion
+                        has_live_orphan = False
+                        try:
+                            live = await client.get_positions()
+                            live_map = _build_live_map(live)
+                            s1n = _normalise_symbol(sym1)
+                            s2n = _normalise_symbol(sym2)
+                            has_live_orphan = bool(live_map.get(s1n) or live_map.get(s2n))
+                        except Exception as _oe:
+                            log.warning("BOT ORPHAN check failed cfg=%s: %s", cid, _oe)
+                        if has_live_orphan:
+                            log.error(
+                                "BOT ORPHAN | cfg=%s | %s/%s — DB position gone but "
+                                "exchange position still open! Pausing bot.",
+                                cid, sym1, sym2,
+                            )
+                            db.set_bot_status(cid, "paused_after_sl")
+                            asyncio.create_task(
+                                tg_bot.notify_reconcile_mismatch(
+                                    f"{sym1}/{sym2} (BOT ORPHAN)"
+                                )
+                            )
+                            _signal_first_seen.pop(cid, None)
+                            _bot_signal_seen_at.pop(cid, None)
+                            continue
                         if reason == "tp":
                             log.info(
                                 "BOT TP | cfg=%s | %s/%s → waiting", cid, sym1, sym2
@@ -1287,25 +1445,6 @@ async def monitor_auto_trading() -> None:
                             asyncio.create_task(
                                 tg_bot.notify_bot_paused(sym1, sym2, reason)
                             )
-                            # Safety: warn if exchange still holds the position (orphan)
-                            try:
-                                live = await client.get_positions()
-                                live_map = _build_live_map(live)
-                                s1n = _normalise_symbol(sym1)
-                                s2n = _normalise_symbol(sym2)
-                                if live_map.get(s1n) or live_map.get(s2n):
-                                    log.error(
-                                        "BOT ORPHAN | cfg=%s | %s/%s — DB position gone but "
-                                        "exchange position still open! Manual close required.",
-                                        cid, sym1, sym2,
-                                    )
-                                    asyncio.create_task(
-                                        tg_bot.notify_reconcile_mismatch(
-                                            f"{sym1}/{sym2} (BOT ORPHAN)"
-                                        )
-                                    )
-                            except Exception as _oe:
-                                log.warning("BOT ORPHAN check failed cfg=%s: %s", cid, _oe)
                         _signal_first_seen.pop(cid, None)
                         _bot_signal_seen_at.pop(cid, None)
                         continue
@@ -1461,6 +1600,7 @@ async def _reconcile_on_startup() -> None:
 
 
 async def lifespan(app: FastAPI):
+    _acquire_instance_lock()
     db.init_db()
     await tg_bot.setup()
     await _user_data_feed.start()  # no-op if no API credentials
@@ -1488,6 +1628,7 @@ async def lifespan(app: FastAPI):
     await price_cache.stop_all()
     await client.close()
     await tg_bot.stop()
+    _release_instance_lock()
     log.info("Pair Trading backend stopped")
 
 

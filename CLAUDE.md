@@ -65,7 +65,7 @@ pair_trading/
 │   └── logger.py            # RotatingFileHandler → logs/pair_trading.log (10 MB × 5)
 ├── frontend/
 │   └── index.html           # Single-file UI (Tailwind + Chart.js, no build step)
-├── tests/                   # 334 tests (see Tests section)
+├── tests/                   # 368 tests (see Tests section)
 ├── pair_trading.db          # SQLite trade journal (auto-created)
 ├── .env                     # API keys (not committed)
 └── .venv/                   # Python virtual environment
@@ -90,7 +90,7 @@ Open `http://localhost:8080` in browser — FastAPI serves `frontend/index.html`
 
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 310 tests
+.venv/bin/pytest tests/ -v        # all 368 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -341,6 +341,7 @@ State machine: `PLACING → PASSIVE → AGGRESSIVE → FORCING → OPEN` or `→
 - `clientOrderId = PT_{pos_id}_{leg}_{uuid8}` (max 36 chars) on every order — **unique per placement** (fresh UUID each call, not per-execution constant); prevents Binance stale cache returns; for crash recovery via `_reconcile_on_startup`
 - DUST flush after close: `reduceOnly` market order for remainder; recalculates `leg.avg_price` as weighted average before saving PnL
 - Commission: `LegState.commission` uses `max(self.commission, incoming)` — UserDataFeed stores cumulative per order; safe for both WS and REST sources
+- **Partial fills must be cumulative across reprices**: when a leg is partially filled and a new order is placed only for the residual amount, never let `filled` move backwards to `0` just because the new order starts fresh. `LegState.absorb_order()` must preserve cumulative filled qty across old and new order IDs. This applies to regular open, smart close, and averaging.
 - `DUST` = remaining qty below exchange minimum; partial fill accepted, no new order for residual
 - `_fetch_orderbooks` — prefers `BookTickerFeed.get_best()`, REST fallback; `_refresh_fills` — prefers UserDataFeed WS snapshot, REST fallback
 - `active_executions` in `main.py`: terminal entries cleaned after 2h TTL; persisted to `execution_history` before cleanup via `_exec_saved_to_db` set
@@ -403,12 +404,14 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 - **`monitor_auto_trading` stale `cfg` snapshot causes wrong bot status**: `active_cfgs` is loaded once per cycle; `cfg["last_close_reason"]` can be None if `monitor_position_triggers` set it after the snapshot. Fix: when `pos is None` in `in_position` branch, reload via `db.get_bot_config_by_pair(sym1, sym2)` before reading `last_close_reason` — otherwise bot always goes `paused_after_sl` instead of `waiting` when TP fires.
 - **Orphaned exchange position after stale deletion**: when bot goes to `paused_after_sl` and DB position is gone, `monitor_auto_trading` now calls `client.get_positions()` and logs `BOT ORPHAN` error + Telegram alert if exchange still holds the position. This guards against manual close being required on exchange.
 - **Stored `hedge_ratio` drift causes false TP**: `pos["hedge_ratio"]` is saved at entry time. Even minutes later, fresh OLS gives a different β → different z. If monitor uses stored β but bot ticker uses fresh OLS, they compute different z-scores — monitor can see `abs_z < tp` when chart shows `abs_z >> tp` → premature TP fires. Always use fresh OLS in monitor.
+- **Partial fill lost after reprice → orphan tail on exchange**: confirmed runtime bug. Pattern: leg gets a small partial fill (for example `0.007`), then the old order is cancelled and a new residual order is placed for `0.414`; if code reads only the new order snapshot, `filled` may reset to `0`, so later smart close closes only `0.414` and leaves `0.007` on Binance. Fix: keep `filled` cumulative in `LegState.absorb_order()` and derive progress from the leg target qty, not just the latest order snapshot. If a future bug report mentions `qty mismatch`, `BOT ORPHAN`, or a tiny leftover one-leg position, inspect this path first.
+- **Averaging uses the same fill accounting path as normal open/close**: `is_average=True` still goes through `run_execution()` and `LegState.absorb_order()`. Any change to partial-fill handling must be validated not only for open/close, but also for averaging followed by TP/SL close of the whole accumulated position.
 
 ## Tests (`tests/`)
 
-367 unit tests, all pass in ~7s. Run: `.venv/bin/pytest tests/ -v`
+368 unit tests, all pass in ~7s. Run: `.venv/bin/pytest tests/ -v`
 
-- `test_strategy.py`(41), `test_db.py`(103), `test_helpers.py`(26), `test_order_manager.py`(18), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(70), `test_lifespan.py`(5), `test_bot_monitor.py`(46), `test_user_data_feed.py`(19), `test_symbol_helpers.py`(14)
+- `test_strategy.py`(41), `test_db.py`(103), `test_helpers.py`(26), `test_order_manager.py`(19), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(70), `test_lifespan.py`(5), `test_bot_monitor.py`(46), `test_user_data_feed.py`(19), `test_symbol_helpers.py`(14)
 - `conftest.py`: `tmp_db` fixture — `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test
 - **`main.py` cannot be imported in tests** — side effects at import time (BinanceClient, PriceCache, .env). Test pure helpers by copying logic inline with a comment, as done in `test_symbol_helpers.py`.
 

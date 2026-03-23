@@ -1,12 +1,16 @@
 """
 SQLite persistence for open positions and closed trade history.
 """
+import json
 import sqlite3
 import os
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "pair_trading.db")
+_DEBUG_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", ".cursor", "debug-342352.log")
+_DEBUG_SESSION_ID = "342352"
 
 
 def _conn() -> sqlite3.Connection:
@@ -14,6 +18,23 @@ def _conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": _DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True, default=str) + "\n")
+    except Exception:
+        pass
 
 
 def init_db() -> None:
@@ -228,6 +249,23 @@ def save_open_position(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+        # region agent log
+        _debug_log(
+            run_id="initial-debug",
+            hypothesis_id="H5",
+            location="backend/db.py:save-open-position",
+            message="Saved open position row",
+            data={
+                "position_id": cur.lastrowid,
+                "symbol1": symbol1,
+                "symbol2": symbol2,
+                "side": side,
+                "qty1": qty1,
+                "qty2": qty2,
+                "foreign_keys": conn.execute("PRAGMA foreign_keys").fetchone()[0],
+            },
+        )
+        # endregion
         return cur.lastrowid
 
 
@@ -244,6 +282,21 @@ def close_position(
         row = conn.execute(
             "SELECT * FROM open_positions WHERE id = ?", (position_id,)
         ).fetchone()
+        # region agent log
+        _debug_log(
+            run_id="initial-debug",
+            hypothesis_id="H6",
+            location="backend/db.py:close-position",
+            message="close_position called",
+            data={
+                "position_id": position_id,
+                "row_found": bool(row),
+                "exit_zscore": exit_zscore,
+                "pnl": pnl,
+                "commission": commission,
+            },
+        )
+        # endregion
         if not row:
             return False
 
@@ -283,6 +336,24 @@ def find_open_position(symbol1: str, symbol2: str) -> Optional[dict]:
             """,
             (symbol1, symbol2),
         ).fetchone()
+        if row is None and symbol1 == "SOL/USDC" and symbol2 == "LTC/USDC":
+            all_rows = conn.execute(
+                "SELECT id, symbol1, symbol2, status, opened_at FROM open_positions ORDER BY id DESC LIMIT 5"
+            ).fetchall()
+            # region agent log
+            _debug_log(
+                run_id="initial-debug",
+                hypothesis_id="H5,H6",
+                location="backend/db.py:find-open-position-miss",
+                message="find_open_position miss for monitored pair",
+                data={
+                    "lookup_symbol1": symbol1,
+                    "lookup_symbol2": symbol2,
+                    "foreign_keys": conn.execute("PRAGMA foreign_keys").fetchone()[0],
+                    "recent_open_positions": [dict(r) for r in all_rows],
+                },
+            )
+            # endregion
         return dict(row) if row else None
 
 
@@ -828,7 +899,7 @@ def set_bot_status(config_id: int, status: str) -> bool:
         return cur.rowcount > 0
 
 
-def set_bot_close_reason(config_id: int, reason: str) -> bool:
+def set_bot_close_reason(config_id: int, reason: Optional[str]) -> bool:
     """Write last_close_reason before a position is closed by monitor_position_triggers."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as conn:
