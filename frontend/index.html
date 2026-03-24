@@ -452,6 +452,7 @@
       bot_sl_smart: 'Smart execution SL',
       bot_confirmation: 'Signal confirmation',
       bot_confirmation_unit: 'min',
+      bot_entry_only_hint: 'Leave TP and SL empty to use the bot only for entry.',
       bot_signal_since: '⏱ signal since',
       bot_avg_levels: 'Averaging',
       bot_avg_add: '+ Level',
@@ -725,6 +726,7 @@
       bot_sl_smart: 'Смарт-исполнение SL',
       bot_confirmation: 'Подтверждение сигнала',
       bot_confirmation_unit: 'мин',
+      bot_entry_only_hint: 'Оставьте TP и SL пустыми, если бот должен только открывать позицию.',
       bot_signal_since: '⏱ сигнал с',
       bot_avg_levels: 'Усреднение',
       bot_avg_add: '+ Уровень',
@@ -1856,6 +1858,8 @@ function _watchlistItemHasAlert(w, alerts) {
 function openBotConfigModal(wlItem, existingCfg) {
   const tp = existingCfg ? existingCfg.tp_zscore : (parseFloat(wlItem.exit_z) || 0.5);
   const sl = existingCfg ? existingCfg.sl_zscore : ((parseFloat(wlItem.entry_z) || 2.0) * 2);
+  const tpValue = tp == null ? '' : tp;
+  const slValue = sl == null ? '' : sl;
   const tpSmart = existingCfg ? !!existingCfg.tp_smart : true;
   const slSmart = existingCfg ? !!existingCfg.sl_smart : true;
   const confMin = existingCfg ? (existingCfg.confirmation_minutes || 0) : 0;
@@ -1897,12 +1901,13 @@ function openBotConfigModal(wlItem, existingCfg) {
       <div class="space-y-2">
         <div class="flex justify-between items-center">
           <label class="text-gray-300">${t('bot_tp')}</label>
-          <input id="bot-tp" type="number" step="0.1" value="${tp}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm">
+          <input id="bot-tp" type="number" step="0.1" value="${tpValue}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm">
         </div>
         <div class="flex justify-between items-center">
           <label class="text-gray-300">${t('bot_sl')}</label>
-          <input id="bot-sl" type="number" step="0.1" value="${sl}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm">
+          <input id="bot-sl" type="number" step="0.1" value="${slValue}" class="w-20 bg-gray-700 text-white rounded px-2 py-1 text-sm">
         </div>
+        <div class="text-[11px] leading-snug text-gray-400">${t('bot_entry_only_hint')}</div>
         <div class="flex justify-between items-center">
           <label class="text-gray-300">${t('bot_tp_smart')}</label>
           <input id="bot-tp-smart" type="checkbox" ${tpSmart ? 'checked' : ''}>
@@ -1962,8 +1967,10 @@ function addAvgLevelRow() {
 
 async function saveBotConfig(wlId, existingCfgId) {
   const wlItem = window._botModalWlItem;
-  const tp = parseFloat(document.getElementById('bot-tp').value);
-  const sl = parseFloat(document.getElementById('bot-sl').value);
+  const _tpRaw = document.getElementById('bot-tp').value.trim();
+  const _slRaw = document.getElementById('bot-sl').value.trim();
+  const tp = _tpRaw === '' ? null : parseFloat(_tpRaw);
+  const sl = _slRaw === '' ? null : parseFloat(_slRaw);
   const tpSmart = document.getElementById('bot-tp-smart').checked;
   const slSmart = document.getElementById('bot-sl-smart').checked;
   const confMin = parseInt(document.getElementById('bot-conf-min').value) || 0;
@@ -2979,16 +2986,25 @@ function _updateZScorePnlLabel(z) {
 }
 
 function _getBotLinesForCurrentPair() {
-  if (!state.sym1 || !state.sym2) return null;
-  const cfg = _cachedBotConfigs.find(c =>
-    c.symbol1 === state.sym1 && c.symbol2 === state.sym2 &&
-    c.status !== 'disabled'
-  );
+  const _botNorm = s => (s || '').split(':')[0].replace('/', '').toUpperCase().replace(/USDT$|USDC$/, '');
+  const curSym1 = _botNorm(document.getElementById('sym1-input')?.value || '');
+  const curSym2 = _botNorm(document.getElementById('sym2-input')?.value || '');
+  const curTf = state.timeframe || '1h';
+  if (!curSym1 || !curSym2) return null;
+
+  const cfg = _cachedBotConfigs.find(c => {
+    if (c.status === 'disabled') return false;
+    const wl = _watchlistItems.find(w => w.id === c.watchlist_id);
+    if (!wl) return false;
+    return _botNorm(wl.sym1 || wl.symbol1 || '') === curSym1
+      && _botNorm(wl.sym2 || wl.symbol2 || '') === curSym2
+      && (wl.timeframe || '1h') === curTf;
+  });
   if (!cfg) return null;
   const avgLevels = cfg.avg_levels_json ? JSON.parse(cfg.avg_levels_json) : [];
   return {
-    tp: cfg.tp_zscore,
-    sl: cfg.sl_zscore,
+    tp: Number.isFinite(cfg.tp_zscore) ? cfg.tp_zscore : null,
+    sl: Number.isFinite(cfg.sl_zscore) ? cfg.sl_zscore : null,
     avgZscores: avgLevels.map(l => l.z),
   };
 }
@@ -3023,7 +3039,8 @@ function renderSpreadChart(data) {
     }
   }
 
-  // Build chart annotations — bot lines override watchlist lines when bot is active
+  // Build chart annotations — keep the base watchlist entry/exit lines visible
+  // and overlay bot-specific TP/SL/averaging lines when auto-trading is active.
   const _botLines = _getBotLinesForCurrentPair();
   const _chartAnnotations = {
     zero: { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, borderColor: 'rgba(139,148,158,0.3)', borderWidth: 1 },
@@ -3031,23 +3048,31 @@ function renderSpreadChart(data) {
     tpLow:  { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(63,185,80,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
     slHigh: { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3], label: { content: 'SL', enabled: true, position: 'start', color: '#f85149', font: { size: 10 } } },
     slLow:  { type: 'line', yScaleID: 'yZ', yMin: 0, yMax: 0, display: false, borderColor: 'rgba(248,81,73,0.9)',  borderWidth: 1.5, borderDash: [6,3] },
+    entryHigh: { type: 'line', yScaleID: 'yZ', yMin: entryZ,  yMax: entryZ,  borderColor: 'rgba(248,81,73,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `+${entryZ}σ`, enabled: true, position: 'end', color: '#f85149', font: { size: 10 } } },
+    entryLow:  { type: 'line', yScaleID: 'yZ', yMin: -entryZ, yMax: -entryZ, borderColor: 'rgba(63,185,80,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `-${entryZ}σ`, enabled: true, position: 'end', color: '#3fb950', font: { size: 10 } } },
+    exitHigh:  { type: 'line', yScaleID: 'yZ', yMin: exitZ,   yMax: exitZ,   borderColor: 'rgba(248,81,73,0.35)', borderWidth: 1, borderDash: [2,4] },
+    exitLow:   { type: 'line', yScaleID: 'yZ', yMin: -exitZ,  yMax: -exitZ,  borderColor: 'rgba(63,185,80,0.35)', borderWidth: 1, borderDash: [2,4] },
   };
   if (_botLines) {
-    // Bot active — show TP/SL/avg lines, hide watchlist entry/exit lines
-    [_botLines.tp, -_botLines.tp].forEach(val => {
-      _chartAnnotations[`bot_tp_${val}`] = {
-        type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
-        borderColor: '#22c55e', borderWidth: 1, borderDash: [4, 4],
-        label: { display: false },
-      };
-    });
-    [_botLines.sl, -_botLines.sl].forEach(val => {
-      _chartAnnotations[`bot_sl_${val}`] = {
-        type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
-        borderColor: '#ef4444', borderWidth: 1, borderDash: [4, 4],
-        label: { display: false },
-      };
-    });
+    // Bot active — overlay TP/SL/avg lines on top of the base watchlist lines
+    if (Number.isFinite(_botLines.tp)) {
+      [_botLines.tp, -_botLines.tp].forEach(val => {
+        _chartAnnotations[`bot_tp_${val}`] = {
+          type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
+          borderColor: '#22c55e', borderWidth: 1, borderDash: [4, 4],
+          label: { display: false },
+        };
+      });
+    }
+    if (Number.isFinite(_botLines.sl)) {
+      [_botLines.sl, -_botLines.sl].forEach(val => {
+        _chartAnnotations[`bot_sl_${val}`] = {
+          type: 'line', yScaleID: 'yZ', yMin: val, yMax: val,
+          borderColor: '#ef4444', borderWidth: 1, borderDash: [4, 4],
+          label: { display: false },
+        };
+      });
+    }
     _botLines.avgZscores.forEach((z, idx) => {
       [z, -z].forEach(val => {
         _chartAnnotations[`bot_avg_${idx}_${val}`] = {
@@ -3057,12 +3082,6 @@ function renderSpreadChart(data) {
         };
       });
     });
-  } else {
-    // Bot inactive — show watchlist entry/exit lines
-    _chartAnnotations.entryHigh = { type: 'line', yScaleID: 'yZ', yMin: entryZ,  yMax: entryZ,  borderColor: 'rgba(248,81,73,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `+${entryZ}σ`, enabled: true, position: 'end', color: '#f85149', font: { size: 10 } } };
-    _chartAnnotations.entryLow  = { type: 'line', yScaleID: 'yZ', yMin: -entryZ, yMax: -entryZ, borderColor: 'rgba(63,185,80,0.7)',  borderWidth: 1, borderDash: [4,4], label: { content: `-${entryZ}σ`, enabled: true, position: 'end', color: '#3fb950', font: { size: 10 } } };
-    _chartAnnotations.exitHigh  = { type: 'line', yScaleID: 'yZ', yMin: exitZ,   yMax: exitZ,   borderColor: 'rgba(248,81,73,0.35)', borderWidth: 1, borderDash: [2,4] };
-    _chartAnnotations.exitLow   = { type: 'line', yScaleID: 'yZ', yMin: -exitZ,  yMax: -exitZ,  borderColor: 'rgba(63,185,80,0.35)', borderWidth: 1, borderDash: [2,4] };
   }
 
   state.spreadChart = new Chart(ctx, {

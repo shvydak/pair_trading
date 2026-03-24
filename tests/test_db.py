@@ -2,6 +2,8 @@
 Unit tests for db.py — SQLite persistence layer.
 Each test gets a fresh temp database via the `tmp_db` fixture (see conftest.py).
 """
+import json
+
 import pytest
 
 
@@ -1150,6 +1152,97 @@ def test_save_bot_config_upsert(tmp_db):
     configs = tmp_db.get_bot_configs()
     assert len(configs) == 1
     assert configs[0]["tp_zscore"] == 1.0
+
+
+def test_save_bot_config_allows_null_tp_and_sl(tmp_db):
+    """Bot config may be used as entry-only automation without TP/SL."""
+    wl_id = _save_wl(tmp_db)
+    cfg_id = tmp_db.save_bot_config(
+        watchlist_id=wl_id,
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        tp_zscore=None,
+        sl_zscore=None,
+    )
+    cfg = tmp_db.get_bot_config_by_pair("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert cfg_id >= 1
+    assert cfg["tp_zscore"] is None
+    assert cfg["sl_zscore"] is None
+
+
+def test_save_bot_config_upsert_can_clear_tp_and_sl(tmp_db):
+    """Existing numeric TP/SL can be cleared back to NULL."""
+    wl_id = _save_wl(tmp_db)
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id,
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5,
+        sl_zscore=4.0,
+    )
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id,
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        tp_zscore=None,
+        sl_zscore=None,
+    )
+    cfg = tmp_db.get_bot_config_by_pair("BTC/USDT:USDT", "ETH/USDT:USDT")
+    assert cfg["tp_zscore"] is None
+    assert cfg["sl_zscore"] is None
+
+
+def test_save_bot_config_sorts_avg_levels_by_z(tmp_db):
+    """Averaging levels should execute from the nearest valid level outward."""
+    wl_id = _save_wl(tmp_db)
+    tmp_db.save_bot_config(
+        watchlist_id=wl_id,
+        symbol1="BTC/USDT:USDT",
+        symbol2="ETH/USDT:USDT",
+        tp_zscore=0.5,
+        sl_zscore=4.0,
+        avg_levels_json=json.dumps([
+            {"z": 3.2, "size_usd": 300},
+            {"z": 2.4, "size_usd": 150},
+            {"z": 2.8, "size_usd": 200},
+        ]),
+    )
+    cfg = tmp_db.get_bot_config_by_pair("BTC/USDT:USDT", "ETH/USDT:USDT")
+    levels = json.loads(cfg["avg_levels_json"])
+    assert [lvl["z"] for lvl in levels] == [2.4, 2.8, 3.2]
+
+
+def test_save_bot_config_rejects_avg_level_not_above_entry_z(tmp_db):
+    """Averaging must happen beyond the entry threshold, not immediately after open."""
+    wl_id = _save_wl(tmp_db)
+    with pytest.raises(ValueError, match="strictly greater than Entry Z"):
+        tmp_db.save_bot_config(
+            watchlist_id=wl_id,
+            symbol1="BTC/USDT:USDT",
+            symbol2="ETH/USDT:USDT",
+            tp_zscore=0.5,
+            sl_zscore=4.0,
+            avg_levels_json=json.dumps([
+                {"z": 1.9, "size_usd": 200},
+            ]),
+        )
+
+
+def test_save_bot_config_rejects_duplicate_avg_levels(tmp_db):
+    """Duplicate z-levels can cause repeated averaging at the same threshold."""
+    wl_id = _save_wl(tmp_db)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        tmp_db.save_bot_config(
+            watchlist_id=wl_id,
+            symbol1="BTC/USDT:USDT",
+            symbol2="ETH/USDT:USDT",
+            tp_zscore=0.5,
+            sl_zscore=4.0,
+            avg_levels_json=json.dumps([
+                {"z": 2.5, "size_usd": 150},
+                {"z": 2.5, "size_usd": 250},
+            ]),
+        )
 
 
 def test_set_bot_status(tmp_db):

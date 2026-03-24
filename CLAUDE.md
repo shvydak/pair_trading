@@ -36,8 +36,7 @@ A hookify rule (`check-context7-docs`) will remind you automatically when editin
 
 ## Changelog
 
-This file needs to be updated with the latest bugs and fixes.
-Changes history: [`CHANGELOG.md`](CHANGELOG.md)
+Record user-visible fixes and notable behavior changes in [`CHANGELOG.md`](CHANGELOG.md) when you ship them; keep CLAUDE.md aligned when architecture or workflows change.
 
 ## Key Architecture Docs
 
@@ -65,7 +64,7 @@ pair_trading/
 │   └── logger.py            # RotatingFileHandler → logs/pair_trading.log (10 MB × 5)
 ├── frontend/
 │   └── index.html           # Single-file UI (Tailwind + Chart.js, no build step)
-├── tests/                   # 368 tests (see Tests section)
+├── tests/                   # 375 tests (see Tests section)
 ├── pair_trading.db          # SQLite trade journal (auto-created)
 ├── .env                     # API keys (not committed)
 └── .venv/                   # Python virtual environment
@@ -90,7 +89,7 @@ Open `http://localhost:8080` in browser — FastAPI serves `frontend/index.html`
 
 ```bash
 cd /Users/y.shvydak/Projects/pair_trading
-.venv/bin/pytest tests/ -v        # all 368 tests
+.venv/bin/pytest tests/ -v        # all 375 tests
 .venv/bin/pytest tests/test_strategy.py -v   # strategy math only
 ```
 
@@ -99,7 +98,7 @@ cd /Users/y.shvydak/Projects/pair_trading
 Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed by Homebrew and blocks system-wide installs.
 
 ```bash
-.venv/bin/pip install <package>   # add to requirements.txt afterwards
+.venv/bin/pip install <package>   # add to backend/requirements.txt afterwards
 ```
 
 ## API Endpoints
@@ -136,7 +135,7 @@ Always use `.venv/bin/python` and `.venv/bin/pip` — system Python is managed b
 | POST | `/api/watchlist/data` | Subscribe pairs to PriceCache; return current z-score + spread (legacy HTTP fallback) |
 | POST | `/api/batch/sparklines` | Batch z-score/spread for multiple positions; uses PriceCache when available |
 | GET | `/api/bot/configs` | All bot configs (enriched with `signal_first_seen_at` from memory) |
-| POST | `/api/bot/configs` | Create or update bot config (upsert by `watchlist_id`) |
+| POST | `/api/bot/configs` | Create or update bot config (upsert by `watchlist_id`); `tp_zscore` / `sl_zscore` optional — omit or null both for entry-only |
 | DELETE | `/api/bot/configs/{id}` | Delete bot config |
 | PATCH | `/api/bot/configs/{id}/enable` | Set bot status = `waiting` |
 | PATCH | `/api/bot/configs/{id}/disable` | Set bot status = `disabled` |
@@ -193,6 +192,7 @@ Three-panel trading terminal:
 - `watchlist` SQLite table — stores all analysis parameters per pair; managed via `GET/POST/DELETE /api/watchlist`; `_watchlistItems` in-memory array populated on page load via `initWatchlist()`
 - **Startup**: `Promise.all([initWatchlist(), refreshTriggersCache(), refreshBotConfigs()])` then `renderWatchlist()` + `connectWatchlistWS()` — alert list and bot configs must load before first paint
 - **BOT badge**: `_cachedBotConfigs` — fetched via `refreshBotConfigs()` → `GET /api/bot/configs`; matched to watchlist row by `watchlist_id` (not symbol pair); refreshed every 5s in `loadAllPositions()`; after save/toggle call `renderSpreadChart(state.historyData)` to update chart annotations
+- **Spread chart bot overlay**: `renderSpreadChart()` always draws watchlist **entry/exit** z-lines; bot **TP/SL** and **averaging** levels are **added on top** (not a replacement). `_getBotLinesForCurrentPair()` resolves the active bot row by **normalized symbols from the symbol inputs** + matching **watchlist row** (`watchlist_id`) + **timeframe** — do not use `state.sym1`/`state.sym2` (they are not set on `state`)
 - **Dedup key**: `(sym1, sym2, timeframe)` — same pair with different timeframe stored as separate entry; adding BTC/ETH 5m does not overwrite BTC/ETH 4h
 - **Grouping by timeframe** in `renderWatchlist()`: section headers, order 5m→15m→30m→1h→2h→4h→8h→1d
 - **Telegram alert (🔔)**: `addAlertTrigger` / `addAlertFromPanel` → `POST /api/triggers` with `candle_limit` (from row `limit` or `#limit-input`). `_watchlistItemHasAlert(w, _cachedAlerts)` — bell stays visible (yellow, always-on opacity) when an active `type=alert` matches the row: normalised sym pair, `timeframe`, `zscore_window`, entry Z (`|tr.zscore|` ≈ `entryZ`), and `candle_limit` when both row and trigger have it. After add/cancel alert: `loadAlertsTab()` (or equivalent cache refresh) + `renderWatchlist()`. i18n: `wl_alert_btn`, `wl_alert_active`
@@ -309,7 +309,7 @@ Centralised pair-level cache, assembled from SymbolFeed buffers. Single source o
 
 - DB file: `pair_trading.db` (project root, auto-created on first run via `db.init_db()` in lifespan)
 - **Eight tables**: `open_positions`, `closed_trades`, `triggers`, `execution_history`, `position_legs`, `funding_history`, `watchlist`, `bot_configs`
-- `bot_configs` — per-pair auto-trading config; `UNIQUE(watchlist_id)`, `ON DELETE CASCADE`; statuses: `disabled` | `waiting` | `in_position` | `paused_after_sl`; `last_close_reason` written by `monitor_position_triggers` before closing; `avg_in_progress` flag blocks TP/SL during averaging
+- `bot_configs` — per-pair auto-trading config; `UNIQUE(watchlist_id)`, `ON DELETE CASCADE`; statuses: `disabled` | `waiting` | `in_position` | `paused_after_sl`; `last_close_reason` written by `monitor_position_triggers` before closing; `avg_in_progress` flag blocks TP/SL during averaging; **`tp_zscore` / `sl_zscore` nullable** — both empty = entry-only (monitor skips TP/SL close for that config); **`avg_levels_json`**: `normalize_avg_levels_json` on save (sorted by z, strictly increasing, each `z > entry_z` from watchlist, positive sizes); `parse_avg_levels_json` in `monitor_auto_trading` tolerates legacy invalid JSON
 - `_conn()` includes `PRAGMA foreign_keys = ON` — required for `ON DELETE CASCADE`; must be kept
 - **Enriching DB rows in endpoints**: `sqlite3.Row` is read-only — convert first: `[dict(c) for c in db.get_X()]`, then add fields
 - Watchlist functions: `get_watchlist()`, `save_watchlist_item(...)` → id (upsert by sym1+sym2+timeframe), `delete_watchlist_item(id)` → bool, `update_watchlist_stats(item_id, half_life, hurst, corr, pval)` — called after each analysis to persist computed stats
@@ -409,9 +409,9 @@ Notification functions: `notify_position_opened`, `notify_position_closed`, `not
 
 ## Tests (`tests/`)
 
-368 unit tests, all pass in ~7s. Run: `.venv/bin/pytest tests/ -v`
+375 unit tests, all pass in ~5–7s (machine-dependent). Run: `.venv/bin/pytest tests/ -v`
 
-- `test_strategy.py`(41), `test_db.py`(103), `test_helpers.py`(26), `test_order_manager.py`(19), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(70), `test_lifespan.py`(5), `test_bot_monitor.py`(46), `test_user_data_feed.py`(19), `test_symbol_helpers.py`(14)
+- `test_strategy.py`(41), `test_db.py`(119), `test_helpers.py`(26), `test_order_manager.py`(17), `test_price_cache.py`(35), `test_symbol_feed.py`(15), `test_watchlist.py`(8), `test_telegram_bot.py`(71), `test_lifespan.py`(5), `test_bot_monitor.py`(5), `test_user_data_feed.py`(17), `test_symbol_helpers.py`(16)
 - `conftest.py`: `tmp_db` fixture — `monkeypatch.setattr(db, "DB_PATH", tmp_path/"test.db")` + `db.init_db()` — isolated DB per test
 - **`main.py` cannot be imported in tests** — side effects at import time (BinanceClient, PriceCache, .env). Test pure helpers by copying logic inline with a comment, as done in `test_symbol_helpers.py`.
 

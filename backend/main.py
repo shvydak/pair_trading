@@ -1452,10 +1452,7 @@ async def monitor_auto_trading() -> None:
                     # Check averaging
                     avg_levels_raw = cfg.get("avg_levels_json")
                     if avg_levels_raw and not cfg.get("avg_in_progress"):
-                        try:
-                            avg_levels = json.loads(avg_levels_raw)
-                        except Exception:
-                            avg_levels = []
+                        avg_levels = db.parse_avg_levels_json(avg_levels_raw, entry_z, strict=False)
                         current_level = cfg.get("current_avg_level") or 0
                         if current_level < len(avg_levels):
                             next_level = avg_levels[current_level]
@@ -2390,8 +2387,8 @@ class BotConfigRequest(BaseModel):
     watchlist_id: int
     symbol1: str
     symbol2: str
-    tp_zscore: float
-    sl_zscore: float
+    tp_zscore: Optional[float] = None
+    sl_zscore: Optional[float] = None
     tp_smart: bool = True
     sl_smart: bool = True
     confirmation_minutes: int = 0
@@ -2410,17 +2407,20 @@ async def list_bot_configs():
 @app.post("/api/bot/configs")
 async def upsert_bot_config(req: BotConfigRequest):
     """Upsert a bot config."""
-    cfg_id = db.save_bot_config(
-        watchlist_id=req.watchlist_id,
-        symbol1=_normalise_symbol(req.symbol1),
-        symbol2=_normalise_symbol(req.symbol2),
-        tp_zscore=req.tp_zscore,
-        sl_zscore=req.sl_zscore,
-        tp_smart=req.tp_smart,
-        sl_smart=req.sl_smart,
-        confirmation_minutes=req.confirmation_minutes,
-        avg_levels_json=req.avg_levels_json,
-    )
+    try:
+        cfg_id = db.save_bot_config(
+            watchlist_id=req.watchlist_id,
+            symbol1=_normalise_symbol(req.symbol1),
+            symbol2=_normalise_symbol(req.symbol2),
+            tp_zscore=req.tp_zscore,
+            sl_zscore=req.sl_zscore,
+            tp_smart=req.tp_smart,
+            sl_smart=req.sl_smart,
+            confirmation_minutes=req.confirmation_minutes,
+            avg_levels_json=req.avg_levels_json,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"id": cfg_id}
 
 

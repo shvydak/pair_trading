@@ -156,8 +156,8 @@ def init_db() -> None:
                 symbol2              TEXT NOT NULL,
                 status               TEXT NOT NULL DEFAULT 'disabled',
                 last_close_reason    TEXT,
-                tp_zscore            REAL NOT NULL,
-                sl_zscore            REAL NOT NULL,
+                tp_zscore            REAL,
+                sl_zscore            REAL,
                 tp_smart             INTEGER NOT NULL DEFAULT 1,
                 sl_smart             INTEGER NOT NULL DEFAULT 1,
                 confirmation_minutes INTEGER NOT NULL DEFAULT 0,
@@ -203,6 +203,58 @@ def _migrate() -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
             except Exception:
                 pass  # column already exists
+        _migrate_bot_configs_nullable_thresholds(conn)
+
+
+def _migrate_bot_configs_nullable_thresholds(conn: sqlite3.Connection) -> None:
+    """Rebuild legacy bot_configs table so TP/SL can be nullable."""
+    try:
+        cols = conn.execute("PRAGMA table_info(bot_configs)").fetchall()
+    except Exception:
+        return
+    if not cols:
+        return
+
+    notnull_map = {row["name"]: int(row["notnull"]) for row in cols}
+    if not (notnull_map.get("tp_zscore") or notnull_map.get("sl_zscore")):
+        return
+
+    conn.executescript("""
+        ALTER TABLE bot_configs RENAME TO bot_configs_old;
+
+        CREATE TABLE bot_configs (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchlist_id         INTEGER REFERENCES watchlist(id) ON DELETE CASCADE,
+            symbol1              TEXT NOT NULL,
+            symbol2              TEXT NOT NULL,
+            status               TEXT NOT NULL DEFAULT 'disabled',
+            last_close_reason    TEXT,
+            tp_zscore            REAL,
+            sl_zscore            REAL,
+            tp_smart             INTEGER NOT NULL DEFAULT 1,
+            sl_smart             INTEGER NOT NULL DEFAULT 1,
+            confirmation_minutes INTEGER NOT NULL DEFAULT 0,
+            avg_levels_json      TEXT,
+            current_avg_level    INTEGER NOT NULL DEFAULT 0,
+            avg_in_progress      INTEGER NOT NULL DEFAULT 0,
+            created_at           TEXT NOT NULL,
+            updated_at           TEXT NOT NULL,
+            UNIQUE(watchlist_id)
+        );
+
+        INSERT INTO bot_configs (
+            id, watchlist_id, symbol1, symbol2, status, last_close_reason,
+            tp_zscore, sl_zscore, tp_smart, sl_smart, confirmation_minutes,
+            avg_levels_json, current_avg_level, avg_in_progress, created_at, updated_at
+        )
+        SELECT
+            id, watchlist_id, symbol1, symbol2, status, last_close_reason,
+            tp_zscore, sl_zscore, tp_smart, sl_smart, confirmation_minutes,
+            avg_levels_json, current_avg_level, avg_in_progress, created_at, updated_at
+        FROM bot_configs_old;
+
+        DROP TABLE bot_configs_old;
+    """)
 
 
 def save_open_position(
@@ -750,6 +802,16 @@ def get_watchlist() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_watchlist_item(item_id: int) -> Optional[dict]:
+    """Return one watchlist item by id, or None."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM watchlist WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def save_watchlist_item(
     symbol1: str,
     symbol2: str,
@@ -813,12 +875,75 @@ def update_watchlist_stats(item_id: int, half_life: Optional[float], hurst: Opti
 # bot_configs
 # ---------------------------------------------------------------------------
 
+def parse_avg_levels_json(
+    avg_levels_json: Optional[str],
+    entry_z: float,
+    *,
+    strict: bool = False,
+) -> list[dict]:
+    """Parse/sort averaging levels and optionally reject unsafe configs."""
+    if not avg_levels_json:
+        return []
+    try:
+        raw_levels = json.loads(avg_levels_json)
+    except Exception as e:
+        if strict:
+            raise ValueError("Averaging levels JSON is invalid.") from e
+        return []
+
+    if not isinstance(raw_levels, list):
+        if strict:
+            raise ValueError("Averaging levels must be a list.")
+        return []
+
+    cleaned: list[dict] = []
+    for item in raw_levels:
+        try:
+            z = float(item["z"])
+            size_usd = float(item["size_usd"])
+        except Exception as e:
+            if strict:
+                raise ValueError("Each averaging level must contain numeric z and size_usd.") from e
+            continue
+
+        if z <= 0 or size_usd <= 0:
+            if strict:
+                raise ValueError("Averaging levels must use positive z and size values.")
+            continue
+
+        cleaned.append({"z": z, "size_usd": size_usd})
+
+    cleaned.sort(key=lambda lvl: lvl["z"])
+
+    normalized: list[dict] = []
+    last_z = float(entry_z)
+    for lvl in cleaned:
+        if lvl["z"] <= float(entry_z):
+            if strict:
+                raise ValueError("Each averaging level must be strictly greater than Entry Z.")
+            continue
+        if lvl["z"] <= last_z:
+            if strict:
+                raise ValueError("Averaging levels must be strictly increasing.")
+            continue
+        normalized.append(lvl)
+        last_z = lvl["z"]
+
+    return normalized
+
+
+def normalize_avg_levels_json(avg_levels_json: Optional[str], entry_z: float, *, strict: bool = False) -> Optional[str]:
+    """Return normalized averaging JSON or None when no usable levels remain."""
+    levels = parse_avg_levels_json(avg_levels_json, entry_z, strict=strict)
+    return json.dumps(levels) if levels else None
+
+
 def save_bot_config(
     watchlist_id: int,
     symbol1: str,
     symbol2: str,
-    tp_zscore: float,
-    sl_zscore: float,
+    tp_zscore: Optional[float],
+    sl_zscore: Optional[float],
     tp_smart: int = 1,
     sl_smart: int = 1,
     confirmation_minutes: int = 0,
@@ -826,6 +951,9 @@ def save_bot_config(
 ) -> int:
     """Create or update bot config for a watchlist item. Returns id."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    wl = get_watchlist_item(watchlist_id)
+    entry_z = float((wl or {}).get("entry_z") or 2.0)
+    avg_levels_json = normalize_avg_levels_json(avg_levels_json, entry_z, strict=True)
     with _conn() as conn:
         conn.execute(
             """
