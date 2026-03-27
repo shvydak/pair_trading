@@ -25,7 +25,7 @@ The platform cannot use the exchange to determine qty or direction for a specifi
 One row per open pair trade. Contains: `symbol1`, `symbol2`, `side`, `qty1`, `qty2`,
 `entry_price1`, `entry_price2`, `entry_zscore`, `hedge_ratio`, `size_usd`, `leverage`,
 `timeframe`, `candle_limit`, `zscore_window`, `tp_zscore`, `sl_zscore`,
-`status`, `coint_pvalue`, `coint_checked_at`, `opened_at`.
+`tp_smart`, `sl_smart`, `status`, `coint_pvalue`, `coint_checked_at`, `opened_at`.
 
 **`status` values:**
 - `open` — active, normal position
@@ -46,6 +46,17 @@ Source: Binance `ACCOUNT_UPDATE` WebSocket events with `reason=FUNDING_FEE`.
 ### `closed_trades` — closed position archive
 Contains all fields from `open_positions` plus exit prices, exit_zscore, pnl,
 `commission`, `commission_asset`.
+
+### `bot_configs` — bot template/state, not the live position
+One row per watchlist item used by auto-trading. Stores:
+- Future bot settings for the pair: `tp_zscore`, `sl_zscore`, `tp_smart`, `sl_smart`
+- Bot lifecycle state: `status`, `last_close_reason`
+- Averaging plan/state: `avg_levels_json`, `current_avg_level`, `avg_in_progress`
+
+Important distinction:
+- `bot_configs` affects what the bot will do on the next open/adopt cycle
+- `open_positions` is what `monitor_position_triggers` reads for the current live position
+- Editing one does **not** automatically rewrite the other
 
 ---
 
@@ -172,6 +183,31 @@ Platform distributes proportionally: `share = amount * (notional_i / total_notio
 
 ## Background Tasks (`main.py`)
 
+### `monitor_position_triggers` — every 2 seconds
+Reads TP/SL from `open_positions` and standalone alert/trigger rows from `triggers`.
+
+Important current behavior:
+- Uses **fresh OLS hedge ratio** (`strategy.calculate_hedge_ratio`) every cycle
+  instead of the stored entry-time hedge ratio
+- TP/SL is direction-agnostic: TP when `abs(z)` shrinks to/below TP, SL when
+  `abs(z)` grows to/above SL
+- If bot averaging is in progress for the pair, TP/SL close is delayed for up to
+  70 seconds via `avg_in_progress`
+
+This is the monitor that governs the **current open position**.
+
+### `monitor_auto_trading` — every 2 seconds
+Manages bot entry detection, position adoption, and averaging for `bot_configs`.
+
+Important current behavior:
+- Handles entry and averaging only; exit logic is **not here**
+- When the bot opens a new position, it copies TP/SL from `bot_configs` into
+  `open_positions`
+- When the bot adopts an already-open DB position while status=`waiting`, it only
+  copies TP/SL from `bot_configs` if that position currently has no TP/SL set
+- `last_close_reason` is written before close and later used to decide whether the
+  bot returns to `waiting` (TP) or goes to `paused_after_sl` (SL/liquidation)
+
 ### `reconcile_positions` — every 5 minutes
 Compares DB open positions vs exchange positions.
 For each DB position: checks if both legs exist on exchange, compares qty.
@@ -199,6 +235,11 @@ Adding to an existing position uses `action="average"` in `POST /api/trade/smart
 - Adds a new row to `position_legs` tracking this entry separately
 - `qty1`/`qty2` in `open_positions` grow cumulatively
 
+Important consequence:
+- A later TP/SL close uses the **full accumulated** `qty1`/`qty2` from `open_positions`
+- So if a position was opened and then averaged once or multiple times, TP/SL is
+  intended to close the whole combined position, not just the latest add
+
 ---
 
 ## `find_open_position` Filter
@@ -217,6 +258,48 @@ Position row in the Positions tab shows:
 - **Funding sub-line** (PnL cell): `Funding: ±$X.XX` when `funding_total ≠ 0`
 
 All three update in-place every 5s via `GET /api/dashboard` (no full row rebuild).
+
+---
+
+## BOT Popup vs TP/SL in Position Row
+
+These are related, but they are **not the same control**.
+
+### BOT popup (`BOT` button)
+Writes to `bot_configs`.
+
+Use it to change:
+- Bot template TP/SL for future entries
+- Smart-vs-market close preference for bot-managed TP/SL
+- Confirmation timer
+- Averaging levels
+- Enable/disable bot state
+
+Important current behavior:
+- `tp_zscore` and `sl_zscore` in `bot_configs` are nullable
+- Leaving both empty means **entry-only bot**: the bot may open positions, but it
+  will not arm TP/SL for future positions unless values are set later
+- Saving BOT popup settings does **not** rewrite TP/SL of an already-open position
+
+### TP/SL inputs in the Positions row (`TP`, `SL`, `Set`, cancel badges)
+Writes directly to `open_positions` via `POST /api/db/positions/{id}/triggers`.
+
+Use it to change:
+- TP/SL of the **current live position**
+- Remove only TP, only SL, or both
+- Toggle smart close preference for the current position
+
+Important current behavior:
+- `monitor_position_triggers` reads these fields from `open_positions` every 2 seconds
+- So changing TP/SL here takes effect for the current position without waiting for
+  the next bot trade
+- These manual changes do **not** update the BOT template in `bot_configs`
+
+### Practical rule of thumb
+- Want to change the **current trade**? Edit TP/SL in the Positions row.
+- Want to change **future bot trades**? Edit the BOT popup.
+- After the current position fully closes, the next bot-opened trade will again get
+  TP/SL from `bot_configs`, not from whatever manual values were used on the old position.
 
 ---
 
