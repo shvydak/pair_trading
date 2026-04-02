@@ -1781,8 +1781,9 @@ async def get_history(
         now_mono = time.monotonic()
 
         def _compute_stats():
-            hr = strategy.calculate_hedge_ratio(price1, price2)
-            sp = strategy.calculate_spread(price1, price2, hr)
+            kalman_betas = strategy.calculate_kalman_hedge_series(price1, price2)
+            hr = float(kalman_betas.iloc[-1])  # scalar for API response / trading
+            sp = strategy.calculate_spread(price1, price2, kalman_betas)  # per-candle β
             zs = strategy.calculate_zscore(sp, window=zscore_window)
             # Use cached cointegration if still fresh (expensive test, changes slowly)
             if cached_coint and (now_mono - cached_coint[1]) < _COINT_TTL:
