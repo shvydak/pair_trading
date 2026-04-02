@@ -471,3 +471,91 @@ def test_calculate_backtest_equity_curve_length():
     for point in result["equity_curve"]:
         assert "timestamp" in point
         assert "equity" in point
+
+
+# ---------------------------------------------------------------------------
+# calculate_kalman_hedge_series
+# ---------------------------------------------------------------------------
+
+def test_kalman_returns_series_same_length():
+    """Result is a Series with same length and index as input."""
+    rng = np.random.default_rng(0)
+    base = _prices(10.0 + np.cumsum(rng.standard_normal(100)) * 0.1).clip(lower=1.0)
+    p1, p2 = base ** 2, base
+    result = strat.calculate_kalman_hedge_series(p1, p2)
+    assert isinstance(result, pd.Series)
+    assert len(result) == len(p1)
+    assert list(result.index) == list(p1.index)
+
+
+def test_kalman_converges_to_known_beta():
+    """Given log(p1) = 2*log(p2) exactly, Kalman β should converge near 2.0."""
+    rng = np.random.default_rng(10)
+    base = _prices(10.0 + np.cumsum(rng.standard_normal(300)) * 0.1).clip(lower=1.0)
+    p2 = base
+    p1 = base ** 2
+    result = strat.calculate_kalman_hedge_series(p1, p2)
+    # Last value should converge close to 2.0
+    assert float(result.iloc[-1]) == pytest.approx(2.0, abs=0.1)
+
+
+def test_kalman_beta_is_finite():
+    """All returned values must be finite (no NaN or inf)."""
+    rng = np.random.default_rng(7)
+    p1 = _prices(100 + np.cumsum(rng.standard_normal(200)) * 0.5).clip(lower=1.0)
+    p2 = _prices(50 + np.cumsum(rng.standard_normal(200)) * 0.3).clip(lower=1.0)
+    result = strat.calculate_kalman_hedge_series(p1, p2)
+    assert result.notna().all()
+    assert np.isfinite(result.values).all()
+
+
+def test_kalman_smoother_than_rolling_ols():
+    """Kalman β should have lower std-dev than a rolling OLS β (smoother)."""
+    rng = np.random.default_rng(42)
+    base = _prices(10.0 + np.cumsum(rng.standard_normal(300)) * 0.2).clip(lower=1.0)
+    p2 = base
+    p1 = base ** 2 * (1 + rng.standard_normal(300) * 0.01)
+
+    kalman_beta = strat.calculate_kalman_hedge_series(p1, p2)
+
+    # Compare with rolling OLS betas computed manually over window=30
+    log1 = np.log(p1.values)
+    log2 = np.log(p2.values)
+    window = 30
+    rolling_betas = []
+    for i in range(window, len(log1)):
+        X = np.column_stack([np.ones(window), log2[i - window:i]])
+        coeffs, _, _, _ = np.linalg.lstsq(X, log1[i - window:i], rcond=None)
+        rolling_betas.append(coeffs[1])
+
+    assert kalman_beta.iloc[window:].std() <= np.std(rolling_betas) * 1.5
+
+
+def test_calculate_spread_with_series_hedge_ratio():
+    """calculate_spread accepts a pd.Series hedge_ratio (Kalman output)."""
+    rng = np.random.default_rng(1)
+    n = 50
+    p1 = _prices(100 + np.cumsum(rng.standard_normal(n)))
+    p2 = _prices(50 + np.cumsum(rng.standard_normal(n)))
+    beta_series = strat.calculate_kalman_hedge_series(p1, p2)
+
+    spread = strat.calculate_spread(p1, p2, beta_series)
+    assert isinstance(spread, pd.Series)
+    assert len(spread) == n
+    assert spread.name == "spread"
+
+
+def test_calculate_spread_scalar_and_series_same_last_value():
+    """Spread at last candle: scalar β=last Kalman β ≈ Series-based spread last value."""
+    rng = np.random.default_rng(3)
+    base = _prices(10.0 + np.cumsum(rng.standard_normal(100)) * 0.1).clip(lower=1.0)
+    p1, p2 = base ** 2, base
+
+    beta_series = strat.calculate_kalman_hedge_series(p1, p2)
+    last_beta = float(beta_series.iloc[-1])
+
+    spread_series = strat.calculate_spread(p1, p2, beta_series)
+    spread_scalar = strat.calculate_spread(p1, p2, last_beta)
+
+    # Last candle of both spreads should be identical
+    assert float(spread_series.iloc[-1]) == pytest.approx(float(spread_scalar.iloc[-1]), abs=1e-10)

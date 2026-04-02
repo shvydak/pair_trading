@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import coint
 from scipy import stats
+from typing import Union
 
 
 class PairTradingStrategy:
@@ -27,15 +28,77 @@ class PairTradingStrategy:
         return float(coeffs[1])
 
     @staticmethod
+    def calculate_kalman_hedge_series(
+        price1: pd.Series,
+        price2: pd.Series,
+        delta: float = 1e-4,
+        obs_var: float = 1e-3,
+    ) -> pd.Series:
+        """
+        Kalman filter hedge ratio: returns β[t] for each candle.
+
+        Models the relationship log(P1) = β*log(P2) + α as a random walk:
+          state   = [β, α]
+          obs     = log(P1[t]) = [log(P2[t]), 1] @ state + ε
+
+        delta:   process noise — how fast β can drift.
+                 Smaller (e.g. 1e-5) → smoother, closer to OLS.
+                 Larger  (e.g. 1e-3) → faster adaptation to regime changes.
+        obs_var: observation noise variance.
+
+        Returns pd.Series of β values aligned to price1.index.
+        The last value (.iloc[-1]) is the current best estimate of β.
+        """
+        log1 = np.log(price1.values.astype(float))
+        log2 = np.log(price2.values.astype(float))
+        n = len(log1)
+
+        # State: [beta, alpha]; start near OLS intuition
+        x = np.array([1.0, 0.0])
+        P = np.eye(2)          # initial state covariance (high uncertainty)
+        Q = np.eye(2) * delta  # process noise covariance
+        R = obs_var            # scalar observation noise
+
+        betas = np.empty(n)
+
+        for i in range(n):
+            H = np.array([log2[i], 1.0])  # observation row vector
+
+            # --- Predict (random walk: F = I) ---
+            P_pred = P + Q
+
+            # --- Update ---
+            innovation = log1[i] - H @ x
+            S = H @ P_pred @ H + R          # scalar innovation variance
+            K = P_pred @ H / S              # Kalman gain (2,)
+            x = x + K * innovation
+            P = (np.eye(2) - np.outer(K, H)) @ P_pred
+
+            betas[i] = x[0]
+
+        return pd.Series(betas, index=price1.index, name="kalman_beta")
+
+    @staticmethod
     def calculate_spread(
-        price1: pd.Series, price2: pd.Series, hedge_ratio: float
+        price1: pd.Series,
+        price2: pd.Series,
+        hedge_ratio: Union[float, pd.Series],
     ) -> pd.Series:
         """
         spread = log(price1) - hedge_ratio * log(price2)
+
+        hedge_ratio can be a scalar float (static OLS) or a pd.Series
+        (per-candle Kalman beta). When a Series is passed, element-wise
+        multiply is used so each candle gets its own β.
         """
         log1 = np.log(price1)
         log2 = np.log(price2)
-        spread = log1 - hedge_ratio * log2
+        if isinstance(hedge_ratio, pd.Series):
+            hr, log2_aligned = hedge_ratio.align(log2, join="inner")
+            log1 = log1.loc[log2_aligned.index]
+            spread = log1 - hr * log2_aligned
+        else:
+            spread = log1 - hedge_ratio * log2
         spread.name = "spread"
         return spread
 
