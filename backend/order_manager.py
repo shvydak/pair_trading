@@ -243,6 +243,87 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
     udf = ctx.user_data_feed  # shorthand
     _registered_orders: set[str] = set()  # tracks all order IDs registered with udf
 
+    async def _debug_close_snapshot(stage: str, error: Optional[str] = None) -> None:
+        if not ctx.is_close:
+            return
+        try:
+            live_positions = await client.get_positions()
+            live_by_symbol = {
+                p["symbol"]: {
+                    "side": p.get("side"),
+                    "size": p.get("size"),
+                    "notional": p.get("notional"),
+                    "entry_price": p.get("entry_price"),
+                }
+                for p in live_positions
+                if p.get("symbol") in {ctx.leg1.symbol, ctx.leg2.symbol}
+            }
+        except Exception as exc:
+            live_by_symbol = {"_error": str(exc)}
+
+        open_orders = {}
+        for sym in (ctx.leg1.symbol, ctx.leg2.symbol):
+            try:
+                orders = await client.exchange.fetch_open_orders(sym)
+                open_orders[sym] = [
+                    {
+                        "id": str(o.get("id")),
+                        "side": o.get("side"),
+                        "amount": o.get("amount"),
+                        "status": o.get("status"),
+                        "reduce_only": (o.get("info") or {}).get("reduceOnly"),
+                    }
+                    for o in orders[:3]
+                ]
+            except Exception as exc:
+                open_orders[sym] = {"_error": str(exc)}
+
+        try:
+            db_pos = db_module.find_open_position(ctx.leg1.symbol, ctx.leg2.symbol)
+            if db_pos:
+                db_pos = {
+                    "id": db_pos.get("id"),
+                    "status": db_pos.get("status"),
+                    "qty1": db_pos.get("qty1"),
+                    "qty2": db_pos.get("qty2"),
+                    "tp_zscore": db_pos.get("tp_zscore"),
+                    "sl_zscore": db_pos.get("sl_zscore"),
+                }
+        except Exception as exc:
+            db_pos = {"_error": str(exc)}
+
+        # region agent log
+        _debug_log(
+            "close-desync-20260328",
+            "H1,H2,H3,H4",
+            "backend/order_manager.py:run_execution",
+            f"Close snapshot [{stage}]",
+            {
+                "exec_id": ctx.exec_id,
+                "close_db_id": ctx.close_db_id,
+                "status": str(ctx.status),
+                "error": error,
+                "leg1": {
+                    "symbol": ctx.leg1.symbol,
+                    "side": ctx.leg1.side,
+                    "qty": ctx.leg1.qty,
+                    "filled": ctx.leg1.filled,
+                    "order_id": ctx.leg1.order_id,
+                },
+                "leg2": {
+                    "symbol": ctx.leg2.symbol,
+                    "side": ctx.leg2.side,
+                    "qty": ctx.leg2.qty,
+                    "filled": ctx.leg2.filled,
+                    "order_id": ctx.leg2.order_id,
+                },
+                "db_pos": db_pos,
+                "live_by_symbol": live_by_symbol,
+                "open_orders": open_orders,
+            },
+        )
+        # endregion
+
     try:
         # ── 1. Fetch orderbooks ────────────────────────────────────────────────
         obs = await _fetch_orderbooks(client, [ctx.leg1, ctx.leg2], ctx.book_feeds)
@@ -269,6 +350,7 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
         if ctx.is_close:
             params1["reduceOnly"] = True
             params2["reduceOnly"] = True
+            await _debug_close_snapshot("pre-submit")
         ord1, ord2 = await asyncio.gather(
             client.place_limit_order(ctx.leg1.symbol, ctx.leg1.side, ctx.leg1.qty, p1, params=params1),
             client.place_limit_order(ctx.leg2.symbol, ctx.leg2.side, ctx.leg2.qty, p2, params=params2),
@@ -448,6 +530,7 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
                 log.error(msg)
                 if ctx.close_db_id:
                     db_module.set_position_status(ctx.close_db_id, "partial_close")
+                await _debug_close_snapshot("partial-close")
                 asyncio.create_task(tg_bot.notify_execution_failed(
                     ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id,
                     "Partial close — manual intervention required for unfilled leg",
@@ -479,6 +562,7 @@ async def run_execution(ctx: ExecContext, client, db_module) -> None:
         ctx.status = ExecStatus.FAILED
         ctx.evt(f"FATAL: {exc}")
         log.error("Execution %s failed: %s", ctx.exec_id, exc, exc_info=True)
+        await _debug_close_snapshot("fatal-exception", str(exc))
         asyncio.create_task(tg_bot.notify_execution_failed(
             ctx.leg1.symbol, ctx.leg2.symbol, ctx.exec_id, str(exc),
         ))

@@ -25,7 +25,8 @@ The platform cannot use the exchange to determine qty or direction for a specifi
 One row per open pair trade. Contains: `symbol1`, `symbol2`, `side`, `qty1`, `qty2`,
 `entry_price1`, `entry_price2`, `entry_zscore`, `hedge_ratio`, `size_usd`, `leverage`,
 `timeframe`, `candle_limit`, `zscore_window`, `tp_zscore`, `sl_zscore`,
-`tp_smart`, `sl_smart`, `status`, `coint_pvalue`, `coint_checked_at`, `opened_at`.
+`tp_smart`, `sl_smart`, `status`, `coint_pvalue`, `coint_checked_at`,
+`sync_state`, `sync_note`, `synced_at`, `opened_at`.
 
 **`status` values:**
 - `open` — active, normal position
@@ -36,7 +37,8 @@ One row per open pair trade. Contains: `symbol1`, `symbol2`, `side`, `qty1`, `qt
 ### `position_legs` — leg-level detail
 One row per execution entry for a leg. Supports averaging/pyramiding.
 Fields: `position_id`, `leg_number` (1 or 2), `symbol`, `side`, `qty`, `entry_price`,
-`client_order_id`, `status` (open/closed), `opened_at`, `closed_at`.
+`client_order_id`, `source` (`app` / `manual_sync`), `note`,
+`status` (open/closed), `opened_at`, `closed_at`.
 
 ### `funding_history` — funding fee log
 Fields: `position_id`, `symbol`, `amount` (negative=paid, positive=received),
@@ -210,8 +212,21 @@ Important current behavior:
 
 ### `reconcile_positions` — every 5 minutes
 Compares DB open positions vs exchange positions.
-For each DB position: checks if both legs exist on exchange, compares qty.
-**Detection only** — never auto-corrects. Sends Telegram warnings on mismatch.
+For each DB position: checks if both legs exist on exchange, compares qty,
+and classifies the mismatch.
+
+Current behavior:
+- If both symbols are unique across active strategy positions and both legs changed
+  proportionally in the same direction, reconcile performs a guarded DB sync:
+  - `manual_average` → grows `qty1/qty2`, updates weighted entry, writes `manual_sync`
+    rows into `position_legs`
+  - `manual_partial_close` → reduces `qty1/qty2`, keeps the remaining entry basis in sync,
+    writes `manual_sync` reduction rows into `position_legs`
+- If the case is ambiguous (shared symbols across pairs, only one leg changed,
+  one leg missing, direction mismatch), reconcile does **not** mutate DB.
+  Instead it stores `sync_state` + `sync_note` on `open_positions` and logs warnings.
+- If both legs disappeared from exchange, reconcile marks the position as
+  `sync_state=external_closed` for operator review instead of silently rewriting history.
 
 ### `health_check_coint` — every 4 hours
 Re-runs cointegration test for each open position.
@@ -240,6 +255,25 @@ Important consequence:
 - So if a position was opened and then averaged once or multiple times, TP/SL is
   intended to close the whole combined position, not just the latest add
 
+### Manual exchange adjustments
+
+If you manually average or manually reduce a pair on Binance, the platform still keeps
+`open_positions` as the source of truth for strategy PnL and close qty. To avoid stale
+Pnl/qty after those manual actions, reconcile can sync DB to exchange, but only when it
+is safe:
+
+- Safe auto-sync requires:
+  - no overlapping strategy position sharing either symbol
+  - both legs still present on exchange
+  - both legs changed proportionally in the same direction
+- When safe, the platform writes system `position_legs.source='manual_sync'` rows so the
+  audit trail still shows what was changed outside the app.
+- When not safe, the platform does **not** guess. It leaves the DB untouched and marks
+  the row with a sync warning instead.
+
+This preserves the strategy journal while keeping `Strategy Positions` honest after
+manual exchange intervention.
+
 ---
 
 ## `find_open_position` Filter
@@ -254,8 +288,13 @@ These positions are "dead" on the exchange — attempting to close them would be
 
 Position row in the Positions tab shows:
 - **Status badge** (pair cell): red `ЛИКВИДАЦИЯ`, orange `ADL`, yellow `ЧАСТИЧНОЕ ЗАКРЫТИЕ`
+- **Sync badge** (pair cell): blue `Синхр.` after a guarded manual sync, amber
+  `Рассинхрон` when DB/exchange mismatch is ambiguous, orange `Закрыта на бирже`
+  when exchange no longer has either leg
 - **Cointegration dot** (next to symbol): green (p<0.01), yellow (p<0.05), red (p≥0.05)
 - **Funding sub-line** (PnL cell): `Funding: ±$X.XX` when `funding_total ≠ 0`
+- **Desync hint** (PnL cell): shown when a row is in ambiguous sync state, to make it clear
+  that the displayed strategy PnL may be stale until the mismatch is resolved
 
 All three update in-place every 5s via `GET /api/dashboard` (no full row rebuild).
 

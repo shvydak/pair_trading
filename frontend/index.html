@@ -398,6 +398,11 @@
       toast_exec_closed: 'Position closed.',
       toast_exec_rollback: 'Partial fill — manual action required.',
       toast_exec_failed: 'Close failed — manual action required.',
+      pos_sync_ok: 'Synced',
+      pos_sync_warn: 'Desync',
+      pos_sync_external_closed: 'Closed on exchange',
+      pos_sync_manual_note: 'Manual exchange adjustment was synced into the strategy journal.',
+      pos_sync_warn_note: 'Strategy journal and exchange state differ. PnL may be misleading until resolved.',
 
       tip_market_filter: '<strong>Market Filter</strong><br/>Filters the symbol dropdown by margin type.<br/><br/><svg width="200" height="44" style="display:block;margin:6px 0"><rect x="0" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="45" y="16" text-anchor="middle" font-size="9" fill="#58a6ff">USDT-M</text><rect x="110" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="155" y="16" text-anchor="middle" font-size="9" fill="#3fb950">USDC-M</text><text x="45" y="34" text-anchor="middle" font-size="8" fill="#8b949e">maker 0.02%</text><text x="155" y="34" text-anchor="middle" font-size="8" fill="#3fb950">maker 0% ✓</text></svg><strong>USDT-M</strong> — standard perpetuals, most pairs available, maker fee ~0.02%.<br/><strong>USDC-M</strong> — newer market, fewer pairs, but <span style="color:#3fb950"><strong>maker fee = 0%</strong></span>. Perfect for Smart Limit mode.',
       tip_timeframe: '<strong>Timeframe</strong><br/>Candle interval used to build the spread chart and calculate z-score.<br/><br/><svg width="200" height="50" style="display:block;margin:6px 0"><line x1="0" y1="25" x2="200" y2="25" stroke="#30363d" stroke-width="1"/><path d="M0,25 C5,20 8,15 10,25 S13,35 15,25 S18,18 20,25 S22,32 25,25" fill="none" stroke="#58a6ff" stroke-width="1.5" opacity="0.5"/><path d="M0,25 C15,10 25,40 50,22 S75,30 100,25" fill="none" stroke="#58a6ff" stroke-width="1.5"/><path d="M0,30 C25,10 75,40 100,25 S150,10 200,28" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="20" y="45" font-size="8" fill="#8b949e">5m — noisy</text><text x="80" y="45" font-size="8" fill="#58a6ff">1h — balanced</text><text x="150" y="45" font-size="8" fill="#3fb950">4h — smooth</text></svg><strong>5m</strong> — scalping. Fast signals, many false positives. 0% fee on USDC-M makes it viable.<br/><strong>1h</strong> — best starting point. Balanced signal quality.<br/><strong>4h / 1d</strong> — swing trading. Fewer signals, but more reliable.',
@@ -672,6 +677,11 @@
       toast_exec_closed: 'Позиция закрыта.',
       toast_exec_rollback: 'Частичное исполнение — требуется вмешательство.',
       toast_exec_failed: 'Ошибка закрытия — требуется вмешательство.',
+      pos_sync_ok: 'Синхр.',
+      pos_sync_warn: 'Рассинхрон',
+      pos_sync_external_closed: 'Закрыта на бирже',
+      pos_sync_manual_note: 'Ручное изменение на бирже уже синхронизировано в журнал стратегии.',
+      pos_sync_warn_note: 'Журнал стратегии и биржа расходятся. PnL может быть неточным, пока это не исправлено.',
 
       tip_market_filter: '<strong>Фильтр рынка</strong><br/>Фильтрует список символов по типу маржи.<br/><br/><svg width="200" height="44" style="display:block;margin:6px 0"><rect x="0" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="45" y="16" text-anchor="middle" font-size="9" fill="#58a6ff">USDT-M</text><rect x="110" y="4" width="90" height="18" rx="3" fill="#1c2333"/><text x="155" y="16" text-anchor="middle" font-size="9" fill="#3fb950">USDC-M</text><text x="45" y="34" text-anchor="middle" font-size="8" fill="#8b949e">мейкер 0.02%</text><text x="155" y="34" text-anchor="middle" font-size="8" fill="#3fb950">мейкер 0% ✓</text></svg><strong>USDT-M</strong> — стандартные бессрочные фьючерсы, больше пар, мейкер ~0.02%.<br/><strong>USDC-M</strong> — меньше пар, но <span style="color:#3fb950"><strong>мейкер 0%</strong></span>. Идеально для режима Smart Limit.',
       tip_timeframe: '<strong>Таймфрейм</strong><br/>Интервал свечей для построения спреда и z-score.<br/><br/><svg width="200" height="50" style="display:block;margin:6px 0"><line x1="0" y1="25" x2="200" y2="25" stroke="#30363d" stroke-width="1"/><path d="M0,25 C5,20 8,15 10,25 S13,35 15,25 S18,18 20,25 S22,32 25,25" fill="none" stroke="#58a6ff" stroke-width="1.5" opacity="0.5"/><path d="M0,25 C15,10 25,40 50,22 S75,30 100,25" fill="none" stroke="#58a6ff" stroke-width="1.5"/><path d="M0,30 C25,10 75,40 100,25 S150,10 200,28" fill="none" stroke="#3fb950" stroke-width="1.5"/><text x="20" y="45" font-size="8" fill="#8b949e">5m — шум</text><text x="75" y="45" font-size="8" fill="#58a6ff">1h — баланс</text><text x="145" y="45" font-size="8" fill="#3fb950">4h — плавно</text></svg><strong>5m</strong> — скальпинг. Быстрые сигналы, много ложных. Комиссия 0% на USDC-M делает его рабочим.<br/><strong>1h</strong> — лучший старт. Баланс качества и количества сигналов.<br/><strong>4h / 1d</strong> — свинг. Редкие, но надёжные сигналы.',
@@ -3871,16 +3881,25 @@ function _tpslBadgesHtml(pos) {
 }
 
 function _posStatusBadgeHtml(pos) {
+  const syncNote = pos.sync_note || '';
+  let syncHtml = '';
+  if (pos.sync_state === 'manual_sync') {
+    syncHtml = `<span title="${syncNote || t('pos_sync_manual_note')}" style="background:#0f172a;border:1px solid #38bdf8;color:#7dd3fc" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">${t('pos_sync_ok')}</span>`;
+  } else if (pos.sync_state === 'external_closed') {
+    syncHtml = `<span title="${syncNote || t('pos_sync_warn_note')}" style="background:#3f1d0d;border:1px solid #fb923c;color:#fdba74" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">${t('pos_sync_external_closed')}</span>`;
+  } else if (pos.sync_state && pos.sync_state !== 'clean') {
+    syncHtml = `<span title="${syncNote || t('pos_sync_warn_note')}" style="background:#3f1d0d;border:1px solid #f59e0b;color:#fde68a" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">${t('pos_sync_warn')}</span>`;
+  }
   if (pos.status === 'liquidated') {
-    return `<span style="background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ЛИКВИДАЦИЯ</span>`;
+    return `<div class="flex flex-wrap gap-1"><span style="background:#7f1d1d;border:1px solid #ef4444;color:#fca5a5" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ЛИКВИДАЦИЯ</span>${syncHtml}</div>`;
   }
   if (pos.status === 'adl_detected') {
-    return `<span style="background:#431407;border:1px solid #f97316;color:#fdba74" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ADL</span>`;
+    return `<div class="flex flex-wrap gap-1"><span style="background:#431407;border:1px solid #f97316;color:#fdba74" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ADL</span>${syncHtml}</div>`;
   }
   if (pos.status === 'partial_close') {
-    return `<span style="background:#431407;border:1px solid #f59e0b;color:#fde68a" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ЧАСТИЧНОЕ ЗАКРЫТИЕ</span>`;
+    return `<div class="flex flex-wrap gap-1"><span style="background:#431407;border:1px solid #f59e0b;color:#fde68a" class="rounded px-1 py-0.5 text-[9px] font-bold leading-none">ЧАСТИЧНОЕ ЗАКРЫТИЕ</span>${syncHtml}</div>`;
   }
-  return '';
+  return syncHtml ? `<div class="flex flex-wrap gap-1">${syncHtml}</div>` : '';
 }
 
 function _coIntDotHtml(pos) {
@@ -3950,7 +3969,10 @@ function renderStrategyPositions(positions) {
         const fundingStr = (fundingTotal != null && fundingTotal !== 0)
           ? `<div class="text-[10px] text-muted leading-tight">Funding: ${fundingTotal >= 0 ? '+' : ''}$${fmt(Math.abs(fundingTotal), 2)}</div>`
           : '';
-        pnlCell.innerHTML = `${pnlStr}${fundingStr}`;
+        const syncStr = (pos.sync_state && pos.sync_state !== 'clean' && pos.sync_state !== 'manual_sync')
+          ? `<div class="text-[10px] leading-tight" style="color:#f59e0b">${t('pos_sync_warn')}</div>`
+          : '';
+        pnlCell.innerHTML = `${pnlStr}${fundingStr}${syncStr}`;
       }
       // Update status badge and coint dot
       const statusEl = document.getElementById(`status-badge-${pos.id}`);
@@ -4001,6 +4023,9 @@ function renderStrategyPositions(positions) {
     const fundingStr = (fundingTotal != null && fundingTotal !== 0)
       ? `<div class="text-[10px] text-muted leading-tight">Funding: ${fundingTotal >= 0 ? '+' : ''}$${fmt(Math.abs(fundingTotal), 2)}</div>`
       : '';
+    const syncStr = (pos.sync_state && pos.sync_state !== 'clean' && pos.sync_state !== 'manual_sync')
+      ? `<div class="text-[10px] leading-tight" style="color:#f59e0b">${t('pos_sync_warn')}</div>`
+      : '';
     tr.innerHTML = `
       <td>
         <div class="flex items-center gap-1 leading-tight">
@@ -4029,7 +4054,7 @@ function renderStrategyPositions(positions) {
           </div>
         </div>
       </td>
-      <td id="pnl-cell-${pos.id}" class="${pnlClass} font-mono text-xs font-medium">${pnlStr}${fundingStr}</td>
+      <td id="pnl-cell-${pos.id}" class="${pnlClass} font-mono text-xs font-medium">${pnlStr}${fundingStr}${syncStr}</td>
       <td class="text-muted text-xs">${_formatDuration(pos.opened_at)}</td>
       <td class="font-mono text-xs">
         ${pos.liq_price1 != null ? `<div class="text-orange-400 leading-tight">${fmt(pos.liq_price1, 4)}</div>` : ''}

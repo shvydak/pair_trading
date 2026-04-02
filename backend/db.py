@@ -58,6 +58,9 @@ def init_db() -> None:
                 sl_zscore      REAL,
                 tp_smart       INTEGER DEFAULT 1,
                 sl_smart       INTEGER DEFAULT 1,
+                sync_state     TEXT    NOT NULL DEFAULT 'clean',
+                sync_note      TEXT,
+                synced_at      TEXT,
                 opened_at      TEXT    NOT NULL
             );
 
@@ -119,6 +122,8 @@ def init_db() -> None:
                 qty              REAL    NOT NULL,
                 entry_price      REAL,
                 client_order_id  TEXT,
+                source           TEXT    NOT NULL DEFAULT 'app',
+                note             TEXT,
                 status           TEXT    DEFAULT 'open',
                 opened_at        TEXT    NOT NULL,
                 closed_at        TEXT
@@ -191,9 +196,14 @@ def _migrate() -> None:
             ("open_positions", "status",           "TEXT DEFAULT 'open'"),
             ("open_positions", "coint_pvalue",     "REAL"),
             ("open_positions", "coint_checked_at", "TEXT"),
+            ("open_positions", "sync_state",       "TEXT NOT NULL DEFAULT 'clean'"),
+            ("open_positions", "sync_note",        "TEXT"),
+            ("open_positions", "synced_at",        "TEXT"),
             ("closed_trades",  "commission",       "REAL DEFAULT 0"),
             ("closed_trades",  "commission_asset", "TEXT"),
             ("triggers",       "candle_limit",     "INTEGER"),
+            ("position_legs",  "source",           "TEXT NOT NULL DEFAULT 'app'"),
+            ("position_legs",  "note",             "TEXT"),
             ("watchlist",      "half_life",        "REAL"),
             ("watchlist",      "hurst",            "REAL"),
             ("watchlist",      "corr",             "REAL"),
@@ -655,6 +665,10 @@ def save_position_leg(
     qty: float,
     entry_price: Optional[float] = None,
     client_order_id: Optional[str] = None,
+    source: str = "app",
+    note: Optional[str] = None,
+    status: str = "open",
+    closed_at: Optional[str] = None,
 ) -> int:
     """Create a position leg record. Returns leg id."""
     with _conn() as conn:
@@ -662,12 +676,13 @@ def save_position_leg(
             """
             INSERT INTO position_legs
               (position_id, leg_number, symbol, side, qty, entry_price,
-               client_order_id, status, opened_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+               client_order_id, source, note, status, opened_at, closed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 position_id, leg_number, symbol, side, qty, entry_price,
-                client_order_id, datetime.now(timezone.utc).isoformat(),
+                client_order_id, source, note, status,
+                datetime.now(timezone.utc).isoformat(), closed_at,
             ),
         )
         return cur.lastrowid
@@ -746,14 +761,163 @@ def add_position_entry(
                 """
                 INSERT INTO position_legs
                   (position_id, leg_number, symbol, side, qty, entry_price,
-                   client_order_id, status, opened_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                   client_order_id, source, note, status, opened_at, closed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'app', NULL, 'open', ?, NULL)
                 """,
                 (
                     position_id, leg_number, symbol, leg_side, new_qty, new_entry_price,
                     client_order_id, datetime.now(timezone.utc).isoformat(),
                 ),
             )
+        return True
+
+
+def set_position_sync_state(
+    position_id: int,
+    sync_state: str,
+    sync_note: Optional[str] = None,
+    synced_at: Optional[str] = None,
+) -> bool:
+    """Persist sync state for a strategy position shown in the UI."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE open_positions SET sync_state = ?, sync_note = ?, synced_at = ? WHERE id = ?",
+            (sync_state, sync_note, synced_at, position_id),
+        )
+        return cur.rowcount > 0
+
+
+def _position_leg_meta(conn: sqlite3.Connection, position_id: int, leg_number: int) -> Optional[tuple[str, str]]:
+    row = conn.execute(
+        "SELECT symbol1, symbol2, side FROM open_positions WHERE id = ?",
+        (position_id,),
+    ).fetchone()
+    if not row:
+        return None
+    symbol = row["symbol1"] if leg_number == 1 else row["symbol2"]
+    spread_side = row["side"]
+    leg_side = ("buy" if spread_side == "long_spread" else "sell") if leg_number == 1 else \
+               ("sell" if spread_side == "long_spread" else "buy")
+    return symbol, leg_side
+
+
+def _insert_leg_sync_event(
+    conn: sqlite3.Connection,
+    position_id: int,
+    leg_number: int,
+    qty: float,
+    entry_price: Optional[float],
+    note: str,
+    status: str,
+) -> None:
+    meta = _position_leg_meta(conn, position_id, leg_number)
+    if not meta or qty <= 0:
+        return
+    symbol, leg_side = meta
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO position_legs
+          (position_id, leg_number, symbol, side, qty, entry_price,
+           client_order_id, source, note, status, opened_at, closed_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, 'manual_sync', ?, ?, ?, ?)
+        """,
+        (
+            position_id, leg_number, symbol, leg_side, qty, entry_price,
+            note, status, now, now if status == "closed" else None,
+        ),
+    )
+
+
+def _sync_leg_to_exchange(
+    conn: sqlite3.Connection,
+    position_id: int,
+    leg_number: int,
+    live_qty: float,
+    live_entry_price: Optional[float],
+    note: str,
+) -> None:
+    row = conn.execute(
+        "SELECT qty1, qty2, entry_price1, entry_price2 FROM open_positions WHERE id = ?",
+        (position_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Position {position_id} not found")
+
+    qty_col = "qty1" if leg_number == 1 else "qty2"
+    entry_col = "entry_price1" if leg_number == 1 else "entry_price2"
+    old_qty = float(row[qty_col] or 0.0)
+    old_entry = row[entry_col]
+    live_qty = float(live_qty or 0.0)
+    if live_qty <= 0:
+        raise ValueError("live_qty must stay positive for sync")
+    new_entry = live_entry_price if live_entry_price is not None else old_entry
+
+    if live_qty > old_qty + 1e-12:
+        delta = live_qty - old_qty
+        sync_entry = new_entry
+        if old_entry is not None and new_entry is not None and delta > 0:
+            sync_entry = ((live_qty * new_entry) - (old_qty * old_entry)) / delta
+        conn.execute(
+            f"UPDATE open_positions SET {qty_col} = ?, {entry_col} = ? WHERE id = ?",
+            (live_qty, new_entry, position_id),
+        )
+        _insert_leg_sync_event(
+            conn, position_id, leg_number, delta, sync_entry,
+            f"{note} | leg{leg_number} increase", "open",
+        )
+        return
+
+    if live_qty < old_qty - 1e-12:
+        reduction = old_qty - live_qty
+        conn.execute(
+            f"UPDATE open_positions SET {qty_col} = ?, {entry_col} = ? WHERE id = ?",
+            (live_qty, new_entry, position_id),
+        )
+        _insert_leg_sync_event(
+            conn, position_id, leg_number, reduction, old_entry,
+            f"{note} | leg{leg_number} reduction", "closed",
+        )
+        return
+
+    if new_entry is not None and old_entry != new_entry:
+        conn.execute(
+            f"UPDATE open_positions SET {entry_col} = ? WHERE id = ?",
+            (new_entry, position_id),
+        )
+
+
+def sync_position_to_exchange(
+    position_id: int,
+    live_qty1: float,
+    live_entry_price1: Optional[float],
+    live_qty2: float,
+    live_entry_price2: Optional[float],
+    sync_state: str = "manual_sync",
+    sync_note: Optional[str] = None,
+) -> bool:
+    """
+    Sync an existing DB position to known exchange qty/entry values.
+
+    This is used only for high-confidence reconcile cases such as manual averaging
+    or manual proportional reduction detected on Binance.
+    """
+    note = sync_note or "manual sync from exchange"
+    synced_at = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM open_positions WHERE id = ?",
+            (position_id,),
+        ).fetchone()
+        if not row:
+            return False
+
+        _sync_leg_to_exchange(conn, position_id, 1, live_qty1, live_entry_price1, note)
+        _sync_leg_to_exchange(conn, position_id, 2, live_qty2, live_entry_price2, note)
+        conn.execute(
+            "UPDATE open_positions SET sync_state = ?, sync_note = ?, synced_at = ? WHERE id = ?",
+            (sync_state, note, synced_at, position_id),
+        )
         return True
 
 

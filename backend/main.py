@@ -22,6 +22,7 @@ from strategy import PairTradingStrategy
 import db
 from logger import get_logger
 from order_manager import ExecConfig, ExecContext, LegState, run_execution
+from position_sync import classify_manual_sync
 from symbol_feed import SymbolFeed, BookTickerFeed
 from user_data_feed import UserDataFeed
 import telegram_bot as tg_bot
@@ -1487,8 +1488,9 @@ async def monitor_auto_trading() -> None:
 async def reconcile_positions() -> None:
     """
     Background task: every 5 minutes compare DB open positions vs exchange.
-    Detects missing legs or qty mismatches and alerts via Telegram.
-    Does NOT auto-correct — detection only.
+    Detects missing legs or qty mismatches and warns.
+    For high-confidence non-overlapping cases it can sync DB qty/entry values to
+    manual exchange changes (for example manual averaging on Binance).
     """
     await asyncio.sleep(60)  # initial delay
     while True:
@@ -1504,29 +1506,94 @@ async def reconcile_positions() -> None:
                     base_key = p["symbol"].split(":")[0]
                     exch_map.setdefault(base_key, p)
                 await client._ensure_markets()
+                active_positions = [
+                    pos for pos in open_positions
+                    if pos.get("status") not in ("partial_close", "liquidated", "adl_detected")
+                ]
+                symbol_counts: dict[str, int] = {}
+                for pos in active_positions:
+                    for sym in (_normalise_symbol(pos["symbol1"]), _normalise_symbol(pos["symbol2"])):
+                        symbol_counts[sym] = symbol_counts.get(sym, 0) + 1
                 for pos in open_positions:
                     if pos.get("status") in ("partial_close", "liquidated", "adl_detected"):
                         continue
-                    for sym, db_qty in [(pos["symbol1"], pos["qty1"]), (pos["symbol2"], pos["qty2"])]:
-                        exch_pos = exch_map.get(_normalise_symbol(sym)) or exch_map.get(sym)
+                    sym1 = _normalise_symbol(pos["symbol1"])
+                    sym2 = _normalise_symbol(pos["symbol2"])
+                    live1 = exch_map.get(sym1) or exch_map.get(pos["symbol1"])
+                    live2 = exch_map.get(sym2) or exch_map.get(pos["symbol2"])
+
+                    try:
+                        market1 = client.exchange.market(sym1)
+                        step1 = float((market1.get("precision") or {}).get("amount") or 0)
+                    except Exception:
+                        step1 = 0.0
+                    try:
+                        market2 = client.exchange.market(sym2)
+                        step2 = float((market2.get("precision") or {}).get("amount") or 0)
+                    except Exception:
+                        step2 = 0.0
+
+                    decision = classify_manual_sync(
+                        pos,
+                        live1,
+                        live2,
+                        unique_symbols=(symbol_counts.get(sym1, 0) == 1 and symbol_counts.get(sym2, 0) == 1),
+                        step1=step1,
+                        step2=step2,
+                    )
+
+                    if decision.kind == "clean":
+                        if (pos.get("sync_state") or "clean") in {
+                            "inconclusive",
+                            "external_closed",
+                            "inconclusive_missing_leg",
+                            "inconclusive_overlap",
+                        }:
+                            db.set_position_sync_state(pos["id"], "clean", None, None)
+                        continue
+
+                    if decision.syncable and live1 and live2:
+                        synced = db.sync_position_to_exchange(
+                            pos["id"],
+                            abs(float(live1["size"])),
+                            live1.get("entry_price"),
+                            abs(float(live2["size"])),
+                            live2.get("entry_price"),
+                            sync_state="manual_sync",
+                            sync_note=decision.note,
+                        )
+                        if synced:
+                            log.warning(
+                                "RECONCILE SYNC: pos_id=%s %s/%s | kind=%s | db→exchange adjusted",
+                                pos["id"], pos["symbol1"], pos["symbol2"], decision.kind,
+                            )
+                        continue
+
+                    sync_state = {
+                        "manual_full_close": "external_closed",
+                        "ambiguous_overlap": "inconclusive_overlap",
+                        "inconclusive_missing_leg": "inconclusive_missing_leg",
+                    }.get(decision.kind, "inconclusive")
+                    db.set_position_sync_state(pos["id"], sync_state, decision.note, datetime.utcnow().isoformat())
+
+                    for sym, db_qty, exch_pos, step in [
+                        (pos["symbol1"], pos["qty1"], live1, step1),
+                        (pos["symbol2"], pos["qty2"], live2, step2),
+                    ]:
                         if exch_pos is None:
                             log.warning(
-                                "RECONCILE: %s not found on exchange (pos_id=%s)",
-                                sym, pos["id"],
+                                "RECONCILE: %s not found on exchange (pos_id=%s) | %s",
+                                sym, pos["id"], decision.note,
                             )
                             asyncio.create_task(tg_bot.notify_reconcile_mismatch(sym))
-                        else:
-                            exch_qty = abs(exch_pos["size"])
-                            try:
-                                market = client.exchange.market(_normalise_symbol(sym))
-                                step = float((market.get("precision") or {}).get("amount") or 0)
-                            except Exception:
-                                step = 0.0
-                            if step > 0 and abs(exch_qty - db_qty) > step * 2:
-                                log.warning(
-                                    "RECONCILE: %s qty mismatch DB=%.6f exchange=%.6f (pos_id=%s)",
-                                    sym, db_qty, exch_qty, pos["id"],
-                                )
+                            continue
+
+                        exch_qty = abs(exch_pos["size"])
+                        if step > 0 and abs(exch_qty - db_qty) > step * 2:
+                            log.warning(
+                                "RECONCILE: %s qty mismatch DB=%.6f exchange=%.6f (pos_id=%s) | %s",
+                                sym, db_qty, exch_qty, pos["id"], decision.note,
+                            )
         except Exception as e:
             log.warning("reconcile_positions error: %s", e)
         await asyncio.sleep(60)

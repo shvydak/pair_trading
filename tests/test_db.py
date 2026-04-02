@@ -912,6 +912,98 @@ def test_add_position_entry_unequal_quantities(tmp_db):
 
 
 # ---------------------------------------------------------------------------
+# sync_position_to_exchange — manual sync adjustments
+# ---------------------------------------------------------------------------
+
+def test_sync_position_to_exchange_manual_average_updates_qty_and_entry(tmp_db):
+    pos_id = _save(
+        tmp_db,
+        qty1=1.0,
+        qty2=2.0,
+        entry_price1=100.0,
+        entry_price2=200.0,
+    )
+
+    synced = tmp_db.sync_position_to_exchange(
+        pos_id,
+        live_qty1=1.5,
+        live_entry_price1=90.0,
+        live_qty2=3.0,
+        live_entry_price2=190.0,
+        sync_state="manual_sync",
+        sync_note="manual average from exchange",
+    )
+
+    assert synced is True
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["qty1"] == pytest.approx(1.5)
+    assert pos["qty2"] == pytest.approx(3.0)
+    assert pos["entry_price1"] == pytest.approx(90.0)
+    assert pos["entry_price2"] == pytest.approx(190.0)
+    assert pos["sync_state"] == "manual_sync"
+    assert pos["sync_note"] == "manual average from exchange"
+    assert pos["synced_at"] is not None
+
+    legs = tmp_db.get_position_legs(pos_id)
+    assert len(legs) == 2
+    assert {leg["source"] for leg in legs} == {"manual_sync"}
+    assert {leg["status"] for leg in legs} == {"open"}
+    leg1 = next(leg for leg in legs if leg["leg_number"] == 1)
+    leg2 = next(leg for leg in legs if leg["leg_number"] == 2)
+    assert leg1["qty"] == pytest.approx(0.5)
+    assert leg1["entry_price"] == pytest.approx(70.0)
+    assert leg2["qty"] == pytest.approx(1.0)
+    assert leg2["entry_price"] == pytest.approx(170.0)
+
+
+def test_sync_position_to_exchange_manual_partial_close_keeps_remaining_avg(tmp_db):
+    pos_id = _save(
+        tmp_db,
+        qty1=1.5,
+        qty2=3.0,
+        entry_price1=90.0,
+        entry_price2=190.0,
+    )
+
+    synced = tmp_db.sync_position_to_exchange(
+        pos_id,
+        live_qty1=1.0,
+        live_entry_price1=90.0,
+        live_qty2=2.0,
+        live_entry_price2=190.0,
+        sync_state="manual_sync",
+        sync_note="manual reduction from exchange",
+    )
+
+    assert synced is True
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["qty1"] == pytest.approx(1.0)
+    assert pos["qty2"] == pytest.approx(2.0)
+    assert pos["entry_price1"] == pytest.approx(90.0)
+    assert pos["entry_price2"] == pytest.approx(190.0)
+
+    legs = tmp_db.get_position_legs(pos_id)
+    assert len(legs) == 2
+    assert {leg["source"] for leg in legs} == {"manual_sync"}
+    assert {leg["status"] for leg in legs} == {"closed"}
+    assert all(leg["closed_at"] is not None for leg in legs)
+
+
+def test_set_position_sync_state_updates_row(tmp_db):
+    pos_id = _save(tmp_db)
+    assert tmp_db.set_position_sync_state(
+        pos_id,
+        "inconclusive",
+        "Manual sync skipped because legs changed differently.",
+        "2026-03-24T12:00:00+00:00",
+    )
+    pos = tmp_db.get_open_positions()[0]
+    assert pos["sync_state"] == "inconclusive"
+    assert "legs changed differently" in pos["sync_note"]
+    assert pos["synced_at"] == "2026-03-24T12:00:00+00:00"
+
+
+# ---------------------------------------------------------------------------
 # save_funding_history / get_funding_total
 # ---------------------------------------------------------------------------
 
