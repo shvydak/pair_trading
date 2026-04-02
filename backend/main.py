@@ -1747,6 +1747,7 @@ async def get_history(
     timeframe: str = Query("1h"),
     limit: int = Query(500),
     zscore_window: int = Query(20),
+    hedge_method: str = Query("kalman"),  # "kalman" | "ols"
 ):
     """Return OHLCV history, spread, z-score and pair statistics."""
     try:
@@ -1781,9 +1782,13 @@ async def get_history(
         now_mono = time.monotonic()
 
         def _compute_stats():
-            kalman_betas = strategy.calculate_kalman_hedge_series(price1, price2)
-            hr = float(kalman_betas.iloc[-1])  # scalar for API response / trading
-            sp = strategy.calculate_spread(price1, price2, kalman_betas)  # per-candle β
+            if hedge_method == "ols":
+                hr = strategy.calculate_hedge_ratio(price1, price2)
+                sp = strategy.calculate_spread(price1, price2, hr)
+            else:  # kalman (default)
+                kalman_betas = strategy.calculate_kalman_hedge_series(price1, price2)
+                hr = float(kalman_betas.iloc[-1])  # scalar for API response / trading
+                sp = strategy.calculate_spread(price1, price2, kalman_betas)  # per-candle β
             zs = strategy.calculate_zscore(sp, window=zscore_window)
             # Use cached cointegration if still fresh (expensive test, changes slowly)
             if cached_coint and (now_mono - cached_coint[1]) < _COINT_TTL:
