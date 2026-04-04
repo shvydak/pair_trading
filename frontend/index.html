@@ -192,6 +192,7 @@
       lookback: 'Lookback (candles)',
       zscore_window: 'Z-score Window',
       tip_zwindow: '<strong>Z-score Window</strong><br/>How many recent candles define the "normal" spread level. With window=20 and 4h timeframe, the system looks at the last 20 bars (~3 days) as baseline — anything deviating strongly from it becomes a signal.<br/><br/>Lower (10) → reacts faster, more false signals.<br/>Higher (50) → more stable, slower to react.<br/>Start with 20.',
+      hedge_method: 'Hedge Ratio Method',
       analyze_btn: 'Analyze Pair',
       analyzing: 'Analyzing…',
 
@@ -480,6 +481,7 @@
       lookback: 'История (свечей)',
       zscore_window: 'Окно Z-score',
       tip_zwindow: '<strong>Окно Z-score</strong><br/>Сколько последних свечей определяют «нормальный» уровень спреда. При окне=20 и таймфрейме 4h система смотрит на последние 20 баров (~3 дня) как на базу — всё, что сильно отклоняется от неё, становится сигналом.<br/><br/>Меньше (10) → быстрее реагирует, больше ложных сигналов.<br/>Больше (50) → стабильнее, реагирует медленнее.<br/>Начните с 20.',
+      hedge_method: 'Метод Hedge Ratio',
       analyze_btn: 'Анализировать пару',
       analyzing: 'Анализ…',
 
@@ -863,6 +865,7 @@
       <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
         <span class="text-[9px] text-muted leading-none mb-1" data-i18n="stat_hedge">β</span>
         <span id="stat-hedge" class="text-base font-bold text-white leading-none">-</span>
+        <span id="stat-hedge-method" class="text-[8px] text-muted leading-none mt-0.5">OLS</span>
         <div class="tooltip-box" data-i18n-html="tip_hedge"></div>
       </div>
       <div class="bg-card rounded px-2.5 py-1.5 border border-border flex flex-col items-center tooltip-container shrink-0 min-w-[44px]">
@@ -1020,6 +1023,17 @@
             <input id="zwindow-input" type="number" value="20" min="5" max="200"
               class="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent" />
             <div class="tooltip-box" data-i18n-html="tip_zwindow"></div>
+          </div>
+        </div>
+
+        <!-- Hedge method toggle -->
+        <div class="mb-3">
+          <label class="text-xs text-muted mb-1 flex items-center gap-1" data-i18n="hedge_method">Hedge Ratio Method
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          </label>
+          <div class="flex gap-1" id="hedge-method-btns">
+            <button onclick="setHedgeMethod('ols')"    data-method="ols"    class="hedge-method-btn flex-1 py-1.5 rounded text-xs font-medium border border-accent bg-surface text-accent transition">OLS</button>
+            <button onclick="setHedgeMethod('kalman')" data-method="kalman" class="hedge-method-btn flex-1 py-1.5 rounded text-xs font-medium border border-border bg-surface text-muted hover:border-accent hover:text-accent transition">Kalman</button>
           </div>
         </div>
 
@@ -1440,6 +1454,7 @@ let state = {
   historyData: null,
   historyLimit: null,
   hedgeRatio: null,
+  hedgeMethod: 'ols',
   atr1: null,
   atr2: null,
   pairMeta: null,
@@ -1468,6 +1483,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // Restore mode (trade/backtest)
   const savedMode = localStorage.getItem('pt_mode') || 'trade';
   setMode(savedMode);
+  // Restore hedge method
+  const savedHedgeMethod = localStorage.getItem('pt_hedge_method') || 'ols';
+  setHedgeMethod(savedHedgeMethod);
   // Bottom panel resize
   initBottomPanelResize();
   // Charts vertical resize
@@ -2781,13 +2799,14 @@ async function runAnalyze() {
   setLoading(btn, true, t('analyzing'));
 
   try {
-    const url = `${API}/api/history?symbol1=${sym1}&symbol2=${sym2}&timeframe=${state.timeframe}&limit=${limit}&zscore_window=${zwindow}`;
+    const url = `${API}/api/history?symbol1=${sym1}&symbol2=${sym2}&timeframe=${state.timeframe}&limit=${limit}&zscore_window=${zwindow}&hedge_method=${hedgeMethod}`;
     const res = await fetch(url);
     if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
     const data = await res.json();
     state.historyData = data;
     state.historyLimit = Array.isArray(data.timestamps) ? data.timestamps.length : (parseInt(limit, 10) || null);
     state.hedgeRatio = data.hedge_ratio;
+    state.hedgeMethod = data.hedge_method || 'ols';
     state.atr1 = data.stats?.atr1 ?? null;
     state.atr2 = data.stats?.atr2 ?? null;
     state.pairMeta = data.pair || null;
@@ -2834,6 +2853,7 @@ function saveAnalysisState() {
     exitZ:        document.getElementById('exit-z-input').value,
     posSize:      document.getElementById('pos-size-input').value,
     sizing:       sizingMethod,
+    hedgeMethod:  hedgeMethod,
     leverage:     document.getElementById('leverage-input').value,
     marketFilter: state.marketFilter,
   };
@@ -2856,7 +2876,8 @@ function restoreAnalysisState() {
   if (saved.entryZ)  document.getElementById('entry-z-input').value = saved.entryZ;
   if (saved.exitZ)   document.getElementById('exit-z-input').value  = saved.exitZ;
   if (saved.posSize) document.getElementById('pos-size-input').value = saved.posSize;
-  if (saved.sizing)  setSizingMethod(saved.sizing);
+  if (saved.sizing)       setSizingMethod(saved.sizing);
+  if (saved.hedgeMethod)  setHedgeMethod(saved.hedgeMethod);
   if (saved.leverage) document.getElementById('leverage-input').value = saved.leverage;
   updatePairContext();
   runAnalyze();
@@ -2903,6 +2924,8 @@ function renderStats(data) {
   } else { _statColor(zEl, C_WHITE); }
 
   document.getElementById('stat-hedge').textContent = fmt(data.hedge_ratio, 4);
+  const hedgeMethodLabel = (data.hedge_method || 'ols') === 'kalman' ? 'Kalman' : 'OLS';
+  document.getElementById('stat-hedge-method').textContent = hedgeMethodLabel;
 
   // Half-life: green 10–50, yellow 5–10 or 50–200, red <5 or >200
   const hl = s.half_life;
@@ -4746,6 +4769,7 @@ function updateTriggerLines(tp, sl) {
 //  Sizing method
 // ------------------------------------------------------------------ //
 let sizingMethod = 'ols';
+let hedgeMethod = 'ols';
 let execMode = 'smart';
 let currentExecId = null;
 let execPollTimer = null;
@@ -4761,6 +4785,18 @@ function setSizingMethod(method) {
   });
   updateSizePreview();
   if (state.historyData) renderSpreadChart(state.historyData);
+}
+
+function setHedgeMethod(method) {
+  hedgeMethod = method;
+  document.querySelectorAll('.hedge-method-btn').forEach(btn => {
+    const active = btn.dataset.method === method;
+    btn.classList.toggle('border-accent', active);
+    btn.classList.toggle('text-accent', active);
+    btn.classList.toggle('border-border', !active);
+    btn.classList.toggle('text-muted', !active);
+  });
+  localStorage.setItem('pt_hedge_method', method);
 }
 
 function updateSizePreview() {

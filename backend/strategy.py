@@ -27,14 +27,76 @@ class PairTradingStrategy:
         return float(coeffs[1])
 
     @staticmethod
+    def calculate_hedge_ratio_kalman(
+        price1: pd.Series, price2: pd.Series, delta: float = 1e-4
+    ) -> tuple:
+        """
+        Kalman Filter dynamic hedge ratio estimation.
+
+        Instead of one fixed β for the whole history, returns a β per candle
+        that adapts as the relationship between the pair changes over time.
+
+        delta: process noise — controls how fast β is allowed to change.
+               Lower (e.g. 1e-5) = slower adaptation, smoother β.
+               Higher (e.g. 1e-3) = faster adaptation, noisier β.
+
+        Returns:
+            beta_series  — pd.Series of β values (one per candle, same index as prices)
+            current_beta — float, the latest β (used for sizing / display)
+        """
+        log1 = np.log(price1.dropna())
+        log2 = np.log(price2.dropna())
+        log1, log2 = log1.align(log2, join="inner")
+        n = len(log1)
+
+        # State vector: [β, intercept]
+        theta = np.array([0.0, 0.0])
+
+        # State covariance — start with moderate uncertainty
+        P = np.eye(2)
+
+        # Process noise: how much β and intercept can shift per candle
+        Q = delta * np.eye(2)
+
+        # Observation noise: estimated from first-differences of log(price1)
+        R = float(np.var(np.diff(log1.values))) if n > 1 else 1.0
+
+        beta_arr = np.empty(n)
+
+        for i in range(n):
+            x = float(log2.iloc[i])
+            H = np.array([[x, 1.0]])  # observation row
+
+            # Predict (random-walk state transition)
+            P_pred = P + Q
+
+            # Kalman gain
+            S = float(H @ P_pred @ H.T) + R
+            K = (P_pred @ H.T) / S  # shape (2, 1)
+
+            # Update
+            innovation = float(log1.iloc[i]) - float(H @ theta)
+            theta = theta + K.flatten() * innovation
+            P = (np.eye(2) - K @ H) @ P_pred
+
+            beta_arr[i] = theta[0]
+
+        beta_series = pd.Series(beta_arr, index=log1.index, name="beta_kalman")
+        return beta_series, float(theta[0])
+
+    @staticmethod
     def calculate_spread(
-        price1: pd.Series, price2: pd.Series, hedge_ratio: float
+        price1: pd.Series, price2: pd.Series, hedge_ratio
     ) -> pd.Series:
         """
         spread = log(price1) - hedge_ratio * log(price2)
+        hedge_ratio can be a float (OLS) or a pd.Series (Kalman).
         """
         log1 = np.log(price1)
         log2 = np.log(price2)
+        if isinstance(hedge_ratio, pd.Series):
+            log1, hedge_ratio = log1.align(hedge_ratio, join="inner")
+            log2 = log2.loc[log1.index]
         spread = log1 - hedge_ratio * log2
         spread.name = "spread"
         return spread

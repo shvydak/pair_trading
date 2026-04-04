@@ -1747,8 +1747,13 @@ async def get_history(
     timeframe: str = Query("1h"),
     limit: int = Query(500),
     zscore_window: int = Query(20),
+    hedge_method: str = Query("ols"),
 ):
-    """Return OHLCV history, spread, z-score and pair statistics."""
+    """Return OHLCV history, spread, z-score and pair statistics.
+
+    hedge_method: "ols" (default) — static OLS beta over full history;
+                  "kalman" — adaptive beta that updates each candle.
+    """
     try:
         meta1, meta2 = await _resolve_pair(symbol1, symbol2)
         sym1 = meta1["symbol"]
@@ -1779,10 +1784,15 @@ async def get_history(
         coint_key = (sym1, sym2, timeframe, limit)
         cached_coint = _coint_cache.get(coint_key)
         now_mono = time.monotonic()
+        use_kalman = hedge_method == "kalman"
 
         def _compute_stats():
-            hr = strategy.calculate_hedge_ratio(price1, price2)
-            sp = strategy.calculate_spread(price1, price2, hr)
+            if use_kalman:
+                beta_series, hr = strategy.calculate_hedge_ratio_kalman(price1, price2)
+                sp = strategy.calculate_spread(price1, price2, beta_series)
+            else:
+                hr = strategy.calculate_hedge_ratio(price1, price2)
+                sp = strategy.calculate_spread(price1, price2, hr)
             zs = strategy.calculate_zscore(sp, window=zscore_window)
             # Use cached cointegration if still fresh (expensive test, changes slowly)
             if cached_coint and (now_mono - cached_coint[1]) < _COINT_TTL:
@@ -1813,6 +1823,7 @@ async def get_history(
             "spread": spread.tolist(),
             "zscore": zscore.tolist(),
             "hedge_ratio": hedge_ratio,
+            "hedge_method": hedge_method,
             "stats": {
                 "cointegration": coint_result,
                 "half_life": half_life,
