@@ -65,17 +65,17 @@ class PairTradingStrategy:
 
         for i in range(n):
             x = float(log2.iloc[i])
-            H = np.array([[x, 1.0]])  # observation row
+            H = np.array([[x, 1.0]])  # observation row, shape (1, 2)
 
             # Predict (random-walk state transition)
             P_pred = P + Q
 
             # Kalman gain
-            S = float(H @ P_pred @ H.T) + R
-            K = (P_pred @ H.T) / S  # shape (2, 1)
+            S = float((H @ P_pred @ H.T)[0, 0]) + R  # scalar
+            K = (P_pred @ H.T) / S                   # shape (2, 1)
 
             # Update
-            innovation = float(log1.iloc[i]) - float(H @ theta)
+            innovation = float(log1.iloc[i]) - float((H @ theta)[0])
             theta = theta + K.flatten() * innovation
             P = (np.eye(2) - K @ H) @ P_pred
 
