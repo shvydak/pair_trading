@@ -49,11 +49,16 @@ class PairTradingStrategy:
         log1, log2 = log1.align(log2, join="inner")
         n = len(log1)
 
+        # Bootstrap state with OLS so the filter starts from a sensible β.
+        # Without this, β=0 initialization causes 100-300 candle warm-up where
+        # the spread is completely wrong → trending PnL and inflated half-life.
+        X = np.column_stack([np.ones(n), log2.values])
+        ols_coeffs, _, _, _ = np.linalg.lstsq(X, log1.values, rcond=None)
         # State vector: [β, intercept]
-        theta = np.array([0.0, 0.0])
+        theta = np.array([ols_coeffs[1], ols_coeffs[0]])
 
-        # State covariance — start with moderate uncertainty
-        P = np.eye(2)
+        # State covariance — tight at start (we trust the OLS seed)
+        P = np.eye(2) * 1e-4
 
         # Process noise: how much β and intercept can shift per candle
         Q = delta * np.eye(2)
