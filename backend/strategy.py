@@ -79,12 +79,19 @@ class PairTradingStrategy:
             S = float((H @ P_pred @ H.T)[0, 0]) + R  # scalar
             K = (P_pred @ H.T) / S                   # shape (2, 1)
 
+            # Store PRIOR beta (before seeing this candle).
+            # Using posterior beta would compress the spread to near-zero:
+            # posterior_spread ≈ innovation * (1 - K[0]*log(p2)).
+            # Since K[0]*log(p2) ≈ 0.98 for crypto, the spread is ~50x smaller
+            # than the actual residual, making the rolling std tiny and z-score
+            # meaningless (pure noise amplification).  Prior beta gives the proper
+            # innovation scale, consistent with the OLS spread magnitude.
+            beta_arr[i] = theta[0]
+
             # Update
             innovation = float(log1.iloc[i]) - float((H @ theta)[0])
             theta = theta + K.flatten() * innovation
             P = (np.eye(2) - K @ H) @ P_pred
-
-            beta_arr[i] = theta[0]
 
         beta_series = pd.Series(beta_arr, index=log1.index, name="beta_kalman")
         return beta_series, float(theta[0])
